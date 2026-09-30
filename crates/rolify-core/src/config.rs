@@ -105,6 +105,11 @@ impl RolifyConfig {
 
     /// Run the `before_add` hook (if set). `Err` from the hook is the veto:
     /// callers MUST abort the add and skip `run_after_add`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the hook's [`RolifyError`] (typically
+    /// [`RolifyError::CallbackVeto`]) when the hook vetoes the operation.
     pub fn run_before_add(&self, record: &RoleRecord) -> Result<(), RolifyError> {
         if let Some(hook) = &self.before_add {
             hook(record)?;
@@ -114,6 +119,10 @@ impl RolifyConfig {
 
     /// Run the `before_remove` hook (if set). Same veto contract as
     /// [`RolifyConfig::run_before_add`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates the hook's [`RolifyError`] when the hook vetoes the removal.
     pub fn run_before_remove(&self, record: &RoleRecord) -> Result<(), RolifyError> {
         if let Some(hook) = &self.before_remove {
             hook(record)?;
@@ -234,8 +243,11 @@ impl RolifyConfigBuilder {
         self
     }
 
-    /// Resolve the configuration. Fails with [`RolifyError::InvalidConfig`]
-    /// when a table name is empty.
+    /// Resolve the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`RolifyError::InvalidConfig`] when a table name is empty.
     pub fn build(self) -> Result<RolifyConfig, RolifyError> {
         let role_table = self.role_table.unwrap_or_else(|| "roles".to_owned());
         let join_table = self.join_table.unwrap_or_else(|| "users_roles".to_owned());

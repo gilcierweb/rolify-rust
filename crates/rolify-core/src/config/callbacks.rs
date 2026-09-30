@@ -7,7 +7,7 @@
 //!   matching `after_*` NEVER runs
 //!
 //! The gem wiring reference is `rolify/lib/rolify.rb:28` +
-//! `role.rb:8-25` (add_role/remove_role choreography).
+//! `role.rb:8-25` (`add_role`/`remove_role` choreography).
 
 use std::sync::{Arc, Mutex};
 
