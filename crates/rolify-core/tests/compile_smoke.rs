@@ -99,10 +99,7 @@ fn consumer_traits_and_callbacks_are_dyn_compatible() {
 /// → soft-sealed `RoleStore` → pure kernel non-strict ladder →
 /// `InMemoryStore` - and in async mode the provided-method future is `Send`
 /// (proven by `tokio::spawn`).
-#[maybe_async::test(
-    feature = "is_sync",
-    async(not(feature = "is_sync"), tokio::test)
-)]
+#[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
 async fn has_role_global_admin_end_to_end() {
     // faker-rust wires test data (TEST-04); the role name is fixed so the
     // assertion is meaningful.
@@ -111,7 +108,8 @@ async fn has_role_global_admin_end_to_end() {
 
     let mut user = Customer::new(faker_rust::number::between(1, 10_000));
     let user_id = user.rolify_id();
-    user.store().grant(&user_id, RoleRecord::global(admin.clone()));
+    user.store()
+        .grant(&user_id, RoleRecord::global(admin.clone()));
 
     // Level-1 dedupe through the same store (same triple → one row).
     let (store, conn) = user.store_with_conn();
@@ -135,7 +133,9 @@ async fn has_role_global_admin_end_to_end() {
             .store()
             .grant(&spawned_id, RoleRecord::global(RoleName::from("admin")));
         let handle = tokio::spawn(async move {
-            spawned_user.has_role(&RoleName::from("admin"), ResourceFilter::Global).await
+            spawned_user
+                .has_role(&RoleName::from("admin"), ResourceFilter::Global)
+                .await
         });
         let spawned_result = handle.await.unwrap();
         assert!(matches!(spawned_result, Ok(true)));
@@ -155,6 +155,9 @@ async fn has_role_global_admin_end_to_end() {
     let has_admin = user.has_role(&admin, ResourceFilter::Global).await.unwrap();
     assert!(has_admin, "global admin role must satisfy the global query");
 
-    let has_other = user.has_role(&someone_else, ResourceFilter::Global).await.unwrap();
+    let has_other = user
+        .has_role(&someone_else, ResourceFilter::Global)
+        .await
+        .unwrap();
     assert!(!has_other, "unknown role name must not match (byte-exact)");
 }

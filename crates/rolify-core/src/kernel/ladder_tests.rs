@@ -21,33 +21,145 @@ use rstest::rstest;
 // ---- holder: global `admin` (spec L8-16) ----
 #[case::global_direct(global_admin_rows(), "admin", FilterKind::Global, "Forum", 1, true)]
 #[case::global_overrides_class(global_admin_rows(), "admin", FilterKind::Class, "Forum", 1, true)]
-#[case::global_overrides_instance(global_admin_rows(), "admin", FilterKind::Instance, "Forum", 1, true)]
+#[case::global_overrides_instance(
+    global_admin_rows(),
+    "admin",
+    FilterKind::Instance,
+    "Forum",
+    1,
+    true
+)]
 #[case::global_seen_by_any(global_admin_rows(), "admin", FilterKind::Any, "Forum", 1, true)]
-#[case::global_holder_wrong_name_any(global_admin_rows(), "global", FilterKind::Any, "Forum", 1, false)]
-#[case::global_holder_other_role_name(global_admin_rows(), "moderator", FilterKind::Global, "Forum", 1, false)]
-#[case::global_holder_class_query_wrong_name(global_admin_rows(), "manager", FilterKind::Class, "Forum", 1, false)]
+#[case::global_holder_wrong_name_any(
+    global_admin_rows(),
+    "global",
+    FilterKind::Any,
+    "Forum",
+    1,
+    false
+)]
+#[case::global_holder_other_role_name(
+    global_admin_rows(),
+    "moderator",
+    FilterKind::Global,
+    "Forum",
+    1,
+    false
+)]
+#[case::global_holder_class_query_wrong_name(
+    global_admin_rows(),
+    "manager",
+    FilterKind::Class,
+    "Forum",
+    1,
+    false
+)]
 // ---- holder: class `manager` on Forum (spec L50-64) ----
 #[case::class_direct(class_manager_rows(), "manager", FilterKind::Class, "Forum", 1, true)]
-#[case::class_covers_instance(class_manager_rows(), "manager", FilterKind::Instance, "Forum", 1, true)]
+#[case::class_covers_instance(
+    class_manager_rows(),
+    "manager",
+    FilterKind::Instance,
+    "Forum",
+    1,
+    true
+)]
 #[case::class_seen_by_any(class_manager_rows(), "manager", FilterKind::Any, "Forum", 1, true)]
-#[case::class_reverse_never_holds_global(class_manager_rows(), "manager", FilterKind::Global, "Forum", 1, false)]
+#[case::class_reverse_never_holds_global(
+    class_manager_rows(),
+    "manager",
+    FilterKind::Global,
+    "Forum",
+    1,
+    false
+)]
 #[case::class_wrong_type(class_manager_rows(), "manager", FilterKind::Class, "Group", 1, false)]
 #[case::any_matches_held_row(class_manager_rows(), "manager", FilterKind::Any, "Group", 1, true)]
 // ---- holder: instance `moderator` on Forum #1 (spec L84-92 + instance ctx) ----
-#[case::instance_direct(instance_moderator_rows(), "moderator", FilterKind::Instance, "Forum", 1, true)]
-#[case::instance_seen_by_any(instance_moderator_rows(), "moderator", FilterKind::Any, "Forum", 1, true)]
-#[case::instance_reverse_never_holds_global(instance_moderator_rows(), "moderator", FilterKind::Global, "Forum", 1, false)]
-#[case::instance_is_not_class(instance_moderator_rows(), "moderator", FilterKind::Class, "Forum", 1, false)]
-#[case::instance_wrong_id(instance_moderator_rows(), "moderator", FilterKind::Instance, "Forum", 2, false)]
-#[case::instance_wrong_type(instance_moderator_rows(), "moderator", FilterKind::Instance, "Group", 1, false)]
+#[case::instance_direct(
+    instance_moderator_rows(),
+    "moderator",
+    FilterKind::Instance,
+    "Forum",
+    1,
+    true
+)]
+#[case::instance_seen_by_any(
+    instance_moderator_rows(),
+    "moderator",
+    FilterKind::Any,
+    "Forum",
+    1,
+    true
+)]
+#[case::instance_reverse_never_holds_global(
+    instance_moderator_rows(),
+    "moderator",
+    FilterKind::Global,
+    "Forum",
+    1,
+    false
+)]
+#[case::instance_is_not_class(
+    instance_moderator_rows(),
+    "moderator",
+    FilterKind::Class,
+    "Forum",
+    1,
+    false
+)]
+#[case::instance_wrong_id(
+    instance_moderator_rows(),
+    "moderator",
+    FilterKind::Instance,
+    "Forum",
+    2,
+    false
+)]
+#[case::instance_wrong_type(
+    instance_moderator_rows(),
+    "moderator",
+    FilterKind::Instance,
+    "Group",
+    1,
+    false
+)]
 // ---- nonexistent names, any holder / empty ----
 #[case::nonexistent_name_any(global_admin_rows(), "dummy", FilterKind::Any, "Forum", 1, false)]
-#[case::nonexistent_name_global(instance_moderator_rows(), "dumber", FilterKind::Global, "Forum", 1, false)]
+#[case::nonexistent_name_global(
+    instance_moderator_rows(),
+    "dumber",
+    FilterKind::Global,
+    "Forum",
+    1,
+    false
+)]
 #[case::empty_rows_never_match(Vec::new(), "admin", FilterKind::Any, "Forum", 1, false)]
 // ---- byte-exact matching (no case-folding, no trimming) ----
-#[case::byte_exact_capital_misses(global_admin_rows(), "Admin", FilterKind::Global, "Forum", 1, false)]
-#[case::byte_exact_capital_misses_any(global_admin_rows(), "Admin", FilterKind::Any, "Forum", 1, false)]
-#[case::byte_exact_trailing_space(global_admin_rows(), "admin ", FilterKind::Any, "Forum", 1, false)]
+#[case::byte_exact_capital_misses(
+    global_admin_rows(),
+    "Admin",
+    FilterKind::Global,
+    "Forum",
+    1,
+    false
+)]
+#[case::byte_exact_capital_misses_any(
+    global_admin_rows(),
+    "Admin",
+    FilterKind::Any,
+    "Forum",
+    1,
+    false
+)]
+#[case::byte_exact_trailing_space(
+    global_admin_rows(),
+    "admin ",
+    FilterKind::Any,
+    "Forum",
+    1,
+    false
+)]
 fn sc1_row(
     #[case] rows: Vec<RoleRecord>,
     #[case] name: &str,

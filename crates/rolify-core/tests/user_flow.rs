@@ -105,7 +105,8 @@ mod user {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            self.inner.remove(conn, holder, name, target, remove_role_if_empty)
+            self.inner
+                .remove(conn, holder, name, target, remove_role_if_empty)
         }
 
         fn exists(
@@ -136,7 +137,12 @@ mod user {
 
     impl TestUser {
         fn new(id: i64, config: RolifyConfig) -> Self {
-            Self { id, store: CountingStore::default(), conn: (), config }
+            Self {
+                id,
+                store: CountingStore::default(),
+                conn: (),
+                config,
+            }
         }
     }
 
@@ -179,10 +185,7 @@ mod user {
         RoleName::from("ghost")
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn add_role_is_idempotent_at_both_levels() {
         let mut user = TestUser::new(1, RolifyConfig::default());
         let forum_seven = ResourceId::from(7_i64);
@@ -206,20 +209,24 @@ mod user {
             let (store, conn) = user.store_with_conn();
             store.roles_of(&mut *conn, &holder).await.unwrap()
         };
-        assert_eq!(roles.len(), 2, "level-2 link guard blocked the duplicate link");
+        assert_eq!(
+            roles.len(),
+            2,
+            "level-2 link guard blocked the duplicate link"
+        );
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn add_role_veto_leaves_store_untouched() {
         let events = new_probe();
         let config = RolifyConfig::builder()
             .before_add({
                 let writer = Arc::clone(&events);
                 Arc::new(move |_record: &RoleRecord| {
-                    writer.lock().expect("probe lock poisoned").push("before_add");
+                    writer
+                        .lock()
+                        .expect("probe lock poisoned")
+                        .push("before_add");
                     Err(RolifyError::CallbackVeto {
                         callback: "before_add",
                         reason: "deny".into(),
@@ -229,7 +236,10 @@ mod user {
             .after_add({
                 let writer = Arc::clone(&events);
                 Arc::new(move |_record: &RoleRecord| {
-                    writer.lock().expect("probe lock poisoned").push("after_add");
+                    writer
+                        .lock()
+                        .expect("probe lock poisoned")
+                        .push("after_add");
                 })
             })
             .build()
@@ -240,31 +250,37 @@ mod user {
 
         assert!(matches!(
             outcome,
-            Err(RolifyError::CallbackVeto { callback: "before_add", .. })
+            Err(RolifyError::CallbackVeto {
+                callback: "before_add",
+                ..
+            })
         ));
         assert_eq!(user.store().inner.assertion_len(), 0, "no role row created");
         assert_eq!(user.store().inner.link_count(), 0, "no link created");
         assert_eq!(recorded(&events), vec!["before_add"], "after_add skipped");
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn hooks_fire_around_the_full_add_choreography() {
         let events = new_probe();
         let config = RolifyConfig::builder()
             .before_add({
                 let writer = Arc::clone(&events);
                 Arc::new(move |_record: &RoleRecord| {
-                    writer.lock().expect("probe lock poisoned").push("before_add");
+                    writer
+                        .lock()
+                        .expect("probe lock poisoned")
+                        .push("before_add");
                     Ok(())
                 })
             })
             .after_add({
                 let writer = Arc::clone(&events);
                 Arc::new(move |_record: &RoleRecord| {
-                    writer.lock().expect("probe lock poisoned").push("after_add");
+                    writer
+                        .lock()
+                        .expect("probe lock poisoned")
+                        .push("after_add");
                 })
             })
             .build()
@@ -276,40 +292,57 @@ mod user {
         assert_eq!(recorded(&events), vec!["before_add", "after_add"]);
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn has_role_routes_strict_only_on_class_or_instance() {
         let mut strict_user =
             TestUser::new(1, RolifyConfig::builder().strict(true).build().unwrap());
-        strict_user.add_role(&admin(), ResourceRef::Global).await.unwrap();
+        strict_user
+            .add_role(&admin(), ResourceRef::Global)
+            .await
+            .unwrap();
 
-        let strict_class =
-            strict_user.has_role(&admin(), ResourceFilter::Class("Forum")).await.unwrap();
-        let strict_global =
-            strict_user.has_role(&admin(), ResourceFilter::Global).await.unwrap();
-        let strict_any = strict_user.has_role(&admin(), ResourceFilter::Any).await.unwrap();
-        assert!(!strict_class, "strict class query must not see the global row");
+        let strict_class = strict_user
+            .has_role(&admin(), ResourceFilter::Class("Forum"))
+            .await
+            .unwrap();
+        let strict_global = strict_user
+            .has_role(&admin(), ResourceFilter::Global)
+            .await
+            .unwrap();
+        let strict_any = strict_user
+            .has_role(&admin(), ResourceFilter::Any)
+            .await
+            .unwrap();
+        assert!(
+            !strict_class,
+            "strict class query must not see the global row"
+        );
         assert!(strict_global, "strict never engages for Global");
         assert!(strict_any, "strict never engages for Any");
 
         let mut relaxed_user = TestUser::new(1, RolifyConfig::default());
-        relaxed_user.add_role(&admin(), ResourceRef::Global).await.unwrap();
-        let non_strict_class =
-            relaxed_user.has_role(&admin(), ResourceFilter::Class("Forum")).await.unwrap();
-        assert!(non_strict_class, "non-strict class query sees the global override");
+        relaxed_user
+            .add_role(&admin(), ResourceRef::Global)
+            .await
+            .unwrap();
+        let non_strict_class = relaxed_user
+            .has_role(&admin(), ResourceFilter::Class("Forum"))
+            .await
+            .unwrap();
+        assert!(
+            non_strict_class,
+            "non-strict class query sees the global override"
+        );
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn cached_role_matches_the_query_path_with_strict_routing() {
         let config = RolifyConfig::builder().strict(true).build().unwrap();
         let mut user = TestUser::new(1, config);
         user.add_role(&admin(), ResourceRef::Global).await.unwrap();
-        user.add_role(&manager(), ResourceRef::Class("Forum")).await.unwrap();
+        user.add_role(&manager(), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
 
         let rows = {
             let holder = user.rolify_id();
@@ -318,36 +351,58 @@ mod user {
         };
         let snapshot = RoleSet::new(&rows);
 
-        let class_query = RoleQuery { name: &admin(), filter: ResourceFilter::Class("Forum") };
+        let class_query = RoleQuery {
+            name: &admin(),
+            filter: ResourceFilter::Class("Forum"),
+        };
         assert!(!user.has_cached_role(&snapshot, &class_query));
-        let any_query = RoleQuery { name: &admin(), filter: ResourceFilter::Any };
+        let any_query = RoleQuery {
+            name: &admin(),
+            filter: ResourceFilter::Any,
+        };
         assert!(user.has_cached_role(&snapshot, &any_query));
-        let strict_direct =
-            RoleQuery { name: &manager(), filter: ResourceFilter::Class("Forum") };
+        let strict_direct = RoleQuery {
+            name: &manager(),
+            filter: ResourceFilter::Class("Forum"),
+        };
         assert!(user.has_strict_cached_role(&snapshot, &strict_direct));
 
-        let via_store = user.has_role(&admin(), ResourceFilter::Class("Forum")).await.unwrap();
+        let via_store = user
+            .has_role(&admin(), ResourceFilter::Class("Forum"))
+            .await
+            .unwrap();
         assert!(!via_store);
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn all_any_only_has_role_semantics() {
         let mut user = TestUser::new(1, RolifyConfig::default());
         user.add_role(&admin(), ResourceRef::Global).await.unwrap();
-        user.add_role(&manager(), ResourceRef::Class("Forum")).await.unwrap();
+        user.add_role(&manager(), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
 
         let all_ok = [
-            RoleQuery { name: &admin(), filter: ResourceFilter::Global },
-            RoleQuery { name: &manager(), filter: ResourceFilter::Class("Forum") },
+            RoleQuery {
+                name: &admin(),
+                filter: ResourceFilter::Global,
+            },
+            RoleQuery {
+                name: &manager(),
+                filter: ResourceFilter::Class("Forum"),
+            },
         ];
         let all_result = user.has_all_roles(&all_ok).await.unwrap();
         assert!(all_result);
         let with_miss = [
-            RoleQuery { name: &ghost(), filter: ResourceFilter::Global },
-            RoleQuery { name: &manager(), filter: ResourceFilter::Class("Forum") },
+            RoleQuery {
+                name: &ghost(),
+                filter: ResourceFilter::Global,
+            },
+            RoleQuery {
+                name: &manager(),
+                filter: ResourceFilter::Class("Forum"),
+            },
         ];
         let miss_result = user.has_all_roles(&with_miss).await.unwrap();
         assert!(!miss_result);
@@ -356,50 +411,71 @@ mod user {
         // where_ traffic above is has_all_roles' documented early-exit walk).
         let (where_before, _, where_any_before) = user.store().counters();
         let any_queries = [
-            RoleQuery { name: &ghost(), filter: ResourceFilter::Any },
-            RoleQuery { name: &manager(), filter: ResourceFilter::Class("Forum") },
+            RoleQuery {
+                name: &ghost(),
+                filter: ResourceFilter::Any,
+            },
+            RoleQuery {
+                name: &manager(),
+                filter: ResourceFilter::Class("Forum"),
+            },
         ];
         let any_result = user.has_any_roles(&any_queries).await.unwrap();
         assert!(any_result);
         let (where_after, _, where_any_after) = user.store().counters();
-        assert_eq!(where_any_after - where_any_before, 1, "exactly one OR-folded call");
+        assert_eq!(
+            where_any_after - where_any_before,
+            1,
+            "exactly one OR-folded call"
+        );
         assert_eq!(where_after - where_before, 0, "no per-query where_ fan-out");
 
-        let only_result = user.only_has_role(&admin(), ResourceFilter::Global).await.unwrap();
+        let only_result = user
+            .only_has_role(&admin(), ResourceFilter::Global)
+            .await
+            .unwrap();
         assert!(!only_result);
         let mut solo = TestUser::new(2, RolifyConfig::default());
         solo.add_role(&admin(), ResourceRef::Global).await.unwrap();
-        let solo_result = solo.only_has_role(&admin(), ResourceFilter::Global).await.unwrap();
+        let solo_result = solo
+            .only_has_role(&admin(), ResourceFilter::Global)
+            .await
+            .unwrap();
         assert!(solo_result);
 
         let names = user.roles_name().await.unwrap();
         assert_eq!(names, vec![admin(), manager()]);
     }
 
-    #[maybe_async::test(
-        feature = "is_sync",
-        async(not(feature = "is_sync"), tokio::test)
-    )]
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn remove_role_sweeps_and_honors_remove_role_if_empty() {
         let events = new_probe();
         let config = RolifyConfig::builder()
             .before_remove({
                 let writer = Arc::clone(&events);
                 Arc::new(move |_record: &RoleRecord| {
-                    writer.lock().expect("probe lock poisoned").push("before_remove");
+                    writer
+                        .lock()
+                        .expect("probe lock poisoned")
+                        .push("before_remove");
                     Ok(())
                 })
             })
             .after_remove({
                 let writer = Arc::clone(&events);
                 Arc::new(move |_record: &RoleRecord| {
-                    writer.lock().expect("probe lock poisoned").push("after_remove");
+                    writer
+                        .lock()
+                        .expect("probe lock poisoned")
+                        .push("after_remove");
                 })
             })
             .build()
             .unwrap();
         let mut user = TestUser::new(1, config);
-        user.add_role(&manager(), ResourceRef::Class("Forum")).await.unwrap();
+        user.add_role(&manager(), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
         assert_eq!(user.store().inner.assertion_len(), 1);
 
         let outcome = user
@@ -407,13 +483,23 @@ mod user {
             .await
             .unwrap();
         assert_eq!(outcome.removed_links, 1);
-        assert_eq!(outcome.removed_roles.len(), 1, "default removes the emptied row");
+        assert_eq!(
+            outcome.removed_roles.len(),
+            1,
+            "default removes the emptied row"
+        );
         assert_eq!(user.store().inner.assertion_len(), 0);
         assert_eq!(recorded(&events), vec!["before_remove", "after_remove"]);
 
-        let plain_config = RolifyConfig::builder().remove_role_if_empty(false).build().unwrap();
+        let plain_config = RolifyConfig::builder()
+            .remove_role_if_empty(false)
+            .build()
+            .unwrap();
         let mut plain = TestUser::new(2, plain_config);
-        plain.add_role(&manager(), ResourceRef::Class("Forum")).await.unwrap();
+        plain
+            .add_role(&manager(), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
         let outcome = plain
             .remove_role(&manager(), RemovalTarget::TypeSweep("Forum"))
             .await

@@ -18,6 +18,7 @@
 use core::future::Future;
 
 use maybe_async::maybe_async;
+use rolify_core::RolifyError;
 use rolify_core::kernel::{self, RemovalTarget};
 use rolify_core::query::RoleQuery;
 use rolify_core::resource::ResourceRef;
@@ -25,7 +26,6 @@ use rolify_core::role::{ResourceId, RoleName, RoleRecord};
 use rolify_core::store::{
     RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
 };
-use rolify_core::RolifyError;
 
 /// In-memory [`RoleStore`] + [`ResourceStore`] - the workspace's reference
 /// implementation and validation target.
@@ -93,7 +93,10 @@ impl InMemoryStore {
     /// Number of links for one holder.
     #[must_use]
     pub fn link_count_for(&self, holder: &ResourceId) -> usize {
-        self.links.iter().filter(|(owner, _)| owner == holder).count()
+        self.links
+            .iter()
+            .filter(|(owner, _)| owner == holder)
+            .count()
     }
 
     /// Register a fixture resource ([`ResourceStore`] finder target).
@@ -142,8 +145,10 @@ impl RoleStore for InMemoryStore {
         query: &RoleQuery<'_>,
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
         let held = self.holder_rows(holder);
-        let rows: Vec<RoleRecord> =
-            kernel::where_strict(&held, query).into_iter().cloned().collect();
+        let rows: Vec<RoleRecord> = kernel::where_strict(&held, query)
+            .into_iter()
+            .cloned()
+            .collect();
         async move { Ok(rows) }
     }
 
@@ -178,9 +183,7 @@ impl RoleStore for InMemoryStore {
         let (resource_type, resource_id) = match scope {
             ResourceRef::Global => (None, None),
             ResourceRef::Class(type_name) => (Some(type_name.to_owned()), None),
-            ResourceRef::Instance(type_name, id) => {
-                (Some(type_name.to_owned()), Some(id.clone()))
-            }
+            ResourceRef::Instance(type_name, id) => (Some(type_name.to_owned()), Some(id.clone())),
         };
         let record = if let Some(existing) = self.rows.iter().find(|record| {
             record.name == *name
@@ -229,9 +232,7 @@ impl RoleStore for InMemoryStore {
         let affected: Vec<RoleRecord> = self
             .links
             .iter()
-            .filter(|(owner, row)| {
-                owner == holder && kernel::removal_match(row, name, &target)
-            })
+            .filter(|(owner, row)| owner == holder && kernel::removal_match(row, name, &target))
             .map(|(_, row)| row.clone())
             .collect();
 
@@ -243,8 +244,7 @@ impl RoleStore for InMemoryStore {
         let mut removed_roles = Vec::new();
         if remove_role_if_empty {
             for record in affected {
-                let still_linked =
-                    self.links.iter().any(|(_, row)| row == &record);
+                let still_linked = self.links.iter().any(|(_, row)| row == &record);
                 if !still_linked && self.rows.contains(&record) {
                     self.rows.retain(|row| row != &record);
                     removed_roles.push(record);
@@ -252,7 +252,12 @@ impl RoleStore for InMemoryStore {
             }
         }
 
-        async move { Ok(RemovalOutcome { removed_links, removed_roles }) }
+        async move {
+            Ok(RemovalOutcome {
+                removed_links,
+                removed_roles,
+            })
+        }
     }
 
     /// Gem `exists?` (`relation.where("<column> IS NOT NULL")`) over the

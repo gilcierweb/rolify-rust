@@ -37,7 +37,10 @@ fn surviving(rows: &[RoleRecord], name: &str, target: RemovalTarget<'_>) -> Vec<
 fn name_only_sweeps_all_scopes_of_that_name() {
     let left = surviving(&sample_rows(), "manager", RemovalTarget::NameOnly);
     assert_eq!(left.len(), 2);
-    assert!(left.iter().all(|record| record.name == RoleName::from("auditor")));
+    assert!(
+        left.iter()
+            .all(|record| record.name == RoleName::from("auditor"))
+    );
 }
 
 /// The subtle sweep (plan-pinned): a Class argument removes the class row
@@ -51,7 +54,10 @@ fn type_sweep_removes_class_and_instance_rows_of_the_type() {
         .iter()
         .filter(|record| record.resource_type.as_deref() == Some("Forum"))
         .count();
-    assert_eq!(forum_rows_left, 1, "only the unrelated-auditor Forum row may survive");
+    assert_eq!(
+        forum_rows_left, 1,
+        "only the unrelated-auditor Forum row may survive"
+    );
 
     // The Group-scoped manager rows survive untouched.
     assert!(left.iter().any(|record| record.is_class_scoped_to("Group")));
@@ -65,8 +71,16 @@ fn type_sweep_hits_instance_row_same_type_and_misses_other_type() {
     let forum_instance = RoleRecord::for_instance("manager", "Forum", 1_i64);
     let group_class = RoleRecord::for_class("manager", "Group");
 
-    assert!(removal_match(&forum_instance, &name, &RemovalTarget::TypeSweep("Forum")));
-    assert!(!removal_match(&group_class, &name, &RemovalTarget::TypeSweep("Forum")));
+    assert!(removal_match(
+        &forum_instance,
+        &name,
+        &RemovalTarget::TypeSweep("Forum")
+    ));
+    assert!(!removal_match(
+        &group_class,
+        &name,
+        &RemovalTarget::TypeSweep("Forum")
+    ));
 }
 
 /// `Exact` removes exactly one triple.
@@ -80,8 +94,10 @@ fn exact_sweeps_the_exact_triple_only() {
     );
     assert_eq!(left.len(), 7);
     assert!(
-        !left.iter().any(|record| record.name == RoleName::from("manager")
-            && record.is_instance_scoped_to("Forum", &forum_one)),
+        !left
+            .iter()
+            .any(|record| record.name == RoleName::from("manager")
+                && record.is_instance_scoped_to("Forum", &forum_one)),
         "the exact manager/Forum#1 row must be swept"
     );
     // Class row of the same type survives (Exact is not TypeSweep).

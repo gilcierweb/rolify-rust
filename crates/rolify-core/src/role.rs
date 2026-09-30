@@ -181,7 +181,11 @@ impl RoleRecord {
         resource_type: Option<String>,
         resource_id: Option<ResourceId>,
     ) -> Self {
-        Self { name, resource_type, resource_id }
+        Self {
+            name,
+            resource_type,
+            resource_id,
+        }
     }
 
     /// A **global** role row (both scope columns `None`).
@@ -222,7 +226,11 @@ impl RoleRecord {
         resource_type: impl Into<String>,
         resource_id: impl Into<ResourceId>,
     ) -> Self {
-        Self::new(name.into(), Some(resource_type.into()), Some(resource_id.into()))
+        Self::new(
+            name.into(),
+            Some(resource_type.into()),
+            Some(resource_id.into()),
+        )
     }
 
     /// `resource_type IS NULL AND resource_id IS NULL`.
@@ -421,14 +429,18 @@ mod role_set {
             ResourceFilter::Instance("Forum", &forum_seven),
         )));
         // no overrides under strict
-        assert!(!set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
-            &admin,
-            ResourceFilter::Class("Forum"),
-        )));
-        assert!(!set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
-            &manager,
-            ResourceFilter::Instance("Forum", &forum_seven),
-        )));
+        assert!(
+            !set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
+                &admin,
+                ResourceFilter::Class("Forum"),
+            ))
+        );
+        assert!(
+            !set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
+                &manager,
+                ResourceFilter::Instance("Forum", &forum_seven),
+            ))
+        );
     }
 
     /// SC-1 cross-path agreement sweep: for every holder scenario and every
@@ -455,8 +467,7 @@ mod role_set {
                     fixtures::FilterKind::Any,
                 ] {
                     for type_name in ["Forum", "Group"] {
-                        let query =
-                            fixtures::make_query(&name, kind, type_name, &id);
+                        let query = fixtures::make_query(&name, kind, type_name, &id);
                         let query_path = !where_(&rows, &query).is_empty();
                         let cached_path = set.has_cached_role(&query);
                         assert_eq!(

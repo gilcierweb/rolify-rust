@@ -62,11 +62,24 @@ mod tests {
 
     #[test]
     fn variants_render() {
-        let err = RolifyError::RoleNotFound { name: "admin".into() };
+        let err = RolifyError::RoleNotFound {
+            name: "admin".into(),
+        };
         assert_eq!(err.to_string(), "role not found: admin");
-        let err = RolifyError::CallbackVeto { callback: "before_add", reason: "nope".into() };
-        assert_eq!(err.to_string(), "callback `before_add` vetoed the operation: nope");
-        let err = RolifyError::InvalidConfig { reason: "empty table name".into() };
-        assert_eq!(err.to_string(), "invalid rolify configuration: empty table name");
+        let err = RolifyError::CallbackVeto {
+            callback: "before_add",
+            reason: "nope".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "callback `before_add` vetoed the operation: nope"
+        );
+        let err = RolifyError::InvalidConfig {
+            reason: "empty table name".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid rolify configuration: empty table name"
+        );
     }
 }

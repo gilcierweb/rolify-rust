@@ -88,8 +88,7 @@ pub trait RolifyUser: Send + Sync + 'static {
 
     /// Borrow store and connection as one disjoint split - the SPI's
     /// `(&Store, &mut Conn)` call shape requires both at once.
-    fn store_with_conn(&mut self)
-        -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn);
+    fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn);
 
     /// `add_role(name, resource = nil)` - the gem's two-level idempotence
     /// (`role.rb:12-22`): level-1 role-row dedupe via
@@ -158,8 +157,9 @@ pub trait RolifyUser: Send + Sync + 'static {
             let remove_if_empty = self.rolify_config().remove_role_if_empty();
             let holder = self.rolify_id();
             let (store, conn) = self.store_with_conn();
-            let outcome =
-                store.remove(&mut *conn, &holder, name, target, remove_if_empty).await?;
+            let outcome = store
+                .remove(&mut *conn, &holder, name, target, remove_if_empty)
+                .await?;
 
             self.rolify_config().run_after_remove(&candidate);
             Ok(outcome)
@@ -324,8 +324,7 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// `roles_name` (role.rb:88-90) - all role names linked to this holder.
     fn roles_name(
         &mut self,
-    ) -> impl Future<Output = Result<Vec<RoleName>, <Self::Store as RoleStore>::Error>> + Send
-    {
+    ) -> impl Future<Output = Result<Vec<RoleName>, <Self::Store as RoleStore>::Error>> + Send {
         async move {
             let holder = self.rolify_id();
             let (store, conn) = self.store_with_conn();
@@ -334,4 +333,3 @@ pub trait RolifyUser: Send + Sync + 'static {
         }
     }
 }
-

@@ -174,9 +174,15 @@ impl core::fmt::Debug for RolifyConfig {
             .field("role_table", &self.role_table)
             .field("join_table", &self.join_table)
             .field("before_add", &self.before_add.as_ref().map(|_| "<hook>"))
-            .field("before_remove", &self.before_remove.as_ref().map(|_| "<hook>"))
+            .field(
+                "before_remove",
+                &self.before_remove.as_ref().map(|_| "<hook>"),
+            )
             .field("after_add", &self.after_add.as_ref().map(|_| "<hook>"))
-            .field("after_remove", &self.after_remove.as_ref().map(|_| "<hook>"))
+            .field(
+                "after_remove",
+                &self.after_remove.as_ref().map(|_| "<hook>"),
+            )
             .finish()
     }
 }
@@ -303,9 +309,15 @@ impl core::fmt::Debug for RolifyConfigBuilder {
             .field("role_table", &self.role_table)
             .field("join_table", &self.join_table)
             .field("before_add", &self.before_add.as_ref().map(|_| "<hook>"))
-            .field("before_remove", &self.before_remove.as_ref().map(|_| "<hook>"))
+            .field(
+                "before_remove",
+                &self.before_remove.as_ref().map(|_| "<hook>"),
+            )
             .field("after_add", &self.after_add.as_ref().map(|_| "<hook>"))
-            .field("after_remove", &self.after_remove.as_ref().map(|_| "<hook>"))
+            .field(
+                "after_remove",
+                &self.after_remove.as_ref().map(|_| "<hook>"),
+            )
             .finish()
     }
 }

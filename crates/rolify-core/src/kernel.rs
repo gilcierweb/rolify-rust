@@ -23,9 +23,9 @@ pub(crate) mod fixtures;
 #[cfg(test)]
 mod ladder_tests;
 #[cfg(test)]
-mod strict_tests;
-#[cfg(test)]
 mod removal_tests;
+#[cfg(test)]
+mod strict_tests;
 
 /// Non-strict three-disjunct ladder over in-memory rows - the semantics of
 /// `RoleStore::where_` (every adapter translates it mechanically; the gem's
@@ -210,7 +210,11 @@ pub fn find_cached_strict(rows: &[RoleRecord], query: &RoleQuery<'_>) -> bool {
 /// ```
 #[must_use]
 pub fn strict_engages(strict: bool, filter: &ResourceFilter<'_>) -> bool {
-    strict && matches!(filter, ResourceFilter::Class(_) | ResourceFilter::Instance(..))
+    strict
+        && matches!(
+            filter,
+            ResourceFilter::Class(_) | ResourceFilter::Instance(..)
+        )
 }
 
 /// What a `remove_role(name, resource)` call sweeps (the gem's `remove`

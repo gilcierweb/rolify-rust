@@ -29,17 +29,31 @@ fn recorded(probe: &Probe) -> Vec<&'static str> {
 
 /// Minimal stub of the 01-04 `RolifyUser::add_role` choreography:
 /// `run_before_add` (veto point) -> storage side effect -> `run_after_add`.
-fn drive_add(config: &RolifyConfig, record: &RoleRecord, events: &Probe) -> Result<(), RolifyError> {
+fn drive_add(
+    config: &RolifyConfig,
+    record: &RoleRecord,
+    events: &Probe,
+) -> Result<(), RolifyError> {
     config.run_before_add(record)?;
-    events.lock().expect("probe lock poisoned").push("store.add");
+    events
+        .lock()
+        .expect("probe lock poisoned")
+        .push("store.add");
     config.run_after_add(record);
     Ok(())
 }
 
 /// Same choreography for `remove_role`.
-fn drive_remove(config: &RolifyConfig, record: &RoleRecord, events: &Probe) -> Result<(), RolifyError> {
+fn drive_remove(
+    config: &RolifyConfig,
+    record: &RoleRecord,
+    events: &Probe,
+) -> Result<(), RolifyError> {
     config.run_before_remove(record)?;
-    events.lock().expect("probe lock poisoned").push("store.remove");
+    events
+        .lock()
+        .expect("probe lock poisoned")
+        .push("store.remove");
     config.run_after_remove(record);
     Ok(())
 }
@@ -82,7 +96,10 @@ fn add_hooks_fire_in_order_around_the_side_effect() {
 
     drive_add(&config, &record, &events).unwrap();
 
-    assert_eq!(recorded(&events), vec!["before_add", "store.add", "after_add"]);
+    assert_eq!(
+        recorded(&events),
+        vec!["before_add", "store.add", "after_add"]
+    );
 }
 
 #[test]
@@ -99,7 +116,10 @@ fn before_add_veto_aborts_and_skips_after_add() {
 
     assert!(matches!(
         outcome,
-        Err(RolifyError::CallbackVeto { callback: "before_add", .. })
+        Err(RolifyError::CallbackVeto {
+            callback: "before_add",
+            ..
+        })
     ));
     assert_eq!(
         recorded(&events),
@@ -120,7 +140,10 @@ fn remove_hooks_fire_in_order_around_the_side_effect() {
 
     drive_remove(&config, &record, &events).unwrap();
 
-    assert_eq!(recorded(&events), vec!["before_remove", "store.remove", "after_remove"]);
+    assert_eq!(
+        recorded(&events),
+        vec!["before_remove", "store.remove", "after_remove"]
+    );
 }
 
 #[test]
@@ -137,7 +160,10 @@ fn before_remove_veto_aborts_and_skips_after_remove() {
 
     assert!(matches!(
         outcome,
-        Err(RolifyError::CallbackVeto { callback: "before_remove", .. })
+        Err(RolifyError::CallbackVeto {
+            callback: "before_remove",
+            ..
+        })
     ));
     assert_eq!(recorded(&events), vec!["before_remove"]);
 }
@@ -160,7 +186,10 @@ fn after_hooks_receive_the_record_on_success() {
 
     drive_add(&config, &record, &events).unwrap();
 
-    assert_eq!(names_seen.lock().expect("probe lock poisoned").as_slice(), ["moderator"]);
+    assert_eq!(
+        names_seen.lock().expect("probe lock poisoned").as_slice(),
+        ["moderator"]
+    );
 }
 
 /// CONF-03: custom entity names (the gem's `customers`/`privileges` corpus,
@@ -201,8 +230,11 @@ fn custom_entity_types_flow_through_generics() {
         .build()
         .unwrap();
 
-    let privilege = Privilege { code: "VIP-9".into() };
-    let record = RoleRecord::for_instance("auditor", Privilege::type_name(), privilege.resource_id());
+    let privilege = Privilege {
+        code: "VIP-9".into(),
+    };
+    let record =
+        RoleRecord::for_instance("auditor", Privilege::type_name(), privilege.resource_id());
     drive_add(&config, &record, &events).unwrap();
 
     let customer = Customer { id: 42 };
@@ -212,7 +244,14 @@ fn custom_entity_types_flow_through_generics() {
 
     assert_eq!(
         recorded(&events),
-        vec!["before_add", "store.add", "after_add", "before_add", "store.add", "after_add"]
+        vec![
+            "before_add",
+            "store.add",
+            "after_add",
+            "before_add",
+            "store.add",
+            "after_add"
+        ]
     );
     assert_eq!(config.role_table(), "privileges");
     assert_eq!(config.join_table(), "customers_privileges");

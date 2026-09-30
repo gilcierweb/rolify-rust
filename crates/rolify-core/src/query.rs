@@ -74,7 +74,10 @@ impl<'a> RoleQuery<'a> {
     /// ```
     #[must_use]
     pub fn with_role(name: &'a RoleName) -> Self {
-        Self { name, filter: ResourceFilter::Global }
+        Self {
+            name,
+            filter: ResourceFilter::Global,
+        }
     }
 
     /// `has_role(name, resource)` with an explicit scope filter.
@@ -126,8 +129,7 @@ mod tests {
     fn with_role_and_filter_keeps_both_halves_borrowed() {
         let name = RoleName::from("manager");
         let id = ResourceId::from(42_i64);
-        let query =
-            RoleQuery::with_role_and_filter(&name, ResourceFilter::Instance("Forum", &id));
+        let query = RoleQuery::with_role_and_filter(&name, ResourceFilter::Instance("Forum", &id));
         assert!(matches!(
             query.filter,
             ResourceFilter::Instance("Forum", rid) if rid.as_str() == "42"

@@ -37,7 +37,8 @@ use crate::query::RoleQuery;
 use crate::resource::ResourceRef;
 use crate::role::{ResourceId, RoleName, RoleRecord};
 
-#[doc(hidden)] pub mod seal {
+#[doc(hidden)]
+pub mod seal {
     /// Marker supertrait gating SPI impls (soft seal - see module docs).
     pub trait Sealed {}
 }
