@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use rolify_core::config::RolifyConfig;
 use rolify_core::error::RolifyError;
+use rolify_core::query::ResourceFilter;
 use rolify_core::resource::{Resource, ResourceRef};
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
 use rolify_core::store::RoleStore;
@@ -132,16 +133,16 @@ async fn has_role_global_admin_end_to_end() {
             .store()
             .grant(&spawned_id, RoleRecord::global(RoleName::from("admin")));
         let handle = tokio::spawn(async move {
-            spawned_user.has_role(&RoleName::from("admin")).await
+            spawned_user.has_role(&RoleName::from("admin"), ResourceFilter::Global).await
         });
         let spawned_result = handle.await.unwrap();
         assert!(matches!(spawned_result, Ok(true)));
     }
 
     // The walking-skeleton predicate, both modes.
-    let has_admin = user.has_role(&admin).await.unwrap();
+    let has_admin = user.has_role(&admin, ResourceFilter::Global).await.unwrap();
     assert!(has_admin, "global admin role must satisfy the global query");
 
-    let has_other = user.has_role(&someone_else).await.unwrap();
+    let has_other = user.has_role(&someone_else, ResourceFilter::Global).await.unwrap();
     assert!(!has_other, "unknown role name must not match (byte-exact)");
 }

@@ -102,4 +102,65 @@ mod tests {
         ];
         assert_eq!(refs.len(), 3);
     }
+
+    // ---- STI shape-only contract (RSRC-06 wiring is Phase 2) ----
+
+    struct Vehicle {
+        id: i64,
+    }
+    impl Resource for Vehicle {
+        fn type_name() -> &'static str {
+            "Vehicle"
+        }
+        // STI override: Vehicle has descendant Car (port of
+        // `relation_types_for`, `adapters/base.rb:27-28`).
+        fn descendant_types() -> Vec<&'static str> {
+            vec!["Vehicle", "Car"]
+        }
+        fn resource_id(&self) -> ResourceId {
+            ResourceId::from(self.id)
+        }
+    }
+
+    struct Car {
+        id: i64,
+    }
+    impl Resource for Car {
+        fn type_name() -> &'static str {
+            "Car"
+        }
+        fn resource_id(&self) -> ResourceId {
+            ResourceId::from(self.id)
+        }
+    }
+
+    #[test]
+    fn descendant_types_override_returns_base_plus_descendants() {
+        assert_eq!(Vehicle::descendant_types(), vec!["Vehicle", "Car"]);
+        assert_eq!(Car::descendant_types(), vec!["Car"]);
+    }
+
+    #[test]
+    fn user_side_matching_never_expands_descendants() {
+        // Pitfall 1 drift guard: a `Class(Base)` query must NOT match rows
+        // scoped to a descendant type. `descendant_types` feeds ONLY
+        // resource-side finders (Phase 2, RSRC-6) - never the ladder.
+        let rows = vec![crate::role::RoleRecord::for_instance("vip", "Car", 1_i64)];
+        let name = crate::role::RoleName::from("vip");
+        let id = ResourceId::from(1_i64);
+        let base_query = crate::query::RoleQuery {
+            name: &name,
+            filter: crate::query::ResourceFilter::Class("Vehicle"),
+        };
+        assert!(
+            crate::kernel::where_(&rows, &base_query).is_empty(),
+            "descendant-typed rows are invisible to base-type user queries"
+        );
+        // sanity: the descendant's own type does match
+        let own_query = crate::query::RoleQuery {
+            name: &name,
+            filter: crate::query::ResourceFilter::Instance("Car", &id),
+        };
+        assert_eq!(crate::kernel::where_(&rows, &own_query).len(), 1);
+    }
 }
