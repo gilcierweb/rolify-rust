@@ -13,6 +13,17 @@ use crate::query::RoleQuery;
 /// The gem compares with `role.name == args[:name].to_s` (see
 /// `role_adapter.rb` `find_cached`): no case-folding, no trimming, ever.
 /// Normalization would be a cross-adapter drift and spoofing vector.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::role::RoleName;
+///
+/// let name = RoleName::new("admin");
+/// assert_eq!(name.as_str(), "admin");
+/// // byte-exact: no case-folding, no trimming
+/// assert_ne!(RoleName::from("Admin"), RoleName::from("admin"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(
     feature = "serde",
@@ -23,6 +34,11 @@ pub struct RoleName(String);
 
 impl RoleName {
     /// Wrap a raw name. No normalization is applied.
+    ///
+    /// ```
+    /// use rolify_core::role::RoleName;
+    /// assert_eq!(RoleName::new("manager").as_str(), "manager");
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
@@ -58,6 +74,16 @@ impl From<&str> for RoleName {
 /// The gem stringifies PKs when scoping roles (see `spec/support/schema.rb`:
 /// `teams.team_code` is a string PK), so ids are stored as text to keep
 /// integer and string keys comparable the way adapters compare them in SQL.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::role::ResourceId;
+///
+/// // integer and string PKs share one representation
+/// assert_eq!(ResourceId::from(42_i64), ResourceId::from("42"));
+/// assert_eq!(ResourceId::from("T-9").as_str(), "T-9");
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(
     feature = "serde",
@@ -122,6 +148,17 @@ impl From<u64> for ResourceId {
 ///
 /// `#[non_exhaustive]` guards against literal construction outside this
 /// crate (use the constructors), keeping the scope invariants enforceable.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::role::RoleRecord;
+///
+/// let global = RoleRecord::global("admin");
+/// let scoped = RoleRecord::for_class("manager", "Forum");
+/// assert!(global.is_global());
+/// assert!(scoped.is_class_scoped_to("Forum"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -148,18 +185,37 @@ impl RoleRecord {
     }
 
     /// A **global** role row (both scope columns `None`).
+    ///
+    /// ```
+    /// use rolify_core::role::RoleRecord;
+    /// let row = RoleRecord::global("admin");
+    /// assert!(row.is_global());
+    /// ```
     #[must_use]
     pub fn global(name: impl Into<RoleName>) -> Self {
         Self::new(name.into(), None, None)
     }
 
     /// A **class-scoped** role row (`resource_type` set, `resource_id` `None`).
+    ///
+    /// ```
+    /// use rolify_core::role::RoleRecord;
+    /// let row = RoleRecord::for_class("manager", "Forum");
+    /// assert!(row.is_class_scoped_to("Forum"));
+    /// assert!(row.resource_id.is_none());
+    /// ```
     #[must_use]
     pub fn for_class(name: impl Into<RoleName>, resource_type: impl Into<String>) -> Self {
         Self::new(name.into(), Some(resource_type.into()), None)
     }
 
     /// An **instance-scoped** role row (both scope columns set).
+    ///
+    /// ```
+    /// use rolify_core::role::{ResourceId, RoleRecord};
+    /// let row = RoleRecord::for_instance("moderator", "Forum", 7_i64);
+    /// assert!(row.is_instance_scoped_to("Forum", &ResourceId::from(7_i64)));
+    /// ```
     #[must_use]
     pub fn for_instance(
         name: impl Into<RoleName>,
@@ -170,18 +226,38 @@ impl RoleRecord {
     }
 
     /// `resource_type IS NULL AND resource_id IS NULL`.
+    ///
+    /// ```
+    /// use rolify_core::role::RoleRecord;
+    /// assert!(RoleRecord::global("admin").is_global());
+    /// assert!(!RoleRecord::for_class("admin", "Forum").is_global());
+    /// ```
     #[must_use]
     pub fn is_global(&self) -> bool {
         self.resource_type.is_none() && self.resource_id.is_none()
     }
 
     /// `resource_type = type_name AND resource_id IS NULL`.
+    ///
+    /// ```
+    /// use rolify_core::role::RoleRecord;
+    /// let row = RoleRecord::for_class("manager", "Forum");
+    /// assert!(row.is_class_scoped_to("Forum"));
+    /// assert!(!row.is_class_scoped_to("Group"));
+    /// ```
     #[must_use]
     pub fn is_class_scoped_to(&self, type_name: &str) -> bool {
         self.resource_type.as_deref() == Some(type_name) && self.resource_id.is_none()
     }
 
     /// `resource_type = type_name AND resource_id = id`.
+    ///
+    /// ```
+    /// use rolify_core::role::{ResourceId, RoleRecord};
+    /// let row = RoleRecord::for_instance("moderator", "Forum", 7_i64);
+    /// assert!(row.is_instance_scoped_to("Forum", &ResourceId::from(7_i64)));
+    /// assert!(!row.is_instance_scoped_to("Forum", &ResourceId::from(8_i64)));
+    /// ```
     #[must_use]
     pub fn is_instance_scoped_to(&self, type_name: &str, id: &ResourceId) -> bool {
         self.resource_type.as_deref() == Some(type_name) && self.resource_id.as_ref() == Some(id)
@@ -203,6 +279,22 @@ impl RoleRecord {
 /// `RoleSet` serializes (its borrowed rows serialize as an array of
 /// records); it intentionally has no `Deserialize` - a snapshot is borrowed,
 /// never owned.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::query::{ResourceFilter, RoleQuery};
+/// use rolify_core::role::{RoleName, RoleRecord, RoleSet};
+///
+/// let rows = [RoleRecord::global("admin")];
+/// let set = RoleSet::new(&rows);
+/// let name = RoleName::from("admin");
+/// // the gem's global override, pure and I/O-free
+/// assert!(set.has_cached_role(&RoleQuery::with_role_and_filter(
+///     &name,
+///     ResourceFilter::Class("Forum"),
+/// )));
+/// ```
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RoleSet<'a> {
@@ -224,6 +316,17 @@ impl<'a> RoleSet<'a> {
 
     /// Non-strict cached membership - the gem's `has_cached_role?`
     /// (`role.rb:47-49`), delegating to [`crate::kernel::find_cached`].
+    ///
+    /// ```
+    /// use rolify_core::query::{ResourceFilter, RoleQuery};
+    /// use rolify_core::role::{RoleName, RoleRecord, RoleSet};
+    ///
+    /// let rows = [RoleRecord::for_class("manager", "Forum")];
+    /// let set = RoleSet::new(&rows);
+    /// let name = RoleName::from("manager");
+    /// let query = RoleQuery::with_role_and_filter(&name, ResourceFilter::Global);
+    /// assert!(!set.has_cached_role(&query)); // reverse never holds
+    /// ```
     #[must_use]
     pub fn has_cached_role(&self, query: &RoleQuery<'_>) -> bool {
         crate::kernel::find_cached(self.rows, query)

@@ -45,6 +45,15 @@ pub use seal::Sealed;
 
 /// Which scope column [`RoleStore::exists`] inspects (the gem's `column`
 /// argument in `exists?(relation, column)` - `role_adapter.rb`).
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::store::ScopeColumn;
+///
+/// assert_eq!(ScopeColumn::ResourceType, ScopeColumn::ResourceType);
+/// assert_ne!(ScopeColumn::ResourceType, ScopeColumn::ResourceId);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScopeColumn {
     /// `resource_type IS NOT NULL` - any scoped (non-global) row.
@@ -58,9 +67,18 @@ pub enum ScopeColumn {
 /// Mirrors what the gem's `remove` returns conceptually (the affected
 /// roles) plus the `remove_role_if_empty` cleanup it performs inline when
 /// the flag is set (role_adapter.rb:58-70: after deleting the join rows,
-/// each role whose last membership vanished is destroyed).
+/// each role whose last membership vanished is destroyed). Plain data -
+/// adapters construct it, so it is intentionally NOT `#[non_exhaustive]`.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::store::RemovalOutcome;
+///
+/// let outcome = RemovalOutcome::default();
+/// assert_eq!(outcome.removed_links, 0);
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct RemovalOutcome {
     /// How many user-to-role links were deleted.
     pub removed_links: usize,
@@ -70,10 +88,22 @@ pub struct RemovalOutcome {
 }
 
 /// The role-row storage SPI that backend adapters implement.
+///
+/// # Example
+///
+/// The reference implementation is [`rolify_test::InMemoryStore`]. All
+/// examples that call the dual-mode SPI live in the phase-1 integration
+/// suites (`tests/user_flow.rs`, `rolify-test/tests/spi_integration.rs`),
+/// which run identically in both modes.
+///
+/// [`rolify_test::InMemoryStore`]: https://docs.rs/rolify-test
 #[maybe_async::maybe_async(AFIT)]
 pub trait RoleStore: Sealed + Send + Sync + 'static {
-    /// Backend connection/pool handle.
-    type Conn;
+    /// Backend connection/pool handle. `Send` is required because provided
+    /// methods hold `&mut Conn` across `.await` points (SPI futures are
+    /// `Send`-bound by contract) - every targeted backend connection type
+    /// (diesel/sqlx/sea-orm/mongodb) is `Send`.
+    type Conn: Send;
 
     /// Backend error - one `thiserror` enum per adapter, converting from
     /// [`RolifyError`] so core-level failures (callback veto, invalid config)
@@ -177,15 +207,36 @@ pub struct ResourceKey {
     pub resource_id: ResourceId,
 }
 
+impl ResourceKey {
+    /// Identify a persisted resource by type name + stringified PK.
+    #[must_use]
+    pub fn new(resource_type: impl Into<String>, resource_id: impl Into<ResourceId>) -> Self {
+        Self {
+            resource_type: resource_type.into(),
+            resource_id: resource_id.into(),
+        }
+    }
+}
+
 /// The resource-side finder SPI (gem `ResourceAdapterBase`, base.rb).
 ///
 /// Members are contract-only for Phase 1 (finder semantics land in Phase 2,
 /// RSRC-*); rolify-test's `InMemoryStore` implements them over its fixture
 /// registry so the signatures cannot drift away from a real implementation.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::store::ResourceKey;
+///
+/// let key = ResourceKey::new("Forum", 7_i64);
+/// assert_eq!(key.resource_type, "Forum");
+/// ```
 #[maybe_async::maybe_async(AFIT)]
 pub trait ResourceStore: Sealed + Send + Sync + 'static {
-    /// Backend connection/pool handle.
-    type Conn;
+    /// Backend connection/pool handle - `Send` for the same reason as
+    /// [`RoleStore::Conn`].
+    type Conn: Send;
 
     /// Backend error - same contract as [`RoleStore::Error`].
     type Error: core::error::Error + Send + Sync + From<RolifyError> + 'static;

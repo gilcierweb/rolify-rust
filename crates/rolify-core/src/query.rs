@@ -9,6 +9,18 @@ use crate::role::{ResourceId, RoleName};
 /// Port of the gem's `nil | Class | instance | :any` resource argument in
 /// `build_query` (`role_adapter.rb:106-121`). `Any` exists only on the query
 /// side - writes use [`crate::resource::ResourceRef`], which has no `Any`.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::query::ResourceFilter;
+/// use rolify_core::role::ResourceId;
+///
+/// let global = ResourceFilter::Global;
+/// let id = ResourceId::from(7_i64);
+/// let instance = ResourceFilter::Instance("Forum", &id);
+/// assert!(matches!(instance, ResourceFilter::Instance("Forum", _)));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceFilter<'a> {
     /// `resource = nil` - global rows only.
@@ -29,6 +41,17 @@ pub enum ResourceFilter<'a> {
 ///
 /// Borrow-first (OQ-4): the query never allocates - `name` is `&'a RoleName`,
 /// committed; store impls decide whether to clone.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::query::{ResourceFilter, RoleQuery};
+/// use rolify_core::role::RoleName;
+///
+/// let name = RoleName::from("admin");
+/// let query = RoleQuery::with_role_and_filter(&name, ResourceFilter::Any);
+/// assert!(matches!(query.filter, ResourceFilter::Any));
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct RoleQuery<'a> {
     /// The role name to match (byte-exact).
@@ -40,12 +63,31 @@ pub struct RoleQuery<'a> {
 impl<'a> RoleQuery<'a> {
     /// `has_role(name)` with the gem's default `resource = nil` - a
     /// global-scope query.
+    ///
+    /// ```
+    /// use rolify_core::query::{ResourceFilter, RoleQuery};
+    /// use rolify_core::role::RoleName;
+    ///
+    /// let name = RoleName::from("admin");
+    /// let query = RoleQuery::with_role(&name);
+    /// assert!(matches!(query.filter, ResourceFilter::Global));
+    /// ```
     #[must_use]
     pub fn with_role(name: &'a RoleName) -> Self {
         Self { name, filter: ResourceFilter::Global }
     }
 
     /// `has_role(name, resource)` with an explicit scope filter.
+    ///
+    /// ```
+    /// use rolify_core::query::{ResourceFilter, RoleQuery};
+    /// use rolify_core::role::{ResourceId, RoleName};
+    ///
+    /// let name = RoleName::from("moderator");
+    /// let id = ResourceId::from(3_i64);
+    /// let query = RoleQuery::with_role_and_filter(&name, ResourceFilter::Instance("Forum", &id));
+    /// assert!(matches!(query.filter, ResourceFilter::Instance("Forum", _)));
+    /// ```
     #[must_use]
     pub fn with_role_and_filter(name: &'a RoleName, filter: ResourceFilter<'a>) -> Self {
         Self { name, filter }

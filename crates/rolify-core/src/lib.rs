@@ -27,6 +27,14 @@
 //! macro mechanically strips futures/awaits under `is_sync`. The pure kernel
 //! ([`kernel`]) and all value types are mode-agnostic.
 //!
+//! ## Parity
+//!
+//! Behavioral parity with the gem, and every deliberate divergence, are
+//! tracked in the project parity matrix (`.planning/parity-matrix.md`,
+//! published in Phase 7). Kernel semantics port `role_adapter.rb`
+//! `build_query`/`where_strict`/`find_cached*` line by line; the gem defines
+//! no authorization enforcement, and neither does this crate.
+//!
 //! ## Architecture
 //!
 //! - [`role`], [`query`], [`resource`]: value types (`RoleName`, `RoleRecord`,

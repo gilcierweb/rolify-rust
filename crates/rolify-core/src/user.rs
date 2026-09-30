@@ -26,6 +26,49 @@ use crate::store::{RemovalOutcome, RoleStore};
 /// SPI `(&mut store, &mut conn)` at once (two independent `&mut self`
 /// accessors could never do that in safe Rust - one method must split the
 /// disjoint fields).
+///
+/// # Example
+///
+/// Consumer wiring plus a full grant/check/revoke pass against the
+/// in-memory reference store - live in BOTH modes (the `maybe_async`
+/// attribute rewrites the example's own `await`s when `is_sync` is active):
+///
+/// ```rust
+/// use rolify_core::config::RolifyConfig;
+/// use rolify_core::query::{ResourceFilter, RoleQuery};
+/// use rolify_core::resource::ResourceRef;
+/// use rolify_core::role::{ResourceId, RoleName, RoleSet};
+/// use rolify_core::user::RolifyUser;
+/// use rolify_test::InMemoryStore;
+///
+/// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+///
+/// impl RolifyUser for Player {
+///     type Store = InMemoryStore;
+///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+///         (&mut self.store, &mut self.conn)
+///     }
+/// }
+///
+/// # #[cfg(not(feature = "is_sync"))]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() { usage().await; }
+/// # #[cfg(feature = "is_sync")]
+/// # fn main() { usage(); }
+/// #
+/// #[maybe_async::maybe_async]
+/// async fn usage() {
+///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+///     player.add_role(&RoleName::from("admin"), ResourceRef::Global).await.unwrap();
+///     let has_admin = player.has_role(&RoleName::from("admin"), ResourceFilter::Global).await.unwrap();
+///     assert!(has_admin);
+///     let names = player.roles_name().await.unwrap();
+///     assert_eq!(names, vec![RoleName::from("admin")]);
+/// }
+/// ```
 #[maybe_async::maybe_async(AFIT)]
 pub trait RolifyUser: Send + Sync + 'static {
     /// The store owning this user's role rows (static dispatch - the SPI is
@@ -127,6 +170,57 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// the strict predicates ONLY when `strict` is configured AND the filter
     /// is Class/Instance (the gem's narrow gate at role.rb:26), via the
     /// pinned [`RolifyUser::rolify_config`] seam.
+    ///
+    /// # Example
+    ///
+    /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+    /// example's own `await`s when `is_sync` is active):
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::InMemoryStore;
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player {
+    ///         id: 1,
+    ///         store: InMemoryStore::new(),
+    ///         conn: (),
+    ///         config: RolifyConfig::default(),
+    ///     };
+    ///     player
+    ///         .add_role(&RoleName::from("admin"), ResourceRef::Global)
+    ///         .await
+    ///         .unwrap();
+    ///     let has = player
+    ///         .has_role(&RoleName::from("admin"), ResourceFilter::Global)
+    ///         .await
+    ///         .unwrap();
+    ///     assert!(has);
+    /// }
+    /// ```
     fn has_role(
         &mut self,
         name: &RoleName,

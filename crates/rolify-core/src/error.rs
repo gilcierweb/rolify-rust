@@ -9,6 +9,18 @@
 ///
 /// The enum is `#[non_exhaustive]`: new variants may be added in later minor
 /// releases without a breaking change.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::error::RolifyError;
+///
+/// let err = RolifyError::CallbackVeto {
+///     callback: "before_add",
+///     reason: "policy says no".into(),
+/// };
+/// assert!(matches!(err, RolifyError::CallbackVeto { .. }));
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RolifyError {

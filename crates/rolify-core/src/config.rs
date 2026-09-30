@@ -98,6 +98,15 @@ impl RolifyConfig {
     /// Whether strict predicates should engage for this filter (CONF-01
     /// plumbing): delegates to [`crate::kernel::strict_engages`] with this
     /// configuration's `strict` flag - true ONLY for Class/Instance filters.
+    ///
+    /// ```
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    ///
+    /// let config = RolifyConfig::builder().strict(true).build().unwrap();
+    /// assert!(config.strict_engages_for(&ResourceFilter::Class("Forum")));
+    /// assert!(!config.strict_engages_for(&ResourceFilter::Global));
+    /// ```
     #[must_use]
     pub fn strict_engages_for(&self, filter: &ResourceFilter<'_>) -> bool {
         crate::kernel::strict_engages(self.strict, filter)
@@ -131,6 +140,17 @@ impl RolifyConfig {
     }
 
     /// Run the `after_add` hook (if set). Notification only - never vetoes.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use rolify_core::config::RolifyConfig;
+    /// # use rolify_core::role::RoleRecord;
+    /// let config = RolifyConfig::builder()
+    ///     .after_add(Arc::new(|_record| { /* notify */ }))
+    ///     .build()
+    ///     .unwrap();
+    /// config.run_after_add(&RoleRecord::global("admin"));
+    /// ```
     pub fn run_after_add(&self, record: &RoleRecord) {
         if let Some(hook) = &self.after_add {
             hook(record);

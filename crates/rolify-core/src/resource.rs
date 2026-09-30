@@ -7,6 +7,17 @@ use crate::role::ResourceId;
 /// Port of the gem's `nil | Class | instance` write argument. There is no
 /// `Any` variant - a role cannot be granted "at whatever scope"; `Any` is a
 /// query-only concept (see [`crate::query::ResourceFilter`]).
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::resource::ResourceRef;
+/// use rolify_core::role::ResourceId;
+///
+/// let id = ResourceId::from(7_i64);
+/// let scope = ResourceRef::Instance("Forum", &id);
+/// assert!(matches!(scope, ResourceRef::Instance("Forum", _)));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceRef<'a> {
     /// `resource = nil` - a global role row.
@@ -48,6 +59,24 @@ pub trait Resource {
     /// STI descendants - port of `relation_types_for`
     /// (`adapters/base.rb:27-28`): returns `Self` plus descendant type names.
     /// Default: no STI, just `Self`.
+    ///
+    /// ```
+    /// # use rolify_core::resource::Resource;
+    /// # use rolify_core::role::ResourceId;
+    /// # struct Vehicle { id: i64 }
+    /// # impl Resource for Vehicle {
+    /// #     fn type_name() -> &'static str { "Vehicle" }
+    /// #     fn resource_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    /// # }
+    /// struct Car { id: i64 }
+    /// impl Resource for Car {
+    ///     fn type_name() -> &'static str { "Car" }
+    ///     fn descendant_types() -> Vec<&'static str> { vec!["Vehicle", "Car"] }
+    ///     fn resource_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    /// }
+    /// assert_eq!(Vehicle::descendant_types(), vec!["Vehicle"]); // default
+    /// assert_eq!(Car::descendant_types(), vec!["Vehicle", "Car"]); // STI
+    /// ```
     #[must_use]
     fn descendant_types() -> Vec<&'static str>
     where

@@ -39,6 +39,28 @@ mod removal_tests;
 /// | `Class(t)` | name AND (global OR (`resource_type` = t AND `resource_id` IS NULL)) |
 /// | `Instance(t, id)` | name AND (global OR class(t) OR (`resource_type` = t AND `resource_id` = id)) |
 /// | `Any` | name only - **including** global rows (D-02) |
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::where_;
+/// use rolify_core::query::{ResourceFilter, RoleQuery};
+/// use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+///
+/// let rows = [
+///     RoleRecord::global("admin"),
+///     RoleRecord::for_class("manager", "Forum"),
+/// ];
+/// let name = RoleName::from("admin");
+/// let id = ResourceId::from(1_i64);
+/// // the global override: a class query matches the global row
+/// let query = RoleQuery { name: &name, filter: ResourceFilter::Instance("Forum", &id) };
+/// assert_eq!(where_(&rows, &query).len(), 1);
+/// // reverse never holds
+/// let wrong = RoleName::from("manager");
+/// let query = RoleQuery { name: &wrong, filter: ResourceFilter::Global };
+/// assert!(where_(&rows, &query).is_empty());
+/// ```
 #[must_use]
 pub fn where_<'a>(rows: &'a [RoleRecord], query: &RoleQuery<'_>) -> Vec<&'a RoleRecord> {
     rows.iter()
@@ -84,6 +106,24 @@ fn record_matches(record: &RoleRecord, query: &RoleQuery<'_>) -> bool {
 /// * `strict(Any)` = **name-only**. The gem's `where_strict(:any)` would
 ///   raise (`:any.id`) - dead code - and the strict gate never engages for
 ///   `Any` anyway (`resource != :any` at role.rb:26/48, finders.rb:4).
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::where_strict;
+/// use rolify_core::query::{ResourceFilter, RoleQuery};
+/// use rolify_core::role::{RoleName, RoleRecord};
+///
+/// let rows = [RoleRecord::global("admin"), RoleRecord::for_class("manager", "Forum")];
+/// let manager = RoleName::from("manager");
+/// let query = RoleQuery { name: &manager, filter: ResourceFilter::Class("Forum") };
+/// assert_eq!(where_strict(&rows, &query).len(), 1);
+///
+/// // exact scope only: the global row is NOT seen by a strict class query
+/// let admin = RoleName::from("admin");
+/// let query = RoleQuery { name: &admin, filter: ResourceFilter::Class("Forum") };
+/// assert!(where_strict(&rows, &query).is_empty());
+/// ```
 #[must_use]
 pub fn where_strict<'a>(rows: &'a [RoleRecord], query: &RoleQuery<'_>) -> Vec<&'a RoleRecord> {
     rows.iter()
@@ -113,13 +153,38 @@ fn strict_record_matches(record: &RoleRecord, query: &RoleQuery<'_>) -> bool {
 /// By construction `find_cached` agrees with [`where_`] on any row set
 /// (the gem guarantees the cached and queried paths cannot drift apart);
 /// the SC-1 test matrix pins that agreement row by row.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::find_cached;
+/// use rolify_core::query::RoleQuery;
+/// use rolify_core::role::{RoleName, RoleRecord};
+///
+/// let rows = [RoleRecord::global("admin")];
+/// let name = RoleName::from("admin");
+/// assert!(find_cached(&rows, &RoleQuery::with_role(&name)));
+/// ```
 #[must_use]
 pub fn find_cached(rows: &[RoleRecord], query: &RoleQuery<'_>) -> bool {
     !where_(rows, query).is_empty()
 }
 
 /// Cached strict membership predicate - `find_cached_strict`
-/// (role_adapter.rb:41-48), same corners as [`where_strict`].
+/// (`role_adapter.rb:41-48`), same corners as [`where_strict`].
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::find_cached_strict;
+/// use rolify_core::query::{ResourceFilter, RoleQuery};
+/// use rolify_core::role::{RoleName, RoleRecord};
+///
+/// let rows = [RoleRecord::for_class("manager", "Forum")];
+/// let name = RoleName::from("manager");
+/// let query = RoleQuery { name: &name, filter: ResourceFilter::Class("Forum") };
+/// assert!(find_cached_strict(&rows, &query));
+/// ```
 #[must_use]
 pub fn find_cached_strict(rows: &[RoleRecord], query: &RoleQuery<'_>) -> bool {
     !where_strict(rows, query).is_empty()
@@ -131,6 +196,18 @@ pub fn find_cached_strict(rows: &[RoleRecord], query: &RoleQuery<'_>) -> bool {
 ///
 /// Strict engages ONLY when a concrete `Class`/`Instance` resource is given;
 /// never for `Global` (nil is falsy in Ruby), never for `Any`.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::strict_engages;
+/// use rolify_core::query::ResourceFilter;
+///
+/// assert!(strict_engages(true, &ResourceFilter::Class("Forum")));
+/// assert!(!strict_engages(true, &ResourceFilter::Global));
+/// assert!(!strict_engages(true, &ResourceFilter::Any));
+/// assert!(!strict_engages(false, &ResourceFilter::Class("Forum")));
+/// ```
 #[must_use]
 pub fn strict_engages(strict: bool, filter: &ResourceFilter<'_>) -> bool {
     strict && matches!(filter, ResourceFilter::Class(_) | ResourceFilter::Instance(..))
@@ -142,6 +219,25 @@ pub fn strict_engages(strict: bool, filter: &ResourceFilter<'_>) -> bool {
 /// This is a DISTINCT predicate family from the query ladder: removal
 /// conditions are conjunctive (`name` / `name+type` / `name+type+id`),
 /// never the override OR-ladder (Pitfall 8).
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::{RemovalTarget, removal_match};
+/// use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+///
+/// let name = RoleName::from("manager");
+/// let class_row = RoleRecord::for_class("manager", "Forum");
+/// let inst_row = RoleRecord::for_instance("manager", "Forum", 7_i64);
+///
+/// // TypeSweep hits class rows AND instance rows of that type
+/// assert!(removal_match(&class_row, &name, &RemovalTarget::TypeSweep("Forum")));
+/// assert!(removal_match(&inst_row, &name, &RemovalTarget::TypeSweep("Forum")));
+/// // Exact hits the triple only
+/// let id = ResourceId::from(7_i64);
+/// assert!(removal_match(&inst_row, &name, &RemovalTarget::Exact("Forum", &id)));
+/// assert!(!removal_match(&class_row, &name, &RemovalTarget::Exact("Forum", &id)));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemovalTarget<'a> {
     /// `remove_role(name)` - deletes rows with this name at ALL scopes.
@@ -157,6 +253,19 @@ pub enum RemovalTarget<'a> {
 
 /// Removal-family predicate: does `record` fall under the sweep of
 /// `target` for role `name`? See [`RemovalTarget`] for the sweep rules.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::kernel::{RemovalTarget, removal_match};
+/// use rolify_core::role::{RoleName, RoleRecord};
+///
+/// let name = RoleName::from("manager");
+/// let row = RoleRecord::for_instance("manager", "Forum", 1_i64);
+/// assert!(removal_match(&row, &name, &RemovalTarget::NameOnly));
+/// assert!(removal_match(&row, &name, &RemovalTarget::TypeSweep("Forum")));
+/// assert!(!removal_match(&row, &name, &RemovalTarget::TypeSweep("Group")));
+/// ```
 #[must_use]
 pub fn removal_match(record: &RoleRecord, name: &RoleName, target: &RemovalTarget<'_>) -> bool {
     let name_ok = record.name == *name;
