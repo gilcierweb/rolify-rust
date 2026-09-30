@@ -13,5 +13,9 @@ rolify-core = { path = "../rolify-core" }
 default = []
 is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
 
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio.workspace = true
+
 [lints]
 workspace = true

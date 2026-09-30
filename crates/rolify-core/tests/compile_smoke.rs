@@ -107,7 +107,8 @@ async fn has_role_global_admin_end_to_end() {
     let someone_else = RoleName::from(faker_rust::internet::username(None));
 
     let mut user = Customer::new(faker_rust::number::between(1, 10_000));
-    user.store().insert(RoleRecord::global(admin.clone()));
+    let user_id = user.rolify_id();
+    user.store().grant(&user_id, RoleRecord::global(admin.clone()));
 
     // Level-1 dedupe through the same store (same triple → one row).
     let (store, conn) = user.store_with_conn();
@@ -126,7 +127,10 @@ async fn has_role_global_admin_end_to_end() {
     {
         // Send proof: the provided-method future crosses a spawn boundary.
         let mut spawned_user = Customer::new(faker_rust::number::between(1, 10_000));
-        spawned_user.store().insert(RoleRecord::global(RoleName::from("admin")));
+        let spawned_id = spawned_user.rolify_id();
+        spawned_user
+            .store()
+            .grant(&spawned_id, RoleRecord::global(RoleName::from("admin")));
         let handle = tokio::spawn(async move {
             spawned_user.has_role(&RoleName::from("admin")).await
         });
