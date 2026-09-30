@@ -67,6 +67,10 @@ impl RolifyUser for Customer {
         &self.config
     }
 
+    fn rolify_id(&self) -> ResourceId {
+        ResourceId::from(self.id)
+    }
+
     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
         (&mut self.store, &mut self.conn)
     }

@@ -12,17 +12,18 @@ use core::future::Future;
 
 use crate::config::RolifyConfig;
 use crate::query::{ResourceFilter, RoleQuery};
-use crate::role::RoleName;
+use crate::role::{ResourceId, RoleName};
 use crate::store::RoleStore;
 
 /// Implement on your user/account type to give it roles.
 ///
-/// Three required members: the store accessor, the pinned config seam, and a
-/// split borrow handing the SPI `(&mut store, &mut conn)` at once (two
-/// independent `&mut self` accessors could never do that in safe Rust - one
-/// method must split the disjoint fields). The provided methods then carry
-/// the gem's concern logic - the `method_missing` shortcuts of `role.rb` are
-/// intentionally **not** ported; call `has_role(RoleName::from("admin"))`.
+/// Required members: the store accessor, the pinned config seam, the
+/// holder identity used by the join table, and a split borrow handing the
+/// SPI `(&mut store, &mut conn)` at once (two independent `&mut self`
+/// accessors could never do that in safe Rust - one method must split the
+/// disjoint fields). The provided methods then carry the gem's concern
+/// logic - the `method_missing` shortcuts of `role.rb` are intentionally
+/// **not** ported; call `has_role(RoleName::from("admin"))`.
 #[maybe_async::maybe_async(AFIT)]
 pub trait RolifyUser: Send + Sync + 'static {
     /// The store owning this user's role rows (static dispatch - the SPI is
@@ -35,6 +36,10 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// Borrow the resolved configuration (pinned seam - all strict/callback
     /// routing keys off this from 01-03/01-04 onward).
     fn rolify_config(&self) -> &RolifyConfig;
+
+    /// The holder's stable identity for the join table (the gem's user
+    /// primary key, stringified - same precedent as [`ResourceId`]).
+    fn rolify_id(&self) -> ResourceId;
 
     /// Borrow store and connection as one disjoint split - the SPI's
     /// `(&Store, &mut Conn)` call shape requires both at once.
@@ -51,9 +56,10 @@ pub trait RolifyUser: Send + Sync + 'static {
         name: &RoleName,
     ) -> impl Future<Output = Result<bool, <Self::Store as RoleStore>::Error>> + Send {
         async move {
+            let holder = self.rolify_id();
             let query = RoleQuery { name, filter: ResourceFilter::Global };
             let (store, conn) = self.store_with_conn();
-            let rows = store.where_(conn, &query).await?;
+            let rows = store.where_(conn, &holder, &query).await?;
             Ok(!rows.is_empty())
         }
     }

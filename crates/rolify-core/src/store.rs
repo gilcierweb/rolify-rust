@@ -1,10 +1,30 @@
-//! Adapter SPI - the soft-sealed [`RoleStore`] trait.
+//! Adapter SPI - the soft-sealed [`RoleStore`] / [`ResourceStore`] traits.
 //!
 //! Port of the gem's abstract adapter contract
-//! (`rolify/lib/rolify/adapters/base.rb`, `RoleAdapterBase`) into one sealed
-//! per-backend trait. The full method surface (`add`/`remove`/`where_strict`/
-//! `exists`, plus `ResourceStore`) lands in 01-04 - nothing is invented that
-//! the gem doesn't have.
+//! (`rolify/lib/rolify/adapters/base.rb`, `RoleAdapterBase` /
+//! `ResourceAdapterBase`) into sealed per-backend traits. The surface is
+//! traced - never invented: `where`, `where_strict`, `find_or_create_by`,
+//! `add`, `remove`, `exists?` (`RoleAdapterBase` + the concrete adapters'
+//! `where_strict`), plus `resources_find` and `in` (here `in_list`, since
+//! `in` is a Rust keyword) from `ResourceAdapterBase`. The gem defines no
+//! user-ids lookup or resource-find operation, so none exists here either -
+//! anything a Phase-2 finder needs gets its own parity-matrix entry.
+//!
+//! Contract notes:
+//!
+//! * **Not dyn-compatible, on purpose.** `type Conn` / `type Error` make
+//!   these traits static-dispatch only (E0038) - adapters are generic
+//!   parameters; a boxed dyn form is intentionally impossible.
+//! * **Soft seal.** `Sealed` is a doc-hidden public marker (a hard
+//!   `sealed`-crate seal cannot span crates; `embedded-hal` 1.0 precedent).
+//!   Implementations exist only inside this workspace's crates
+//!   (`rolify-test`, then Phase-3+ adapters). The orphan rule (E0117) means
+//!   adapters impl the SPI for **local wrapper types**, never for foreign
+//!   types like `sqlx::PgPool`.
+//! * **One mode per build graph.** A dependent crate picks async (default)
+//!   or `is_sync` via feature unification; within-crate `compile_error!`
+//!   guards for mutually-exclusive adapter features land with
+//!   `rolify-diesel` (Pitfall 7).
 
 // `Future` is named in the trait signatures in async mode only; maybe-async
 // strips the `impl Future` return type in `is_sync` mode.
@@ -12,28 +32,44 @@
 use core::future::Future;
 
 use crate::error::RolifyError;
+use crate::kernel::RemovalTarget;
 use crate::query::RoleQuery;
 use crate::resource::ResourceRef;
-use crate::role::{RoleName, RoleRecord};
+use crate::role::{ResourceId, RoleName, RoleRecord};
 
 #[doc(hidden)] pub mod seal {
-    /// Marker supertrait gating `RoleStore` impls (soft seal - see module docs
-    /// of [`crate::store`]).
+    /// Marker supertrait gating SPI impls (soft seal - see module docs).
     pub trait Sealed {}
 }
 pub use seal::Sealed;
 
-/// The role-row storage SPI that backend adapters implement
-/// (`rolify-diesel`, `rolify-sqlx`, `rolify-seaorm`, `rolify-mongodb`).
+/// Which scope column [`RoleStore::exists`] inspects (the gem's `column`
+/// argument in `exists?(relation, column)` - `role_adapter.rb`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScopeColumn {
+    /// `resource_type IS NOT NULL` - any scoped (non-global) row.
+    ResourceType,
+    /// `resource_id IS NOT NULL` - any instance-scoped row.
+    ResourceId,
+}
+
+/// Report of a [`RoleStore::remove`] call.
 ///
-/// Sealing contract (soft seal - a hard `sealed`-crate seal cannot work
-/// across crates, and `embedded-hal` 1.0 uses the same doc-hidden public
-/// marker): implementations exist **only** inside this workspace (today:
-/// `rolify-test::InMemoryStore`; from Phase 3: the adapter crates). External
-/// impls are possible but unsupported.
-///
-/// Static dispatch by design: `type Conn` makes the trait non-`dyn`
-/// (E0038) on purpose - adapters are generic parameters, not trait objects.
+/// Mirrors what the gem's `remove` returns conceptually (the affected
+/// roles) plus the `remove_role_if_empty` cleanup it performs inline when
+/// the flag is set (role_adapter.rb:58-70: after deleting the join rows,
+/// each role whose last membership vanished is destroyed).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RemovalOutcome {
+    /// How many user-to-role links were deleted.
+    pub removed_links: usize,
+    /// Role rows deleted by the `remove_role_if_empty` sweep (empty only
+    /// when the flag was false or nothing became empty).
+    pub removed_roles: Vec<RoleRecord>,
+}
+
+/// The role-row storage SPI that backend adapters implement.
 #[maybe_async::maybe_async(AFIT)]
 pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// Backend connection/pool handle.
@@ -44,9 +80,39 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// flow through adapter errors uniformly.
     type Error: core::error::Error + Send + Sync + From<RolifyError> + 'static;
 
-    /// Gem `find_or_create_by` (`role_adapter.rb`): role-row dedupe on the
-    /// exact `(name, resource_type, resource_id)` triple - idempotent-add
-    /// level 1 (the link-guard level 2 lives in `RolifyUser::add_role`).
+    /// Gem `where` (role_adapter.rb:106-121 via `build_query`) - the
+    /// non-strict three-disjunct ladder; semantics fixed by
+    /// [`crate::kernel::where_`], scoped to `holder`'s role rows.
+    fn where_(
+        &self,
+        conn: &mut Self::Conn,
+        holder: &ResourceId,
+        query: &RoleQuery<'_>,
+    ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
+
+    /// Gem `where_strict` (role_adapter.rb:11-26) - exact scope, no
+    /// overrides; semantics fixed by [`crate::kernel::where_strict`].
+    fn where_strict(
+        &self,
+        conn: &mut Self::Conn,
+        holder: &ResourceId,
+        query: &RoleQuery<'_>,
+    ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
+
+    /// Gem `where` with several conditions OR-joined
+    /// (`build_conditions`, role_adapter.rb:88-104 - `join(' OR ')`): ONE
+    /// round-trip for "any of these queries" - the counterpart of
+    /// `has_any_role?`'s persisted path, never N sequential checks.
+    fn where_any(
+        &self,
+        conn: &mut Self::Conn,
+        holder: &ResourceId,
+        queries: &[RoleQuery<'_>],
+    ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
+
+    /// Gem `find_or_create_by` (`role_adapter.rb`) - role-row dedupe on the
+    /// exact `(name, resource_type, resource_id)` triple (idempotent-add
+    /// level 1; the link-guard level 2 lives in [`RoleStore::add`]).
     fn find_or_create_by(
         &mut self,
         conn: &mut Self::Conn,
@@ -54,12 +120,95 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
         scope: ResourceRef<'_>,
     ) -> impl Future<Output = Result<RoleRecord, Self::Error>> + Send;
 
-    /// Non-strict ladder query - port of `build_query`
-    /// (`role_adapter.rb:106-121`); semantics fixed by
-    /// [`crate::kernel::where_`].
-    fn where_(
+    /// Gem `add` (role_adapter.rb:52-54):
+    /// `relation.roles << role unless relation.roles.include?(role)` -
+    /// line-idempotent link creation (level-2 dedupe).
+    fn add(
+        &mut self,
+        conn: &mut Self::Conn,
+        holder: &ResourceId,
+        role: &RoleRecord,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// Gem `remove` (role_adapter.rb:58-70): delete the holder's links whose
+    /// role matches `name` + `target`'s conjunctive sweep
+    /// ([`crate::kernel::removal_match`]); when `remove_role_if_empty` is
+    /// set, also delete each role row whose last link just vanished
+    /// (`role.destroy if ... limit(1).empty?`).
+    fn remove(
+        &mut self,
+        conn: &mut Self::Conn,
+        holder: &ResourceId,
+        name: &RoleName,
+        target: RemovalTarget<'_>,
+        remove_role_if_empty: bool,
+    ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send;
+
+    /// Gem `exists?` (role_adapter.rb:72-74):
+    /// `relation.where("<column> IS NOT NULL")` over the holder's rows.
+    fn exists(
         &self,
         conn: &mut Self::Conn,
-        query: &RoleQuery<'_>,
+        holder: &ResourceId,
+        column: ScopeColumn,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+
+    /// All role rows linked to `holder` - the port of reading the
+    /// `user.roles` association (the gem reaches it directly; adapters own
+    /// the join table, so the surface must expose it). Feeds `roles_name`
+    /// / `only_has_role?` (role.rb:77-90).
+    fn roles_of(
+        &self,
+        conn: &mut Self::Conn,
+        holder: &ResourceId,
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
+}
+
+/// Identity of a persisted consumer resource (its type name plus its
+/// stringified primary key). Resource-side finders never materialize
+/// consumer rows through the store - they return keys the consumer
+/// resolves through its own ORM (Phase 2 finder semantics).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ResourceKey {
+    /// Resource class name (`resource_type` column value).
+    pub resource_type: String,
+    /// Stringified resource primary key.
+    pub resource_id: ResourceId,
+}
+
+/// The resource-side finder SPI (gem `ResourceAdapterBase`, base.rb).
+///
+/// Members are contract-only for Phase 1 (finder semantics land in Phase 2,
+/// RSRC-*); rolify-test's `InMemoryStore` implements them over its fixture
+/// registry so the signatures cannot drift away from a real implementation.
+#[maybe_async::maybe_async(AFIT)]
+pub trait ResourceStore: Sealed + Send + Sync + 'static {
+    /// Backend connection/pool handle.
+    type Conn;
+
+    /// Backend error - same contract as [`RoleStore::Error`].
+    type Error: core::error::Error + Send + Sync + From<RolifyError> + 'static;
+
+    /// Gem `resources_find` (`resource_adapter.rb`): resources of the given
+    /// STI type family (`types` includes descendants, per
+    /// `relation_types_for`, base.rb:27-28) that hold `name` at class scope
+    /// or at their own instance scope.
+    fn resources_find(
+        &self,
+        conn: &mut Self::Conn,
+        types: &[&str],
+        name: &RoleName,
+    ) -> impl Future<Output = Result<Vec<ResourceKey>, Self::Error>> + Send;
+
+    /// Gem `in` (`resource_adapter.rb` - `in` is a Rust keyword, hence
+    /// `in_list`): among `candidates`, the resources where `holder` has any
+    /// of `names` at the resource's class scope or instance scope.
+    fn in_list(
+        &self,
+        conn: &mut Self::Conn,
+        candidates: &[ResourceKey],
+        holder: &ResourceId,
+        names: &[RoleName],
+    ) -> impl Future<Output = Result<Vec<ResourceKey>, Self::Error>> + Send;
 }
