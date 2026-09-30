@@ -5,5 +5,20 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 
+[dependencies]
+thiserror.workspace = true
+maybe-async.workspace = true
+
+[features]
+default = []
+is_sync = ["maybe-async/is_sync", "rolify-test/is_sync"]
+
+[dev-dependencies]
+rstest.workspace = true
+pretty_assertions.workspace = true
+faker-rust = "0.1"
+tokio.workspace = true
+rolify-test = { path = "../rolify-test" }
+
 [lints]
 workspace = true

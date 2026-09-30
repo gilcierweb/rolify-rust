@@ -5,5 +5,13 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 
+[dependencies]
+maybe-async.workspace = true
+rolify-core = { path = "../rolify-core" }
+
+[features]
+default = []
+is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
+
 [lints]
 workspace = true
