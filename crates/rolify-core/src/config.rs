@@ -279,4 +279,6 @@ impl core::fmt::Debug for RolifyConfigBuilder {
 }
 
 #[cfg(test)]
+mod callbacks;
+#[cfg(test)]
 mod tests;
