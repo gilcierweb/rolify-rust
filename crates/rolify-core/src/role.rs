@@ -6,6 +6,8 @@
 
 use core::fmt;
 
+use crate::query::RoleQuery;
+
 /// Role name - a newtype over `String` with **exact byte equality**.
 ///
 /// The gem compares with `role.name == args[:name].to_s` (see
@@ -172,6 +174,184 @@ impl RoleRecord {
     #[must_use]
     pub fn is_instance_scoped_to(&self, type_name: &str, id: &ResourceId) -> bool {
         self.resource_type.as_deref() == Some(type_name) && self.resource_id.as_ref() == Some(id)
+    }
+}
+
+/// Zero-I/O cached snapshot of one user's roles (CORE-04).
+///
+/// `RoleSet` borrows a **pre-fetched** role list and answers membership
+/// questions purely, via the kernel. Passing it anything that required a
+/// round-trip would defeat the gem's cached path: the `role.rb`
+/// `new_record?`-vs-persisted distinction maps to **which** slice you hand
+/// it (loaded association rows vs. a fresh hit), never to extra queries on
+/// the kernel side. The gem's `:any` `new_record?` divergence lives OUTSIDE
+/// the kernel (D-2 parity-matrix entry).
+///
+/// Zero-I/O is enforced statically: no constructor or method takes any
+/// backend handle at all (Pitfall 2 - the signature itself is the proof).
+#[derive(Clone, Copy, Debug)]
+pub struct RoleSet<'a> {
+    rows: &'a [RoleRecord],
+}
+
+impl<'a> RoleSet<'a> {
+    /// Snapshot a slice of already-loaded role rows.
+    #[must_use]
+    pub fn new(rows: &'a [RoleRecord]) -> Self {
+        Self { rows }
+    }
+
+    /// The borrowed rows.
+    #[must_use]
+    pub fn rows(&self) -> &'a [RoleRecord] {
+        self.rows
+    }
+
+    /// Non-strict cached membership - the gem's `has_cached_role?`
+    /// (`role.rb:47-49`), delegating to [`crate::kernel::find_cached`].
+    #[must_use]
+    pub fn has_cached_role(&self, query: &RoleQuery<'_>) -> bool {
+        crate::kernel::find_cached(self.rows, query)
+    }
+
+    /// Strict cached membership - the gem's `has_strict_cached_role?`
+    /// (`role.rb:51-54`), delegating to [`crate::kernel::find_cached_strict`].
+    /// Callers apply the strict gate themselves (`kernel::strict_engages`);
+    /// this predicate does not re-decide it.
+    #[must_use]
+    pub fn has_strict_cached_role(&self, query: &RoleQuery<'_>) -> bool {
+        crate::kernel::find_cached_strict(self.rows, query)
+    }
+}
+
+#[cfg(test)]
+mod role_set {
+    use super::*;
+    use crate::kernel::{fixtures, where_};
+    use crate::query::{ResourceFilter, RoleQuery};
+    use rstest::rstest;
+
+    fn customer_roles() -> Vec<RoleRecord> {
+        vec![
+            RoleRecord::global("admin"),
+            RoleRecord::for_class("manager", "Forum"),
+            RoleRecord::for_instance("moderator", "Forum", 7_i64),
+        ]
+    }
+
+    #[test]
+    fn new_and_rows_are_zero_io_borrows() {
+        let rows = customer_roles();
+        let set = RoleSet::new(&rows);
+        assert_eq!(set.rows().len(), 3);
+    }
+
+    #[test]
+    fn cached_role_agrees_with_the_query_path() {
+        let rows = customer_roles();
+        let set = RoleSet::new(&rows);
+        let admin = RoleName::from("admin");
+        let manager = RoleName::from("manager");
+        let moderator = RoleName::from("moderator");
+        let ghost = RoleName::from("ghost");
+        let forum_seven = ResourceId::from(7_i64);
+
+        // global override visible through the cache
+        assert!(set.has_cached_role(&RoleQuery::with_role_and_filter(
+            &admin,
+            ResourceFilter::Instance("Forum", &forum_seven),
+        )));
+        // class covers instance
+        assert!(set.has_cached_role(&RoleQuery::with_role_and_filter(
+            &manager,
+            ResourceFilter::Instance("Forum", &forum_seven),
+        )));
+        // reverse never holds
+        assert!(!set.has_cached_role(&RoleQuery::with_role_and_filter(
+            &manager,
+            ResourceFilter::Global,
+        )));
+        // instance is not class
+        assert!(!set.has_cached_role(&RoleQuery::with_role_and_filter(
+            &moderator,
+            ResourceFilter::Class("Forum"),
+        )));
+        // any includes global (D-2)
+        assert!(set.has_cached_role(&RoleQuery::with_role_and_filter(
+            &admin,
+            ResourceFilter::Any,
+        )));
+        // unknown
+        assert!(!set.has_cached_role(&RoleQuery::with_role(&ghost)));
+    }
+
+    #[test]
+    fn strict_cached_role_matches_exact_scope_only() {
+        let rows = customer_roles();
+        let set = RoleSet::new(&rows);
+        let manager = RoleName::from("manager");
+        let moderator = RoleName::from("moderator");
+        let admin = RoleName::from("admin");
+        let forum_seven = ResourceId::from(7_i64);
+
+        assert!(set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
+            &manager,
+            ResourceFilter::Class("Forum"),
+        )));
+        assert!(set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
+            &moderator,
+            ResourceFilter::Instance("Forum", &forum_seven),
+        )));
+        // no overrides under strict
+        assert!(!set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
+            &admin,
+            ResourceFilter::Class("Forum"),
+        )));
+        assert!(!set.has_strict_cached_role(&RoleQuery::with_role_and_filter(
+            &manager,
+            ResourceFilter::Instance("Forum", &forum_seven),
+        )));
+    }
+
+    /// SC-1 cross-path agreement sweep: for every holder scenario and every
+    /// name x kind x type x id combination, `RoleSet::has_cached_role` must
+    /// agree with the `where_` query path. Combinatorial by construction, so
+    /// every SC-1 row is covered (the labeled headline rows above are the
+    /// spec-traceable anchors).
+    #[rstest]
+    #[case::global_admin(vec![RoleRecord::global("admin")], "admin")]
+    #[case::class_manager(vec![RoleRecord::for_class("manager", "Forum")], "manager")]
+    #[case::instance_moderator(vec![RoleRecord::for_instance("moderator", "Forum", 1_i64)], "moderator")]
+    #[case::mixed(customer_roles(), "admin")]
+    fn sc1_cached_vs_query_agreement(#[case] rows: Vec<RoleRecord>, #[case] held: &str) {
+        let set = RoleSet::new(&rows);
+        let names = [held, "admin", "manager", "ghost", "Admin"];
+        for name in names {
+            let name = RoleName::from(name);
+            for id_raw in [1_i64, 7, 42] {
+                let id = ResourceId::from(id_raw);
+                for kind in [
+                    fixtures::FilterKind::Global,
+                    fixtures::FilterKind::Class,
+                    fixtures::FilterKind::Instance,
+                    fixtures::FilterKind::Any,
+                ] {
+                    for type_name in ["Forum", "Group"] {
+                        let query =
+                            fixtures::make_query(&name, kind, type_name, &id);
+                        let query_path = !where_(&rows, &query).is_empty();
+                        let cached_path = set.has_cached_role(&query);
+                        assert_eq!(
+                            query_path, cached_path,
+                            "where_/has_cached_role divergence: name={name} kind={kind:?} type={type_name} id={id}"
+                        );
+                        let strict_agree = set.has_strict_cached_role(&query)
+                            != crate::kernel::where_strict(&rows, &query).is_empty();
+                        assert!(strict_agree);
+                    }
+                }
+            }
+        }
     }
 }
 
