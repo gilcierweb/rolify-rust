@@ -1,0 +1,9 @@
+[package]
+name = "rolify-core"
+version.workspace = true
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[lints]
+workspace = true

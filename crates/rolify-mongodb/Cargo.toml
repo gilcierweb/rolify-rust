@@ -1,0 +1,9 @@
+[package]
+name = "rolify-mongodb"
+version.workspace = true
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[lints]
+workspace = true
