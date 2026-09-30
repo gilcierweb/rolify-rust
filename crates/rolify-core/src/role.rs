@@ -14,6 +14,11 @@ use crate::query::RoleQuery;
 /// `role_adapter.rb` `find_cached`): no case-folding, no trimming, ever.
 /// Normalization would be a cross-adapter drift and spoofing vector.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
 pub struct RoleName(String);
 
 impl RoleName {
@@ -54,6 +59,11 @@ impl From<&str> for RoleName {
 /// `teams.team_code` is a string PK), so ids are stored as text to keep
 /// integer and string keys comparable the way adapters compare them in SQL.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
 pub struct ResourceId(String);
 
 impl ResourceId {
@@ -113,6 +123,7 @@ impl From<u64> for ResourceId {
 /// `#[non_exhaustive]` guards against literal construction outside this
 /// crate (use the constructors), keeping the scope invariants enforceable.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RoleRecord {
     /// Role name (byte-exact).
@@ -189,7 +200,11 @@ impl RoleRecord {
 ///
 /// Zero-I/O is enforced statically: no constructor or method takes any
 /// backend handle at all (Pitfall 2 - the signature itself is the proof).
+/// `RoleSet` serializes (its borrowed rows serialize as an array of
+/// records); it intentionally has no `Deserialize` - a snapshot is borrowed,
+/// never owned.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RoleSet<'a> {
     rows: &'a [RoleRecord],
 }
