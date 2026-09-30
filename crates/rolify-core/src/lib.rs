@@ -51,3 +51,4 @@ pub mod store;
 pub mod user;
 
 pub use error::RolifyError;
+pub use kernel::RemovalTarget;

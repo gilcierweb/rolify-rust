@@ -1,12 +1,14 @@
-//! SC-3 compile-and-behavior smoke tests (initial set; 01-04 pins the full
-//! list per OQ-1). This file compiles and runs under BOTH modes via the two
-//! cargo invocations `cargo test -p rolify-core` and
+//! SC-3 compile-and-behavior smoke tests (OQ-1 pinned list). Compiles and
+//! runs under BOTH modes via the two cargo invocations
+//! `cargo test -p rolify-core` and
 //! `cargo test -p rolify-core --features is_sync`.
 //!
-//! Dyn-compatibility contract being pinned (OQ-1): the **consumer** traits
-//! and callback closures are `dyn`-able; the store SPI is intentionally NOT
-//! (`type Conn` ⇒ E0038 - static dispatch by design, documented in
-//! [`rolify_core::store`]).
+//! Dyn-compatibility contract being pinned: the **consumer** traits
+//! (`Resource`) and the callback closures (`Arc<dyn Fn(&RoleRecord) -> ...>`)
+//! ARE dyn-able; the store SPI (`RoleStore`/`ResourceStore`) is intentionally
+//! NOT (`type Conn` makes it static-dispatch only - E0038 by design, see
+//! [`rolify_core::store`]). If this file ever tries to box the SPI, the
+//! compile failure IS the guard doing its job.
 
 use std::sync::Arc;
 
@@ -126,7 +128,7 @@ async fn has_role_global_admin_end_to_end() {
 
     #[cfg(not(feature = "is_sync"))]
     {
-        // Send proof: the provided-method future crosses a spawn boundary.
+        // Send proof: the provided-method futures cross a spawn boundary.
         let mut spawned_user = Customer::new(faker_rust::number::between(1, 10_000));
         let spawned_id = spawned_user.rolify_id();
         spawned_user
@@ -137,6 +139,16 @@ async fn has_role_global_admin_end_to_end() {
         });
         let spawned_result = handle.await.unwrap();
         assert!(matches!(spawned_result, Ok(true)));
+
+        // Same Send proof over the write path (add_role provided method).
+        let mut write_user = Customer::new(faker_rust::number::between(1, 10_000));
+        let write_handle = tokio::spawn(async move {
+            write_user
+                .add_role(&RoleName::from("editor"), ResourceRef::Global)
+                .await
+        });
+        let write_result = write_handle.await.unwrap();
+        assert!(write_result.is_ok());
     }
 
     // The walking-skeleton predicate, both modes.
