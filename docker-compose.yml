@@ -1,0 +1,78 @@
+# Local databases for rolify-rust development and adapter integration tests.
+#
+# Usage:
+#   cp .env.example .env   # adjust ports and credentials once
+#   docker compose up -d
+#   docker compose ps
+#   docker compose down -v # full reset (drops volumes)
+#
+# Note: `cargo test` adapter suites use testcontainers and start their own
+# ephemeral databases. This file exists for interactive development
+# (psql, mysql client, mongosh, migration experiments).
+
+name: rolify-rust
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: rolify-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rolify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rolify}
+      POSTGRES_DB: ${POSTGRES_DB:-rolify}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rolify} -d ${POSTGRES_DB:-rolify}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mysql:
+    image: mysql:8.4
+    container_name: rolify-mysql
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rolify}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-rolify}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-rolify}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  mongo:
+    image: mongo:8.0
+    container_name: rolify-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-rolify}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-rolify}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u ${MONGO_INITDB_ROOT_USERNAME:-rolify} -p ${MONGO_INITDB_ROOT_PASSWORD:-rolify} --eval \"db.adminCommand('ping')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  postgres-data:
+    name: rolify-postgres-data
+  mysql-data:
+    name: rolify-mysql-data
+  mongo-data:
+    name: rolify-mongo-data

@@ -1,0 +1,7 @@
+# Workspace-wide toolchain: the maximum of all per-crate MSRV floors
+# (core/cli/test 1.85, diesel 1.86, mongodb 1.88, sqlx/seaorm 1.94).
+# rustup picks this up automatically on every cargo invocation.
+[toolchain]
+channel = "1.94"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

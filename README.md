@@ -579,15 +579,25 @@ every public item.
 5. Suggest a Conventional Commits title in English (commits are made
    manually by the maintainer; automation never commits).
 
+## Contributing
+
+Contributions are welcome! Feel free to open issues and pull requests.
+
+## Inspiration
+
+Inspired by the legendary [Ruby Rolify gem](https://github.com/RolifyCommunity/rolify) Rolify-Rust brings its intuitive API and battle-tested role management to the Rust ecosystem, reimagined with Rust's safety, performance and type-safety.
+
 ## License
 
 MIT. See [LICENSE](LICENSE) (to be added at first publish; the workspace
 `Cargo.toml` already declares `license = "MIT"`).
 
 ### Links
+- Website: https://gilcierweb.com.br
+- Repository: https://github.com/gilcierweb/rolify-rust
+- Documentation: https://docs.rs/rolify-rust
+- [Ruby Rolify gem](https://github.com/RolifyCommunity/rolify) 
 
 
-
-###  Build 
-
-https://gilcierweb.com.br
+### Author
+Built and maintained by [GilcierWeb](https://gilcierweb.com.br)
