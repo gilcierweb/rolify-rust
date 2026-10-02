@@ -187,6 +187,9 @@ mod user {
     fn ghost() -> RoleName {
         RoleName::from("ghost")
     }
+    fn moderator() -> RoleName {
+        RoleName::from("moderator")
+    }
 
     #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn add_role_is_idempotent_at_both_levels() {
@@ -578,10 +581,123 @@ mod user {
         user.add_role(&admin(), ResourceRef::Class("Forum"))
             .await
             .unwrap();
-        let strict_hit = user
-            .has_strict_role(&admin(), ResourceFilter::Class("Forum"))
+        let forum_filter = ResourceFilter::Class("Forum");
+        let strict_hit = user.has_strict_role(&admin(), forum_filter).await.unwrap();
+        assert!(strict_hit, "the exact class row matches");
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn roleset_narrows_are_pure_filters() {
+        let mut user = TestUser::new(1, RolifyConfig::default());
+        let forum_seven = ResourceId::from(7_i64);
+        user.add_role(&admin(), ResourceRef::Global).await.unwrap();
+        user.add_role(&manager(), ResourceRef::Class("Forum"))
             .await
             .unwrap();
-        assert!(strict_hit, "the exact class row matches");
+        user.add_role(&moderator(), ResourceRef::Instance("Forum", &forum_seven))
+            .await
+            .unwrap();
+
+        let rows = {
+            let holder = user.rolify_id();
+            let (store, conn) = user.store_with_conn();
+            store.roles_of(&mut *conn, &holder).await.unwrap()
+        };
+        let snapshot = RoleSet::new(&rows);
+        let before = snapshot.rows().len();
+
+        let global = snapshot.global();
+        assert_eq!(global.len(), 1);
+        assert_eq!(global[0].name, admin());
+
+        let forum_class = snapshot.class_scoped(Some("Forum"));
+        assert_eq!(forum_class.len(), 1);
+        assert_eq!(forum_class[0].name, manager());
+
+        let exact = snapshot.instance_scoped(Some("Forum"), Some(&forum_seven));
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].name, moderator());
+        let miss = snapshot.instance_scoped(Some("Group"), Some(&forum_seven));
+        assert!(miss.is_empty());
+
+        assert_eq!(
+            snapshot.rows().len(),
+            before,
+            "narrows never mutate the snapshot"
+        );
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn cached_all_any_only_variants_mirror_kernel() {
+        let mut user = TestUser::new(1, RolifyConfig::default());
+        user.add_role(&admin(), ResourceRef::Global).await.unwrap();
+        user.add_role(&manager(), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
+
+        let rows = {
+            let holder = user.rolify_id();
+            let (store, conn) = user.store_with_conn();
+            store.roles_of(&mut *conn, &holder).await.unwrap()
+        };
+        let snapshot = RoleSet::new(&rows);
+
+        let both = [
+            RoleQuery {
+                name: &admin(),
+                filter: ResourceFilter::Global,
+            },
+            RoleQuery {
+                name: &manager(),
+                filter: ResourceFilter::Class("Forum"),
+            },
+        ];
+        assert!(snapshot.has_all_cached(&both));
+        let with_miss = [
+            RoleQuery {
+                name: &admin(),
+                filter: ResourceFilter::Global,
+            },
+            RoleQuery {
+                name: &ghost(),
+                filter: ResourceFilter::Global,
+            },
+        ];
+        assert!(!snapshot.has_all_cached(&with_miss));
+
+        let any_hit = [
+            RoleQuery {
+                name: &ghost(),
+                filter: ResourceFilter::Any,
+            },
+            RoleQuery {
+                name: &manager(),
+                filter: ResourceFilter::Class("Forum"),
+            },
+        ];
+        assert!(snapshot.has_any_cached(&any_hit));
+        let any_miss = [RoleQuery {
+            name: &ghost(),
+            filter: ResourceFilter::Any,
+        }];
+        assert!(!snapshot.has_any_cached(&any_miss));
+        assert!(!snapshot.has_any_cached(&[]));
+
+        assert!(!snapshot.only_has_cached(&RoleQuery {
+            name: &admin(),
+            filter: ResourceFilter::Global,
+        }));
+        let mut solo = TestUser::new(2, RolifyConfig::default());
+        solo.add_role(&admin(), ResourceRef::Global).await.unwrap();
+        let solo_rows = {
+            let holder = solo.rolify_id();
+            let (store, conn) = solo.store_with_conn();
+            store.roles_of(&mut *conn, &holder).await.unwrap()
+        };
+        let solo_snapshot = RoleSet::new(&solo_rows);
+        assert!(solo_snapshot.only_has_cached(&RoleQuery {
+            name: &admin(),
+            filter: ResourceFilter::Global,
+        }));
     }
 }

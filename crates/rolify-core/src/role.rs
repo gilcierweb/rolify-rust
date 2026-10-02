@@ -288,6 +288,12 @@ impl RoleRecord {
 /// records); it intentionally has no `Deserialize` - a snapshot is borrowed,
 /// never owned.
 ///
+/// D-17 divergence note (D-19 feed): the gem filters server-side
+/// (`subject.roles.class_scoped` builds a WHERE over the relation); the
+/// port filters the already-fetched snapshot kernel-side through
+/// [`RoleSet::global`]/[`RoleSet::class_scoped`]/
+/// [`RoleSet::instance_scoped`]. Result parity, query-shape divergence.
+///
 /// # Example
 ///
 /// ```
@@ -347,6 +353,180 @@ impl<'a> RoleSet<'a> {
     #[must_use]
     pub fn has_strict_cached_role(&self, query: &RoleQuery<'_>) -> bool {
         crate::kernel::find_cached_strict(self.rows, query)
+    }
+
+    /// The gem's `.global` scope (`shared_examples_for_scopes.rb:10-15`)
+    /// as a pure snapshot filter (D-17): rows with both scope columns
+    /// `None`. Zero I/O by signature: no store handle in, no store handle
+    /// out.
+    ///
+    /// ```
+    /// use rolify_core::role::{RoleRecord, RoleSet};
+    ///
+    /// let rows = [
+    ///     RoleRecord::global("admin"),
+    ///     RoleRecord::for_class("manager", "Forum"),
+    /// ];
+    /// let set = RoleSet::new(&rows);
+    /// let global = set.global();
+    /// assert_eq!(global.len(), 1);
+    /// assert_eq!(global[0].name.as_str(), "admin");
+    /// ```
+    #[must_use]
+    pub fn global(&self) -> Vec<&'a RoleRecord> {
+        self.rows
+            .iter()
+            .filter(|record| record.is_global())
+            .collect()
+    }
+
+    /// The gem's `.class_scoped` / `.class_scoped(Klass)` scopes
+    /// (`shared_examples_for_scopes.rb:17-24`) as a pure snapshot filter
+    /// (D-17): rows with a type and no id, narrowed to `resource_type` when
+    /// `Some`. `None` returns every class-scoped row.
+    ///
+    /// ```
+    /// use rolify_core::role::{RoleRecord, RoleSet};
+    ///
+    /// let rows = [
+    ///     RoleRecord::for_class("manager", "Group"),
+    ///     RoleRecord::for_class("moderator", "Forum"),
+    ///     RoleRecord::global("admin"),
+    /// ];
+    /// let set = RoleSet::new(&rows);
+    /// assert_eq!(set.class_scoped(None).len(), 2);
+    /// assert_eq!(set.class_scoped(Some("Group")).len(), 1);
+    /// assert_eq!(set.class_scoped(Some("Missing")).len(), 0);
+    /// ```
+    #[must_use]
+    pub fn class_scoped(&self, resource_type: Option<&str>) -> Vec<&'a RoleRecord> {
+        self.rows
+            .iter()
+            .filter(|record| {
+                record.resource_id.is_none()
+                    && record.resource_type.as_deref().is_some_and(|row_type| {
+                        resource_type.is_none_or(|wanted| row_type == wanted)
+                    })
+            })
+            .collect()
+    }
+
+    /// The gem's `.instance_scoped` / `(Klass)` / `(instance)` scopes
+    /// (`shared_examples_for_scopes.rb:26-37`) as a pure snapshot filter
+    /// (D-17): rows with both scope columns set, narrowed per the two
+    /// `Option`s. `(None, None)` returns every instance-scoped row.
+    ///
+    /// ```
+    /// use rolify_core::role::{ResourceId, RoleRecord, RoleSet};
+    ///
+    /// let first = ResourceId::from(1_i64);
+    /// let rows = [
+    ///     RoleRecord::for_instance("visitor", "Forum", ResourceId::from(1_i64)),
+    ///     RoleRecord::for_instance("visitor", "Forum", ResourceId::from(3_i64)),
+    ///     RoleRecord::for_class("manager", "Forum"),
+    /// ];
+    /// let set = RoleSet::new(&rows);
+    /// assert_eq!(set.instance_scoped(None, None).len(), 2);
+    /// assert_eq!(set.instance_scoped(Some("Forum"), None).len(), 2);
+    /// assert_eq!(set.instance_scoped(Some("Forum"), Some(&first)).len(), 1);
+    /// assert_eq!(set.instance_scoped(Some("Group"), Some(&first)).len(), 0);
+    /// ```
+    #[must_use]
+    pub fn instance_scoped(
+        &self,
+        resource_type: Option<&str>,
+        resource_id: Option<&ResourceId>,
+    ) -> Vec<&'a RoleRecord> {
+        self.rows
+            .iter()
+            .filter(|record| {
+                record
+                    .resource_id
+                    .as_ref()
+                    .is_some_and(|row_id| resource_id.is_none_or(|wanted| row_id == wanted))
+                    && record.resource_type.as_deref().is_some_and(|row_type| {
+                        resource_type.is_none_or(|wanted| row_type == wanted)
+                    })
+            })
+            .collect()
+    }
+
+    /// `has_all_roles?` over the snapshot (`role.rb:56-67`, ROADMAP SC-5):
+    /// every query matches through the non-strict kernel ladder. Empty
+    /// slice answers true (vacuous AND). Zero I/O by signature.
+    ///
+    /// ```
+    /// use rolify_core::query::{ResourceFilter, RoleQuery};
+    /// use rolify_core::role::{RoleName, RoleRecord, RoleSet};
+    ///
+    /// let rows = [
+    ///     RoleRecord::global("admin"),
+    ///     RoleRecord::for_class("manager", "Forum"),
+    /// ];
+    /// let set = RoleSet::new(&rows);
+    /// let admin = RoleName::from("admin");
+    /// let manager = RoleName::from("manager");
+    /// let ghost = RoleName::from("ghost");
+    /// let both = [
+    ///     RoleQuery::with_role(&admin),
+    ///     RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum")),
+    /// ];
+    /// assert!(set.has_all_cached(&both));
+    /// let with_miss = [
+    ///     RoleQuery::with_role(&admin),
+    ///     RoleQuery::with_role(&ghost),
+    /// ];
+    /// assert!(!set.has_all_cached(&with_miss));
+    /// assert!(set.has_all_cached(&[]));
+    /// ```
+    #[must_use]
+    pub fn has_all_cached(&self, queries: &[RoleQuery<'_>]) -> bool {
+        queries.iter().all(|query| self.has_cached_role(query))
+    }
+
+    /// `has_any_role?` over the snapshot (`role.rb:69-75`, ROADMAP SC-5):
+    /// at least one query matches. Empty slice answers false. Zero I/O by
+    /// signature.
+    ///
+    /// ```
+    /// use rolify_core::query::{ResourceFilter, RoleQuery};
+    /// use rolify_core::role::{RoleName, RoleRecord, RoleSet};
+    ///
+    /// let rows = [RoleRecord::for_class("manager", "Forum")];
+    /// let set = RoleSet::new(&rows);
+    /// let manager = RoleName::from("manager");
+    /// let ghost = RoleName::from("ghost");
+    /// let any = [
+    ///     RoleQuery::with_role(&ghost),
+    ///     RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum")),
+    /// ];
+    /// assert!(set.has_any_cached(&any));
+    /// assert!(!set.has_any_cached(&[]));
+    /// ```
+    #[must_use]
+    pub fn has_any_cached(&self, queries: &[RoleQuery<'_>]) -> bool {
+        queries.iter().any(|query| self.has_cached_role(query))
+    }
+
+    /// `only_has_role?` over the snapshot (`role.rb:77-79`, ROADMAP SC-5):
+    /// the query matches AND the snapshot holds exactly one record. Zero
+    /// I/O by signature.
+    ///
+    /// ```
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::role::{RoleName, RoleRecord, RoleSet};
+    ///
+    /// let solo = [RoleRecord::global("admin")];
+    /// let solo_set = RoleSet::new(&solo);
+    /// let admin = RoleName::from("admin");
+    /// assert!(solo_set.only_has_cached(&RoleQuery::with_role(&admin)));
+    /// let duo = [RoleRecord::global("admin"), RoleRecord::global("staff")];
+    /// let duo_set = RoleSet::new(&duo);
+    /// assert!(!duo_set.only_has_cached(&RoleQuery::with_role(&admin)));
+    /// ```
+    #[must_use]
+    pub fn only_has_cached(&self, query: &RoleQuery<'_>) -> bool {
+        self.has_cached_role(query) && self.rows.len() == 1
     }
 }
 
@@ -443,8 +623,73 @@ mod role_set {
         );
     }
 
-    /// SC-1 cross-path agreement sweep: for every holder scenario and every
-    /// name x kind x type x id combination, `RoleSet::has_cached_role` must
+    #[test]
+    fn narrows_slice_the_snapshot_by_scope() {
+        let rows = vec![
+            RoleRecord::global("admin"),
+            RoleRecord::for_class("manager", "Forum"),
+            RoleRecord::for_class("player", "Group"),
+            RoleRecord::for_instance("moderator", "Forum", 7_i64),
+        ];
+        let set = RoleSet::new(&rows);
+        let before = set.rows().len();
+
+        let global = set.global();
+        assert_eq!(global.len(), 1);
+        assert_eq!(global[0].name, RoleName::from("admin"));
+
+        assert_eq!(set.class_scoped(None).len(), 2);
+        let forum_class = set.class_scoped(Some("Forum"));
+        assert_eq!(forum_class.len(), 1);
+        assert_eq!(forum_class[0].name, RoleName::from("manager"));
+        assert!(set.class_scoped(Some("Missing")).is_empty());
+
+        let seven = ResourceId::from(7_i64);
+        assert_eq!(set.instance_scoped(None, None).len(), 1);
+        let exact = set.instance_scoped(Some("Forum"), Some(&seven));
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].name, RoleName::from("moderator"));
+        assert!(set.instance_scoped(Some("Group"), Some(&seven)).is_empty());
+
+        assert_eq!(
+            set.rows().len(),
+            before,
+            "narrows never mutate the snapshot"
+        );
+    }
+
+    #[test]
+    fn cached_all_any_only_mirror_the_kernel_ladder() {
+        let rows = vec![
+            RoleRecord::global("admin"),
+            RoleRecord::for_class("manager", "Forum"),
+        ];
+        let set = RoleSet::new(&rows);
+        let admin = RoleName::from("admin");
+        let manager = RoleName::from("manager");
+        let ghost = RoleName::from("ghost");
+
+        let both = [
+            RoleQuery::with_role(&admin),
+            RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum")),
+        ];
+        assert!(set.has_all_cached(&both));
+        let with_miss = [RoleQuery::with_role(&admin), RoleQuery::with_role(&ghost)];
+        assert!(!set.has_all_cached(&with_miss));
+        assert!(set.has_all_cached(&[]));
+
+        let any_hit = [RoleQuery::with_role(&ghost), RoleQuery::with_role(&admin)];
+        assert!(set.has_any_cached(&any_hit));
+        let any_miss = [RoleQuery::with_role(&ghost)];
+        assert!(!set.has_any_cached(&any_miss));
+        assert!(!set.has_any_cached(&[]));
+
+        assert!(!set.only_has_cached(&RoleQuery::with_role(&admin)));
+        let solo = [RoleRecord::global("admin")];
+        assert!(RoleSet::new(&solo).only_has_cached(&RoleQuery::with_role(&admin)));
+    }
+
+    /// SC-1 cross-path agreement sweep: for every holder scenario and every    /// name x kind x type x id combination, `RoleSet::has_cached_role` must
     /// agree with the `where_` query path. Combinatorial by construction, so
     /// every SC-1 row is covered (the labeled headline rows above are the
     /// spec-traceable anchors).
