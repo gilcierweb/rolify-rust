@@ -305,7 +305,11 @@ pub async fn provision_mixed_context<B: TestBackend>(backend: &mut B) -> Result<
             let (type_name, id) = resolve_scope(backend, &spec.scope);
             let name = RoleName::from(spec.name);
             backend
-                .grant_to(provision.login, &name, scope_ref(type_name.as_deref(), id.as_ref()))
+                .grant_to(
+                    provision.login,
+                    &name,
+                    scope_ref(type_name.as_deref(), id.as_ref()),
+                )
                 .await?;
         }
     }

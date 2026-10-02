@@ -42,6 +42,8 @@ use rolify_core::store::{
 pub mod backend;
 #[cfg(feature = "suite")]
 pub mod fixtures;
+#[cfg(feature = "suite")]
+pub mod suite;
 
 /// In-memory [`RoleStore`] + [`ResourceStore`] - the workspace's reference
 /// implementation and validation target.
