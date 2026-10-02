@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use rolify_core::config::RolifyConfig;
 use rolify_core::error::RolifyError;
+use rolify_core::manager::Rolify;
 use rolify_core::query::ResourceFilter;
 use rolify_core::resource::{Resource, ResourceRef};
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
@@ -27,6 +28,11 @@ const fn assert_send_sync<T: Send + Sync>() {}
 fn store_and_config_are_send_sync() {
     assert_send_sync::<InMemoryStore>();
     assert_send_sync::<RolifyConfig>();
+    // The engine handle over the reference store (D-06: Send+Sync whenever
+    // S::Conn is Sync; pinned here in tests/ because a src/ unit test
+    // would see a second rolify_core instance and the impls would not
+    // unify - same reason user_flow.rs lives in tests/).
+    assert_send_sync::<Rolify<InMemoryStore>>();
 }
 
 /// Consumer domain type used by the smoke tests (a "user" that is also a
@@ -72,6 +78,10 @@ impl RolifyUser for Customer {
 
     fn rolify_id(&self) -> ResourceId {
         ResourceId::from(self.id)
+    }
+
+    fn rolify_type() -> &'static str {
+        "Customer"
     }
 
     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {

@@ -22,7 +22,8 @@ use crate::store::{RemovalOutcome, RoleStore};
 /// Implement on your user/account type to give it roles.
 ///
 /// Required members: the store accessor, the pinned config seam, the
-/// holder identity used by the join table, and a split borrow handing the
+/// holder identity used by the join table, the type discriminator feeding
+/// the user-class finders, and a split borrow handing the
 /// SPI `(&mut store, &mut conn)` at once (two independent `&mut self`
 /// accessors could never do that in safe Rust - one method must split the
 /// disjoint fields).
@@ -48,6 +49,7 @@ use crate::store::{RemovalOutcome, RoleStore};
 ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
 ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
 ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+///     fn rolify_type() -> &'static str { "Player" }
 ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
 ///         (&mut self.store, &mut self.conn)
 ///     }
@@ -85,6 +87,18 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// The holder's stable identity for the join table (the gem's user
     /// primary key, stringified - same precedent as [`ResourceId`]).
     fn rolify_id(&self) -> ResourceId;
+
+    /// The holder's type discriminator - the `RolifyUser` counterpart of
+    /// [`Resource::type_name`](crate::resource::Resource::type_name),
+    /// feeding the `holder_types` argument of the user-class finders
+    /// (02-07).
+    ///
+    /// Required with NO default body (D-08): every consumer names its own
+    /// type. No `where Self: Sized` bound: unlike `Resource` (where the
+    /// bound preserves dyn-compatibility per D-09), `RolifyUser` is
+    /// static-dispatch-only by design (`AFIT` plus the `type Store`
+    /// associated type make `dyn` impossible), so the bound is unnecessary.
+    fn rolify_type() -> &'static str;
 
     /// Borrow store and connection as one disjoint split - the SPI's
     /// `(&Store, &mut Conn)` call shape requires both at once.
@@ -124,6 +138,65 @@ pub trait RolifyUser: Send + Sync + 'static {
             self.rolify_config().run_after_add(&role);
             Ok(role)
         }
+    }
+
+    /// `grant` - thin alias of [`RolifyUser::add_role`] (`role.rb:23`),
+    /// the only add-side alias kept (the gem's other alias families are
+    /// out of scope).
+    ///
+    /// # Example
+    ///
+    /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+    /// example's own `await`s when `is_sync` is active):
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::kernel::RemovalTarget;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::InMemoryStore;
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     let name = RoleName::from("moderator");
+    ///     player.grant(&name, ResourceRef::Class("Forum")).await.unwrap();
+    ///     let strict_here = player.has_strict_role(&name, ResourceFilter::Class("Forum")).await.unwrap();
+    ///     assert!(strict_here);
+    ///     let strict_elsewhere = player.has_strict_role(&name, ResourceFilter::Class("Group")).await.unwrap();
+    ///     assert!(!strict_elsewhere);
+    ///     player.revoke(&name, RemovalTarget::TypeSweep("Forum")).await.unwrap();
+    ///     let gone = player.has_role(&name, ResourceFilter::Class("Forum")).await.unwrap();
+    ///     assert!(!gone);
+    /// }
+    /// ```
+    fn grant(
+        &mut self,
+        name: &RoleName,
+        scope: ResourceRef<'_>,
+    ) -> impl Future<Output = Result<RoleRecord, <Self::Store as RoleStore>::Error>> + Send {
+        async move { self.add_role(name, scope).await }
     }
 
     /// `remove_role(name, resource = nil)` (role.rb:27-30) - deletes this
@@ -166,6 +239,17 @@ pub trait RolifyUser: Send + Sync + 'static {
         }
     }
 
+    /// `revoke` - thin alias of [`RolifyUser::remove_role`] (`role.rb:85`),
+    /// the only remove-side alias kept.
+    fn revoke(
+        &mut self,
+        name: &RoleName,
+        target: RemovalTarget<'_>,
+    ) -> impl Future<Output = Result<RemovalOutcome, <Self::Store as RoleStore>::Error>> + Send
+    {
+        async move { self.remove_role(name, target).await }
+    }
+
     /// `has_role?(name, resource = nil)` (role.rb:25-41) - routes through
     /// the strict predicates ONLY when `strict` is configured AND the filter
     /// is Class/Instance (the gem's narrow gate at role.rb:26), via the
@@ -191,6 +275,7 @@ pub trait RolifyUser: Send + Sync + 'static {
     ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
     ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
     ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
     ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
     ///         (&mut self.store, &mut self.conn)
     ///     }
@@ -236,6 +321,28 @@ pub trait RolifyUser: Send + Sync + 'static {
             } else {
                 store.where_(&mut *conn, &holder, &query).await?
             };
+            Ok(!rows.is_empty())
+        }
+    }
+
+    /// `has_strict_role?(name, resource)` (`role.rb:43-45`) - direct strict
+    /// membership with NO gate: the strict check at `role.rb:26` lives in
+    /// [`RolifyUser::has_role`]; callers of this path opted in.
+    ///
+    /// Two reachable corners by design (both unreachable through
+    /// `has_role`'s gate, both expressible here): `ResourceFilter::Global`
+    /// matches exactly-global rows, `ResourceFilter::Any` matches by name
+    /// alone.
+    fn has_strict_role(
+        &mut self,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+    ) -> impl Future<Output = Result<bool, <Self::Store as RoleStore>::Error>> + Send {
+        async move {
+            let holder = self.rolify_id();
+            let query = RoleQuery { name, filter };
+            let (store, conn) = self.store_with_conn();
+            let rows = store.where_strict(&mut *conn, &holder, &query).await?;
             Ok(!rows.is_empty())
         }
     }

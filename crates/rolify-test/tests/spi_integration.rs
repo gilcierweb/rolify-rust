@@ -60,6 +60,9 @@ impl RolifyUser for Player {
     fn rolify_id(&self) -> ResourceId {
         ResourceId::from(self.id)
     }
+    fn rolify_type() -> &'static str {
+        "Player"
+    }
     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
         (&mut self.store, &mut self.conn)
     }

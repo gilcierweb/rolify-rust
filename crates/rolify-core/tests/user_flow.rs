@@ -158,6 +158,9 @@ mod user {
         fn rolify_id(&self) -> ResourceId {
             ResourceId::from(self.id)
         }
+        fn rolify_type() -> &'static str {
+            "TestUser"
+        }
         fn store_with_conn(&mut self) -> (&mut CountingStore, &mut ()) {
             (&mut self.store, &mut self.conn)
         }
@@ -506,5 +509,85 @@ mod user {
             .unwrap();
         assert!(outcome.removed_roles.is_empty());
         assert_eq!(plain.store().inner.assertion_len(), 1);
+    }
+
+    /// `grant`/`revoke` are thin aliases (role.rb:23/85): identical inputs
+    /// through the alias and the direct call leave identical stores.
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn grant_revoke_aliases_delegate_to_add_and_remove() {
+        let mut via_alias = TestUser::new(1, RolifyConfig::default());
+        let mut via_direct = TestUser::new(2, RolifyConfig::default());
+        let forum_seven = ResourceId::from(7_i64);
+        let scope = ResourceRef::Instance("Forum", &forum_seven);
+
+        via_alias.grant(&admin(), scope).await.unwrap();
+        via_direct.add_role(&admin(), scope).await.unwrap();
+
+        assert_eq!(
+            via_alias.store().inner.assertion_len(),
+            via_direct.store().inner.assertion_len()
+        );
+        let alias_holder = via_alias.rolify_id();
+        let direct_holder = via_direct.rolify_id();
+        let alias_links = via_alias.store().inner.link_count_for(&alias_holder);
+        let direct_links = via_direct.store().inner.link_count_for(&direct_holder);
+        assert_eq!(alias_links, direct_links);
+        let instance_filter = ResourceFilter::Instance("Forum", &forum_seven);
+        let alias_has = via_alias
+            .has_role(&admin(), instance_filter)
+            .await
+            .unwrap();
+        let direct_has = via_direct
+            .has_role(&admin(), instance_filter)
+            .await
+            .unwrap();
+        assert!(alias_has && direct_has);
+
+        let target = RemovalTarget::Exact("Forum", &forum_seven);
+        via_alias.revoke(&admin(), target).await.unwrap();
+        via_direct.remove_role(&admin(), target).await.unwrap();
+
+        assert_eq!(
+            via_alias.store().inner.assertion_len(),
+            via_direct.store().inner.assertion_len()
+        );
+        let alias_gone = via_alias
+            .has_role(&admin(), instance_filter)
+            .await
+            .unwrap();
+        let direct_gone = via_direct
+            .has_role(&admin(), instance_filter)
+            .await
+            .unwrap();
+        assert!(!alias_gone && !direct_gone);
+    }
+
+    /// `has_strict_role` is the direct strict path (role.rb:43-45): no
+    /// gate, so a global-only holder fails it while `has_role` still
+    /// applies the ladder override.
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn has_strict_role_is_the_direct_strict_path() {
+        let mut user = TestUser::new(1, RolifyConfig::default());
+        user.add_role(&admin(), ResourceRef::Global).await.unwrap();
+
+        let ladder_hit = user
+            .has_role(&admin(), ResourceFilter::Class("Forum"))
+            .await
+            .unwrap();
+        assert!(ladder_hit, "global row satisfies the class query");
+        let strict_miss = user
+            .has_strict_role(&admin(), ResourceFilter::Class("Forum"))
+            .await
+            .unwrap();
+        assert!(!strict_miss, "no exact class row exists");
+
+        user.add_role(&admin(), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
+        let strict_hit = user
+            .has_strict_role(&admin(), ResourceFilter::Class("Forum"))
+            .await
+            .unwrap();
+        assert!(strict_hit, "the exact class row matches");
     }
 }

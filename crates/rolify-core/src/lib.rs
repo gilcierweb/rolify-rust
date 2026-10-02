@@ -45,13 +45,22 @@
 //!   (`rolify-diesel`, `rolify-sqlx`, `rolify-seaorm`, `rolify-mongodb`).
 //! - [`user`]: the `RolifyUser` consumer trait with the gem's concern logic as
 //!   provided methods.
+//! - [`manager`]: the `Rolify<S>` engine handle (D-06/D-07) - store plus
+//!   connection plus the single `RolifyConfig` source of truth.
+//! - [`finders`]: user-class finder assoc fns (content lands in plan 02-07,
+//!   D-01..D-04).
+//! - [`catalog`]: the resource-catalog read query (content lands in plan
+//!   02-05, D-15/D-16).
 //! - [`config`]: `RolifyConfig` builder (strict mode, `remove_role_if_empty`,
 //!   callbacks), replacing the gem's global class variables.
 //! - [`error`]: [`RolifyError`], the shared error enum.
 
+pub mod catalog;
 pub mod config;
 pub mod error;
+pub mod finders;
 pub mod kernel;
+pub mod manager;
 pub mod query;
 pub mod resource;
 pub mod role;
