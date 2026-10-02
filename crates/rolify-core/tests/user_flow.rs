@@ -533,10 +533,7 @@ mod user {
         let direct_links = via_direct.store().inner.link_count_for(&direct_holder);
         assert_eq!(alias_links, direct_links);
         let instance_filter = ResourceFilter::Instance("Forum", &forum_seven);
-        let alias_has = via_alias
-            .has_role(&admin(), instance_filter)
-            .await
-            .unwrap();
+        let alias_has = via_alias.has_role(&admin(), instance_filter).await.unwrap();
         let direct_has = via_direct
             .has_role(&admin(), instance_filter)
             .await
@@ -551,10 +548,7 @@ mod user {
             via_alias.store().inner.assertion_len(),
             via_direct.store().inner.assertion_len()
         );
-        let alias_gone = via_alias
-            .has_role(&admin(), instance_filter)
-            .await
-            .unwrap();
+        let alias_gone = via_alias.has_role(&admin(), instance_filter).await.unwrap();
         let direct_gone = via_direct
             .has_role(&admin(), instance_filter)
             .await

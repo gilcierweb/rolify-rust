@@ -663,14 +663,8 @@ mod tests {
         assert!(!DefaultUser::config().strict());
         assert!(StrictUserClass::config().strict());
         assert_eq!(CustomerClass::config().role_table(), "privileges");
-        assert_eq!(
-            CustomerClass::config().join_table(),
-            "customers_privileges"
-        );
-        assert_eq!(
-            AdminModeratorClass::config().role_table(),
-            "admin_rights"
-        );
+        assert_eq!(CustomerClass::config().join_table(), "customers_privileges");
+        assert_eq!(AdminModeratorClass::config().role_table(), "admin_rights");
         assert_eq!(
             AdminModeratorClass::config().join_table(),
             "moderators_rights"
