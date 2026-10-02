@@ -10,6 +10,7 @@ mod user {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use rolify_core::catalog::RoleCatalogQuery;
     use rolify_core::config::RolifyConfig;
     use rolify_core::error::RolifyError;
     use rolify_core::kernel::RemovalTarget;
@@ -124,6 +125,14 @@ mod user {
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
             self.inner.roles_of(conn, holder)
+        }
+
+        fn roles_matching(
+            &self,
+            conn: &mut Self::Conn,
+            query: &RoleCatalogQuery<'_>,
+        ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
+            self.inner.roles_matching(conn, query)
         }
     }
 

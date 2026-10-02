@@ -31,6 +31,7 @@
 #[cfg(not(feature = "is_sync"))]
 use core::future::Future;
 
+use crate::catalog::RoleCatalogQuery;
 use crate::error::RolifyError;
 use crate::kernel::RemovalTarget;
 use crate::query::RoleQuery;
@@ -192,6 +193,29 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
         &self,
         conn: &mut Self::Conn,
         holder: &ResourceId,
+    ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
+
+    /// Gem `find_roles` catalog branch (`resource_adapter.rb:6-11`) - the
+    /// ONE catalog read per adapter (D-15). Filter semantics, documented
+    /// once here and mirrored by every adapter:
+    ///
+    /// * `types` - `resource_type IN types` (empty slice matches nothing).
+    ///   Global rows (`resource_type: None`) NEVER match: the gem's join
+    ///   constrains the type column, so resource-side reads structurally
+    ///   exclude globals (`resource_adapter.rb:8` asymmetry).
+    /// * `name` - byte-exact match when `Some`, no name constraint when
+    ///   `None` (the gem's `role_name != :any` branch).
+    /// * `scope` - `ClassAndInstance` accepts class and instance rows
+    ///   within `types`; `ClassOnly` accepts only `resource_id IS NULL`
+    ///   rows; `InstanceOnly` accepts only rows whose `resource_id` equals
+    ///   the payload id within `types`.
+    /// * `holder` - when `Some`, only rows LINKED to that holder (the
+    ///   join); mirrors the `user.roles` branch at `resource_adapter.rb:7`.
+    ///   When `None`, linkage is ignored (the `role_class` branch).
+    fn roles_matching(
+        &self,
+        conn: &mut Self::Conn,
+        query: &RoleCatalogQuery<'_>,
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
 }
 

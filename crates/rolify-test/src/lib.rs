@@ -30,6 +30,7 @@ use core::future::Future;
 
 use maybe_async::maybe_async;
 use rolify_core::RolifyError;
+use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
 use rolify_core::kernel::{self, RemovalTarget};
 use rolify_core::query::RoleQuery;
 use rolify_core::resource::ResourceRef;
@@ -314,6 +315,57 @@ impl RoleStore for InMemoryStore {
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
         let rows = self.holder_rows(holder);
         async move { Ok(rows) }
+    }
+
+    /// The D-15 catalog read over the role rows plus the join table, with
+    /// the filter semantics documented on the SPI member.
+    fn roles_matching(
+        &self,
+        _conn: &mut Self::Conn,
+        query: &RoleCatalogQuery<'_>,
+    ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
+        let found = self
+            .rows
+            .iter()
+            .filter(|row| {
+                let type_hit = row
+                    .resource_type
+                    .as_deref()
+                    .is_some_and(|row_type| query.types.contains(&row_type));
+                if !type_hit {
+                    return false;
+                }
+                if let Some(wanted) = query.name {
+                    if row.name != *wanted {
+                        return false;
+                    }
+                }
+                match &query.scope {
+                    CatalogScope::ClassAndInstance => {}
+                    CatalogScope::ClassOnly => {
+                        if row.resource_id.is_some() {
+                            return false;
+                        }
+                    }
+                    CatalogScope::InstanceOnly { resource_id } => match (&row.resource_id, resource_id) {
+                        (Some(row_id), Some(wanted)) if row_id == *wanted => {}
+                        _ => return false,
+                    },
+                }
+                if let Some(holder) = query.holder {
+                    let linked = self
+                        .links
+                        .iter()
+                        .any(|(owner, linked_row)| owner == holder && linked_row == *row);
+                    if !linked {
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+        async move { Ok(found) }
     }
 }
 
