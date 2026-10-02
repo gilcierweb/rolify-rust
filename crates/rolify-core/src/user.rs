@@ -144,6 +144,11 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// the only add-side alias kept (the gem's other alias families are
     /// out of scope).
     ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of `add_role` (including callback vetoes
+    /// converted into the store error).
+    ///
     /// # Example
     ///
     /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
@@ -241,6 +246,11 @@ pub trait RolifyUser: Send + Sync + 'static {
 
     /// `revoke` - thin alias of [`RolifyUser::remove_role`] (`role.rb:85`),
     /// the only remove-side alias kept.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of `remove_role` (including callback
+    /// vetoes converted into the store error).
     fn revoke(
         &mut self,
         name: &RoleName,
@@ -333,6 +343,10 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// `has_role`'s gate, both expressible here): `ResourceFilter::Global`
     /// matches exactly-global rows, `ResourceFilter::Any` matches by name
     /// alone.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of `where_strict`.
     fn has_strict_role(
         &mut self,
         name: &RoleName,

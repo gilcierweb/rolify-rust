@@ -8,10 +8,13 @@ license = "MIT"
 [dependencies]
 maybe-async.workspace = true
 rolify-core = { path = "../rolify-core" }
+rstest = { workspace = true, optional = true }
+faker-rust = { version = "0.1", optional = true }
 
 [features]
 default = []
 is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
+suite = ["dep:rstest", "dep:faker-rust"]
 
 [dev-dependencies]
 pretty_assertions.workspace = true

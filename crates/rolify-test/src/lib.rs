@@ -11,6 +11,17 @@
 //! `InMemoryStore` is local to this crate - the same pattern every backend
 //! adapter crate follows (Pitfall 4: never impl core traits for foreign
 //! types).
+//!
+//! ## The `suite` feature (TEST-01, D-11)
+//!
+//! The ported parity suite lives behind the non-default `suite` feature
+//! (`dep:rstest` + `dep:faker-rust`): adapters enable it through
+//! `dev-dependency rolify-test = { features = ["suite"] }` and bind their
+//! backend with one `parity_suite!` line. `faker-rust` is an optional NORMAL
+//! dependency (not a dev-dependency) because dev-dependencies do not
+//! propagate: the fixture seeding code must compile inside the adapters'
+//! own test binaries (manifests carry no comments, so the rationale lives
+//! here).
 
 // `Future` is named in the impl signatures in async mode only; maybe-async
 // strips the `impl Future` return type in `is_sync` mode.
@@ -26,6 +37,11 @@ use rolify_core::role::{ResourceId, RoleName, RoleRecord};
 use rolify_core::store::{
     RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
 };
+
+#[cfg(feature = "suite")]
+pub mod backend;
+#[cfg(feature = "suite")]
+pub mod fixtures;
 
 /// In-memory [`RoleStore`] + [`ResourceStore`] - the workspace's reference
 /// implementation and validation target.
@@ -76,6 +92,15 @@ impl InMemoryStore {
     #[must_use]
     pub fn rows(&self) -> &[RoleRecord] {
         &self.rows
+    }
+
+    /// Empty the role rows and links, keeping the resource registry intact
+    /// (resources are schema-shaped fixtures, not role state) - the port of
+    /// the suite preamble `role_class.destroy_all` plus `roles = []`
+    /// (`shared_contexts.rb:14-15`).
+    pub fn clear(&mut self) {
+        self.rows.clear();
+        self.links.clear();
     }
 
     /// Number of role rows (assertion helper for tests).

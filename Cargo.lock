@@ -644,9 +644,11 @@ version = "0.1.0"
 name = "rolify-test"
 version = "0.1.0"
 dependencies = [
+ "faker-rust",
  "maybe-async",
  "pretty_assertions",
  "rolify-core",
+ "rstest",
  "tokio",
 ]
 
