@@ -150,29 +150,28 @@ impl<C: UserClass> TestBackend for InMemoryBackend<C> {
     type Error = RolifyError;
 
     fn build() -> impl Future<Output = Result<Self, Self::Error>> + Send {
-        async move {
-            let resources = FixtureResources::new();
-            let mut store = InMemoryStore::new();
-            for which in [
-                FixtureResource::ForumFirst,
-                FixtureResource::ForumLast,
-                FixtureResource::GroupFirst,
-                FixtureResource::GroupLast,
-                FixtureResource::TeamFirst,
-                FixtureResource::TeamLast,
-                FixtureResource::Organization,
-                FixtureResource::Company,
-            ] {
-                store.register_resource(resources.key(which));
-            }
-            let engine = Rolify::new(store, (), C::config());
-            let subject = FixtureUser::new("admin", ResourceId::from(1_i64), engine);
-            Ok(Self {
-                subject,
-                fixture_holders: fixture_holders(),
-                resources,
-            })
+        let resources = FixtureResources::new();
+        let mut store = InMemoryStore::new();
+        for which in [
+            FixtureResource::ForumFirst,
+            FixtureResource::ForumLast,
+            FixtureResource::GroupFirst,
+            FixtureResource::GroupLast,
+            FixtureResource::TeamFirst,
+            FixtureResource::TeamLast,
+            FixtureResource::Organization,
+            FixtureResource::Company,
+        ] {
+            store.register_resource(resources.key(which));
         }
+        let engine = Rolify::new(store, (), C::config());
+        let subject = FixtureUser::new("admin", ResourceId::from(1_i64), engine);
+        let backend = Self {
+            subject,
+            fixture_holders: fixture_holders(),
+            resources,
+        };
+        async move { Ok(backend) }
     }
 
     /// # Panics

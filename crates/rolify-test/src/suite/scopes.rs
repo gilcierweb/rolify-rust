@@ -151,7 +151,7 @@ pub async fn instance_scoped_returns_and_filters<B: TestBackend>() -> Result<(),
 }
 
 /// Signature-level zero-I/O pin (SC-5): ONE snapshot answers every narrow
-/// and every cached predicate — multiple queries, one construction, no
+/// and every cached predicate: multiple queries, one construction, no
 /// store handle anywhere in the narrow/predicate signatures.
 ///
 /// # Errors
