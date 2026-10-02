@@ -1,11 +1,22 @@
 //! Test-facing storage SPI: [`TestBackend`] plus the reference
 //! [`InMemoryBackend`], with the shared-context appliers the suite cases
 //! consume.
+//!
+//! Amendment note (wave 2, plan 02-05): `FixtureUser` owns the [`Rolify`]
+//! engine (store + conn + config, D-06) instead of the three fields
+//! separately, so the D-05 class statics can receive the same engine the
+//! subject runs on. `TestBackend` has ten members (`engine` is the tenth).
+//! Public fixture behavior used by the earlier suite modules (`subject`,
+//! `grant_to`, `add_role`, `rolify_config`, `reset_roles`,
+//! `create_role_row`, `role_row_count`) is unchanged.
+//!
+//! [`Rolify`]: rolify_core::manager::Rolify
 
 #[cfg(not(feature = "is_sync"))]
 use core::future::Future;
 
 use rolify_core::error::RolifyError;
+use rolify_core::manager::Rolify;
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
 use rolify_core::store::{ResourceKey, RoleStore, Sealed};
@@ -115,6 +126,11 @@ where
     ///
     /// Propagates backend count failures.
     fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send;
+
+    /// The D-06 engine handle owned by the subject: store plus connection
+    /// plus the single configuration. The seam the D-05 class statics
+    /// consume (`Resource::find_roles(&mut backend.engine(), ...)`).
+    fn engine(&mut self) -> &mut Rolify<Self::Store>;
 }
 
 /// The reference [`TestBackend`]: [`InMemoryStore`] plus the D-13 fixture
@@ -149,7 +165,8 @@ impl<C: UserClass> TestBackend for InMemoryBackend<C> {
             ] {
                 store.register_resource(resources.key(which));
             }
-            let subject = FixtureUser::new("admin", ResourceId::from(1_i64), store, ());
+            let engine = Rolify::new(store, (), C::config());
+            let subject = FixtureUser::new("admin", ResourceId::from(1_i64), engine);
             Ok(Self {
                 subject,
                 fixture_holders: fixture_holders(),
@@ -216,6 +233,10 @@ impl<C: UserClass> TestBackend for InMemoryBackend<C> {
     fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send {
         let count = self.subject.store().rows().len();
         async move { Ok(count) }
+    }
+
+    fn engine(&mut self) -> &mut Rolify<Self::Store> {
+        self.subject.engine()
     }
 }
 

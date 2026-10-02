@@ -9,6 +9,7 @@
 use std::marker::PhantomData;
 
 use rolify_core::config::RolifyConfig;
+use rolify_core::manager::Rolify;
 use rolify_core::resource::Resource;
 use rolify_core::role::{ResourceId, RoleRecord};
 use rolify_core::store::{ResourceKey, RoleStore};
@@ -115,33 +116,27 @@ impl UserClass for AdminModeratorClass {
     }
 }
 
-/// A fixture holder: one login plus identity over a shared store, shaped
-/// like the Phase-1 `Player` (`store`, `conn`, `config`).
+/// A fixture holder: one login plus identity over the shared engine,
+/// shaped like the Phase-1 `Player` (`store`, `conn`, `config` now live
+/// inside the owned [`Rolify`] engine handle, D-06: the same store the
+/// D-05 class statics receive through `TestBackend::engine`).
 pub struct FixtureUser<C: UserClass, S: RoleStore> {
     login: String,
     id: ResourceId,
-    store: S,
-    conn: S::Conn,
-    config: RolifyConfig,
+    engine: Rolify<S>,
     class_marker: PhantomData<C>,
 }
 
 impl<C: UserClass, S: RoleStore> FixtureUser<C, S> {
-    /// Seat a holder identity over a store; the configuration is seeded
-    /// from `C::config()`.
+    /// Seat a holder identity over an engine; the engine carries the store,
+    /// the connection, and the `C::config()` configuration (applied by the
+    /// caller before `Rolify::new`).
     #[must_use]
-    pub fn new(
-        login: impl Into<String>,
-        id: impl Into<ResourceId>,
-        store: S,
-        conn: S::Conn,
-    ) -> Self {
+    pub fn new(login: impl Into<String>, id: impl Into<ResourceId>, engine: Rolify<S>) -> Self {
         Self {
             login: login.into(),
             id: id.into(),
-            store,
-            conn,
-            config: C::config(),
+            engine,
             class_marker: PhantomData,
         }
     }
@@ -152,10 +147,15 @@ impl<C: UserClass, S: RoleStore> FixtureUser<C, S> {
         &self.login
     }
 
-    /// Re-seat the handle on another fixture holder identity; store, conn,
-    /// and config stay shared. Ports the suite's subject switching
-    /// (`shared_contexts.rb:2/27/58`, where each context re-binds the
-    /// subject to another holder).
+    /// The owned engine handle (the D-05 seam: class statics split it).
+    pub(crate) fn engine(&mut self) -> &mut Rolify<S> {
+        &mut self.engine
+    }
+
+    /// Re-seat the handle on another fixture holder identity; the engine
+    /// (store, conn, config) stays shared. Ports the suite's subject
+    /// switching (`shared_contexts.rb:2/27/58`, where each context re-binds
+    /// the subject to another holder).
     pub fn seat_as(&mut self, login: impl Into<String>, id: ResourceId) {
         self.login = login.into();
         self.id = id;
@@ -170,15 +170,17 @@ where
     // The `S::Conn: Sync` bound exists so this struct satisfies the
     // `Send + Sync` supertraits of `RolifyUser`: provided-method futures
     // hold `&mut Conn` across `.await` points, and every targeted backend
-    // connection type is `Sync`.
+    // connection type is `Sync`. Store and config access delegate through
+    // the owned engine (D-06/D-07: one config source of truth; the `Arc`
+    // hooks keep sharing cheap, so no clone is needed for the borrow).
     type Store = S;
 
     fn store(&mut self) -> &mut Self::Store {
-        &mut self.store
+        self.engine.store_with_conn().0
     }
 
     fn rolify_config(&self) -> &RolifyConfig {
-        &self.config
+        self.engine.config()
     }
 
     fn rolify_id(&self) -> ResourceId {
@@ -190,7 +192,7 @@ where
     }
 
     fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn) {
-        (&mut self.store, &mut self.conn)
+        self.engine.store_with_conn()
     }
 }
 
