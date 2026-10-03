@@ -14,6 +14,7 @@ mod user {
     use rolify_core::config::RolifyConfig;
     use rolify_core::error::RolifyError;
     use rolify_core::kernel::RemovalTarget;
+    use rolify_core::manager::Rolify;
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
@@ -44,9 +45,8 @@ mod user {
             )
         }
 
-        /// 02-07 probe counters: `holders_where` and `all_holders` calls.
-        /// Consumed by the finder composition pins below.
-        #[allow(dead_code)]
+        /// 02-07 probe counters: `holders_where` and `all_holders`
+        /// calls. Consumed by the finder composition pins below.
         fn finder_counters(&self) -> (usize, usize) {
             (
                 self.holders_where_calls.load(Ordering::Relaxed),
@@ -207,7 +207,7 @@ mod user {
         }
     }
 
-    use rolify_core::user::RolifyUser as _;
+    use rolify_core::user::RolifyUser;
 
     type Probe = Arc<Mutex<Vec<&'static str>>>;
 
@@ -740,5 +740,182 @@ mod user {
             name: &admin(),
             filter: ResourceFilter::Global,
         }));
+    }
+
+    /// D-04 set compare for the 02-07 finder pins: order-free id-list
+    /// equality (sort plus dedup on both sides). The suite's
+    /// `assert_id_set` lives behind the `suite` feature in
+    /// rolify-test; this integration target carries its own copy
+    /// because the crate cannot depend on that feature.
+    fn assert_id_set(actual: &[ResourceId], expected: &[ResourceId]) {
+        let mut sorted_actual = actual.to_vec();
+        sorted_actual.sort_unstable();
+        sorted_actual.dedup();
+        let mut sorted_expected = expected.to_vec();
+        sorted_expected.sort_unstable();
+        sorted_expected.dedup();
+        assert_eq!(sorted_actual, sorted_expected);
+    }
+
+    /// Registers the holder universe the finder statics read: ids 1-4
+    /// under the `TestUser` type (the D-03 `holder_types` filter must
+    /// see exactly this class).
+    fn register_fixture_holders(store: &mut CountingStore) {
+        for holder_number in 1..=4_i64 {
+            store
+                .inner
+                .register_holder(TestUser::rolify_type(), holder_number);
+        }
+    }
+
+    /// finders.rb:13 pin: `without_role` = `all_holders` minus the
+    /// `with_role` matches over the FULL holder universe - holders 3
+    /// and 4 never receive a link (D-02's never-rolificated row) and
+    /// still appear in the complement.
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn without_role_is_all_holders_minus_with_role() {
+        let mut store = CountingStore::default();
+        register_fixture_holders(&mut store);
+        store
+            .inner
+            .grant(&ResourceId::from(1_i64), RoleRecord::global("admin"));
+        store.inner.grant(
+            &ResourceId::from(2_i64),
+            RoleRecord::for_class("manager", "Forum"),
+        );
+
+        let mut engine = Rolify::new(store, (), RolifyConfig::default());
+        let admin = RoleName::from("admin");
+        let admin_global = RoleQuery::with_role(&admin);
+        let matched = <TestUser as RolifyUser>::with_role(&mut engine, &admin_global)
+            .await
+            .unwrap();
+        assert_id_set(&matched, &[ResourceId::from(1_i64)]);
+        let complement = <TestUser as RolifyUser>::without_role(&mut engine, &admin_global)
+            .await
+            .unwrap();
+        assert_id_set(
+            &complement,
+            &[
+                ResourceId::from(2_i64),
+                ResourceId::from(3_i64),
+                ResourceId::from(4_i64),
+            ],
+        );
+    }
+
+    /// finders.rb:16-32 pins: `with_all_roles` intersects with early
+    /// exit (an impossible first query stops the walk: ONE
+    /// `holders_where` call, the staff query never reaches the store)
+    /// and `with_any_roles` unions with dedup (holder 1 matches both
+    /// queries and appears once).
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn with_all_roles_intersect_early_exit_and_any_union_dedup() {
+        let mut store = CountingStore::default();
+        register_fixture_holders(&mut store);
+        // holder 1: both roles (the any-union dedup pin); holder 2:
+        // staff only; holders 3/4: role-free.
+        store
+            .inner
+            .grant(&ResourceId::from(1_i64), RoleRecord::global("admin"));
+        store
+            .inner
+            .grant(&ResourceId::from(1_i64), RoleRecord::global("staff"));
+        store
+            .inner
+            .grant(&ResourceId::from(2_i64), RoleRecord::global("staff"));
+
+        let mut engine = Rolify::new(store, (), RolifyConfig::default());
+        let admin = RoleName::from("admin");
+        let staff = RoleName::from("staff");
+        let ghost = RoleName::from("ghost");
+        let both = [RoleQuery::with_role(&admin), RoleQuery::with_role(&staff)];
+
+        let all_found = <TestUser as RolifyUser>::with_all_roles(&mut engine, &both)
+            .await
+            .unwrap();
+        assert_id_set(&all_found, &[ResourceId::from(1_i64)]);
+
+        let any_found = <TestUser as RolifyUser>::with_any_roles(&mut engine, &both)
+            .await
+            .unwrap();
+        assert_id_set(
+            &any_found,
+            &[ResourceId::from(1_i64), ResourceId::from(2_i64)],
+        );
+
+        // finders.rb:21 early exit: the impossible first query empties
+        // the running intersection, so the second query never runs.
+        let (before_holders_where, _) = {
+            let (probe_store, _conn) = engine.store_with_conn();
+            probe_store.finder_counters()
+        };
+        let ghost_first = [RoleQuery::with_role(&ghost), RoleQuery::with_role(&staff)];
+        let short_circuit = <TestUser as RolifyUser>::with_all_roles(&mut engine, &ghost_first)
+            .await
+            .unwrap();
+        assert!(short_circuit.is_empty());
+        let (after_holders_where, _) = {
+            let (probe_store, _conn) = engine.store_with_conn();
+            probe_store.finder_counters()
+        };
+        assert_eq!(
+            after_holders_where - before_holders_where,
+            1,
+            "the impossible first query is the only store round"
+        );
+    }
+
+    /// finders.rb:37-48 pin: an EMPTY query list yields `[]` with
+    /// ZERO store calls - both list statics return before any SPI
+    /// traffic, and the store state is untouched.
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn empty_query_list_makes_no_store_call() {
+        let mut store = CountingStore::default();
+        register_fixture_holders(&mut store);
+        store
+            .inner
+            .grant(&ResourceId::from(1_i64), RoleRecord::global("admin"));
+
+        let mut engine = Rolify::new(store, (), RolifyConfig::default());
+        let (where_before, where_strict_before, where_any_before) = {
+            let (probe_store, _conn) = engine.store_with_conn();
+            probe_store.counters()
+        };
+        let (holders_where_before, all_holders_before) = {
+            let (probe_store, _conn) = engine.store_with_conn();
+            probe_store.finder_counters()
+        };
+
+        let all_empty = <TestUser as RolifyUser>::with_all_roles(&mut engine, &[])
+            .await
+            .unwrap();
+        let any_empty = <TestUser as RolifyUser>::with_any_roles(&mut engine, &[])
+            .await
+            .unwrap();
+        assert!(all_empty.is_empty());
+        assert!(any_empty.is_empty());
+
+        let (where_after, where_strict_after, where_any_after) = {
+            let (probe_store, _conn) = engine.store_with_conn();
+            probe_store.counters()
+        };
+        let (holders_where_after, all_holders_after) = {
+            let (probe_store, _conn) = engine.store_with_conn();
+            probe_store.finder_counters()
+        };
+        assert_eq!(where_after, where_before);
+        assert_eq!(where_strict_after, where_strict_before);
+        assert_eq!(where_any_after, where_any_before);
+        assert_eq!(
+            holders_where_after, holders_where_before,
+            "with_all_roles on an empty list never reaches holders_where"
+        );
+        assert_eq!(
+            all_holders_after, all_holders_before,
+            "neither list static reads the holder universe"
+        );
+        let (probe_store, _conn) = engine.store_with_conn();
+        assert_eq!(probe_store.inner.assertion_len(), 1, "no state change");
     }
 }

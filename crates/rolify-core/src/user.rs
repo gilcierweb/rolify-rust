@@ -6,6 +6,11 @@
 //! table names) flows through the required [`RolifyUser::rolify_config`]
 //! seam. The `method_missing` shortcuts of `role.rb` are intentionally NOT
 //! ported; call `has_role(&RoleName::from("admin"), filter)`.
+//!
+//! The user-class finders of `rolify/lib/rolify/finders.rb` ride the same
+//! trait as provided assoc fns taking `&mut Rolify<Self::Store>`
+//! (`with_role` / `without_role` / `with_all_roles` / `with_any_roles`,
+//! D-05/D-06); their shared composition lives in [`crate::finders`].
 
 // `Future` is named in the provided signatures in async mode only;
 // maybe-async strips the `impl Future` return type in `is_sync` mode.
@@ -13,7 +18,9 @@
 use core::future::Future;
 
 use crate::config::RolifyConfig;
+use crate::finders::{finder_strictness, intersect_ids, subtract_ids, union_dedup_into};
 use crate::kernel::{RemovalTarget, strict_engages};
+use crate::manager::Rolify;
 use crate::query::{ResourceFilter, RoleQuery};
 use crate::resource::ResourceRef;
 use crate::role::{ResourceId, RoleName, RoleRecord, RoleSet};
@@ -451,6 +458,132 @@ pub trait RolifyUser: Send + Sync + 'static {
             let (store, conn) = self.store_with_conn();
             let roles = store.roles_of(&mut *conn, &holder).await?;
             Ok(roles.into_iter().map(|record| record.name).collect())
+        }
+    }
+
+    /// Class-level `with_role(name, resource = nil)` (finders.rb:3-10):
+    /// the ids of THIS class's holders whose linked rows match `query`.
+    ///
+    /// Strictness mirrors finders.rb:4 - resolved from the ENGINE
+    /// configuration (D-07) through the kernel gate, so a
+    /// `ResourceFilter::Any` query never engages strict, even under a
+    /// strict configuration (FIND-01). The store sees exactly ONE
+    /// call per query (D-01); results are unordered ids (D-04) the
+    /// consumer filters its own table with (D-19, see
+    /// [`crate::finders`]).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of [`RoleStore::holders_where`].
+    fn with_role(
+        rolify: &mut Rolify<Self::Store>,
+        query: &RoleQuery<'_>,
+    ) -> impl Future<Output = Result<Vec<ResourceId>, <Self::Store as RoleStore>::Error>> + Send
+    {
+        async move {
+            let strict = finder_strictness(rolify.config(), query);
+            let holder_types = [Self::rolify_type()];
+            let (store, conn) = rolify.store_with_conn();
+            store
+                .holders_where(&mut *conn, &holder_types, query, strict)
+                .await
+        }
+    }
+
+    /// Class-level `without_role(name, resource = nil)`
+    /// (finders.rb:12-14): `all_holders` minus the `with_role` matches -
+    /// the port of `adapter.all_except(self, self.with_role(...))`.
+    /// The universe is the FULL holder table (D-02: never-rolificated
+    /// holders included), so the complement keeps them.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of `with_role` /
+    /// [`RoleStore::all_holders`].
+    fn without_role(
+        rolify: &mut Rolify<Self::Store>,
+        query: &RoleQuery<'_>,
+    ) -> impl Future<Output = Result<Vec<ResourceId>, <Self::Store as RoleStore>::Error>> + Send
+    {
+        async move {
+            let holder_types = [Self::rolify_type()];
+            let matched = Self::with_role(rolify, query).await?;
+            let (store, conn) = rolify.store_with_conn();
+            let universe = store.all_holders(&mut *conn, &holder_types).await?;
+            Ok(subtract_ids(&universe, &matched))
+        }
+    }
+
+    /// Class-level `with_all_roles(*args)` (finders.rb:16-24): the
+    /// holders matching EVERY query - intersect per-query results with
+    /// early exit once the running intersection empties (finders.rb:21
+    /// `return [] if users.empty?`, so later queries never reach the
+    /// store).
+    ///
+    /// An EMPTY slice returns `[]` WITHOUT touching the store
+    /// (finders.rb:37-48 over zero args leaves `users = []`; pinned by
+    /// the `user_flow` probe).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of `with_role` per query.
+    fn with_all_roles(
+        rolify: &mut Rolify<Self::Store>,
+        queries: &[RoleQuery<'_>],
+    ) -> impl Future<Output = Result<Vec<ResourceId>, <Self::Store as RoleStore>::Error>> + Send
+    {
+        async move {
+            if queries.is_empty() {
+                return Ok(Vec::new());
+            }
+            // finders.rb:19 `users = users_to_add if users.empty?` - the
+            // first result seeds the intersection (it must not intersect
+            // the still-empty accumulator).
+            let mut running: Vec<ResourceId> = Vec::new();
+            let mut seeded = false;
+            for query in queries {
+                let matched = Self::with_role(rolify, query).await?;
+                if seeded {
+                    running = intersect_ids(&running, &matched);
+                } else {
+                    running = matched;
+                    seeded = true;
+                }
+                if running.is_empty() {
+                    return Ok(Vec::new());
+                }
+            }
+            Ok(running)
+        }
+    }
+
+    /// Class-level `with_any_roles(*args)` (finders.rb:26-32): the
+    /// holders matching ANY query - union of the per-query results with
+    /// dedup (finders.rb:31 `users.uniq`; a holder matching several
+    /// queries appears once).
+    ///
+    /// An EMPTY slice returns `[]` WITHOUT touching the store
+    /// (finders.rb:37-48 over zero args; pinned by the `user_flow`
+    /// probe).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of `with_role` per query.
+    fn with_any_roles(
+        rolify: &mut Rolify<Self::Store>,
+        queries: &[RoleQuery<'_>],
+    ) -> impl Future<Output = Result<Vec<ResourceId>, <Self::Store as RoleStore>::Error>> + Send
+    {
+        async move {
+            if queries.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut union: Vec<ResourceId> = Vec::new();
+            for query in queries {
+                let matched = Self::with_role(rolify, query).await?;
+                union_dedup_into(&mut union, &matched);
+            }
+            Ok(union)
         }
     }
 }
