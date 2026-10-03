@@ -533,6 +533,297 @@ pub fn test_config() -> rolify_core::config::RolifyConfig {
     rolify_core::config::RolifyConfig::builder().build().unwrap()
 }
 
+/// ============================================================
+/// DieselBackend — TestBackend implementation for rolify-diesel
+/// ============================================================
+///
+/// Implements the full D-13 fixture matrix with query counting
+/// instrumentation for TEST-05. One backend per holder/role-table pair.
+#[cfg(feature = "suite")]
+pub mod diesel_backend {
+    use std::sync::{Arc, OnceLock};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use diesel::Connection;
+    use diesel::connection::{Connection as _, InstrumentationEvent};
+    use diesel_migrations::MigrationHarness;
+    use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
+    use rolify_core::config::RolifyConfig;
+    use rolify_core::manager::Rolify;
+    use rolify_core::query::{ResourceFilter, RoleQuery};
+    use rolify_core::resource::{ResourceKey, ResourceRef};
+    use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+    use rolify_core::store::{RemovalOutcome, ResourceStore, RoleStore, Sealed, ScopeColumn, RemovalTarget};
+    use rolify_core::user::RolifyUser;
+
+    use rolify_test::fixtures::{DefaultUser, FixtureResource, FixtureUser as TestFixtureUser};
+
+    use crate::support::*;
+    use rolify_diesel::{DieselStore, MIGRATIONS};
+
+    // Re-export types needed by the trait
+    type Store = DieselStore;
+    type Error = rolify_diesel::Error;
+
+    // Per-engine connection type.
+    #[cfg(feature = "postgres")]
+    type Conn = diesel::pg::PgConnection;
+    #[cfg(feature = "mysql")]
+    type Conn = diesel::mysql::MysqlConnection;
+    #[cfg(feature = "sqlite")]
+    type Conn = diesel::sqlite::SqliteConnection;
+
+    /// Holder fixture definition.
+    #[derive(Clone, Debug)]
+    struct HolderFixture {
+        login: &'static str,
+        table: &'static str,
+        holder_type: &'static str,
+        name: &'static str,
+    }
+
+    /// Resource fixture definition.
+    #[derive(Clone, Debug)]
+    struct ResourceFixture {
+        which: FixtureResource,
+        table: &'static str,
+        type_name: &'static str,
+        pk_column: &'static str,
+    }
+
+    /// The Diesel backend for the parity suite.
+    pub struct DieselBackend {
+        // The main subject user (default: "admin")
+        subject: TestFixtureUser<DefaultUser, DieselStore>,
+        // All registered holders
+        holders: Vec<(&'static str, ResourceId)>,
+        // All registered resources
+        resources: Vec<(FixtureResource, ResourceKey)>,
+        // Query counter (shared across connection wrappers)
+        query_counter: Arc<AtomicUsize>,
+        // Connection factory
+        conn_factory: Box<dyn Fn() -> Conn + Send + Sync + 'static>,
+    }
+
+    impl Sealed for DieselBackend {}
+
+    impl DieselBackend {
+        /// Build a fresh backend with the full D-13 fixture set.
+        pub async fn build() -> Result<Self, Error> {
+            let config = test_config();
+            let mut conn = Self::make_conn();
+
+            // Run migrations
+            conn.run_pending_migrations(MIGRATIONS).expect("migrations apply");
+
+            // Setup fixture tables
+            setup_fixtures(&mut conn);
+
+            // Install query counter
+            let query_counter = install_query_counter(&mut conn);
+
+            // Create store
+            let mut store = DieselStore::new(&config);
+
+            // Register holder tables for all pairs (D-07: one store per pair)
+            // Default pair: users / roles / users_roles
+            store = store.for_holder_table("users");
+            // Register additional pairs for the suite
+            store = store.for_holder_table("customers");
+            store = store.for_holder_table("admins"); // for Admin::Moderator
+
+            // Register resource tables for class-scope expansion (resources_find)
+            store = store.register_resource_table("Forum", "forums", "id");
+            store = store.register_resource_table("Group", "groups", "id");
+            store = store.register_resource_table("Team", "teams", "team_code");
+            store = store.register_resource_table("Organization", "organizations", "id");
+            store = store.register_resource_table("Company", "organizations", "id"); // STI
+            store = store.register_resource_table("Right", "rights", "id");
+
+            // Create the engine
+            let engine = Rolify::new(store, (), config);
+
+            // Register holders (the full fixture `users` table + other pairs)
+            let holder_fixtures = [
+                HolderFixture { login: "admin", table: "users", holder_type: "User", name: "Admin User" },
+                HolderFixture { login: "moderator", table: "users", holder_type: "User", name: "Moderator User" },
+                HolderFixture { login: "god", table: "users", holder_type: "User", name: "God User" },
+                HolderFixture { login: "zombie", table: "users", holder_type: "User", name: "Zombie User" },
+                // Customer pair
+                HolderFixture { login: "customer1", table: "customers", holder_type: "Customer", name: "Customer One" },
+                HolderFixture { login: "customer2", table: "customers", holder_type: "Customer", name: "Customer Two" },
+                // Admin::Moderator pair
+                HolderFixture { login: "admin_mod", table: "admins", holder_type: "Admin::Moderator", name: "Admin Moderator" },
+            ];
+
+            let mut holders = Vec::new();
+            for fixture in &holder_fixtures {
+                let id = insert_holder(&mut conn, fixture.table, fixture.holder_type, fixture.name);
+                holders.push((fixture.login, id.clone()));
+                // Register with store for all_holders / holders_where
+                engine.store().register_holder(fixture.holder_type, id);
+            }
+
+            // Register resources (the full fixture resources)
+            let resource_fixtures = [
+                ResourceFixture { which: FixtureResource::ForumFirst, table: "forums", type_name: "Forum", pk_column: "id" },
+                ResourceFixture { which: FixtureResource::ForumSecond, table: "forums", type_name: "Forum", pk_column: "id" },
+                ResourceFixture { which: FixtureResource::ForumLast, table: "forums", type_name: "Forum", pk_column: "id" },
+                ResourceFixture { which: FixtureResource::GroupFirst, table: "groups", type_name: "Group", pk_column: "id" },
+                ResourceFixture { which: FixtureResource::GroupLast, table: "groups", type_name: "Group", pk_column: "id" },
+                ResourceFixture { which: FixtureResource::TeamFirst, table: "teams", type_name: "Team", pk_column: "team_code" },
+                ResourceFixture { which: FixtureResource::TeamLast, table: "teams", type_name: "Team", pk_column: "team_code" },
+                ResourceFixture { which: FixtureResource::Organization, table: "organizations", type_name: "Organization", pk_column: "id" },
+                ResourceFixture { which: FixtureResource::Company, table: "organizations", type_name: "Company", pk_column: "id" },
+            ];
+
+            let mut resources = Vec::new();
+            for fixture in &resource_fixtures {
+                let key = insert_resource(&mut conn, fixture.table, fixture.which.to_string().replace("_", " ").replace("first", "First").replace("second", "Second").replace("last", "Last"));
+                // The key's resource_type is the singular (forum, group, team, organization)
+                // We need to map it to the type_name for the registry
+                let mapped_key = ResourceKey::new(fixture.type_name, key.resource_id);
+                resources.push((fixture.which, mapped_key));
+                engine.store().register_resource(mapped_key);
+            }
+
+            // Create subject (default to "admin" user)
+            let admin_id = holders.iter().find(|(login, _)| *login == "admin").map(|(_, id)| id.clone()).expect("admin holder");
+            let subject = TestFixtureUser::new("admin", admin_id, engine);
+
+            // Build connection factory for new connections
+            let conn_factory = Box::new(Self::make_conn);
+
+            Ok(Self {
+                subject,
+                holders,
+                resources,
+                query_counter,
+                conn_factory,
+            })
+        }
+
+        #[cfg(feature = "postgres")]
+        fn make_conn() -> Conn {
+            let container = pg_container();
+            let host_port = container.get_host_port_ipv4(5432).expect("Postgres port");
+            let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+            PgConnection::establish(&url).expect("Postgres connection")
+        }
+
+        #[cfg(feature = "mysql")]
+        fn make_conn() -> Conn {
+            let container = mysql_container();
+            let host_port = container.get_host_port_ipv4(3306).expect("MySQL port");
+            let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+            MysqlConnection::establish(&url).expect("MySQL connection")
+        }
+
+        #[cfg(feature = "sqlite")]
+        fn make_conn() -> Conn {
+            let mut conn = SqliteConnection::establish(":memory:").expect("SQLite in-memory");
+            diesel::sql_query("PRAGMA foreign_keys = ON").execute(&mut conn).expect("PRAGMA foreign_keys = ON");
+            conn
+        }
+
+        fn make_counted_conn(&self) -> (Conn, Arc<AtomicUsize>) {
+            let mut conn = (self.conn_factory)();
+            let counter = Arc::new(AtomicUsize::new(0));
+            let counting = Arc::clone(&counter);
+            conn.set_instrumentation(Box::new(move |event: InstrumentationEvent<'_>| {
+                if matches!(event, InstrumentationEvent::StartQuery { .. }) {
+                    counting.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+            (conn, counter)
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holders.iter().find(|(l, _)| *l == login).map(|(_, id)| id.clone())
+        }
+
+        fn resource_key(&self, which: FixtureResource) -> Option<ResourceKey> {
+            self.resources.iter().find(|(w, _)| *w == which).map(|(_, k)| k.clone())
+        }
+    }
+
+    // ============================================================
+    // TestBackend implementation
+    // ============================================================
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl rolify_test::backend::TestBackend for DieselBackend {
+        type Store = DieselStore;
+        type Subject = TestFixtureUser<DefaultUser, DieselStore>;
+        type Error = Error;
+
+        async fn build() -> Result<Self, Self::Error>
+        where
+            Self: Sized,
+        {
+            Self::build().await
+        }
+
+        fn subject(&mut self, login: &str) -> &mut Self::Subject {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            self.subject.seat_as(login, holder);
+            &mut self.subject
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holder_id(login)
+        }
+
+        fn resource(&self, which: FixtureResource) -> ResourceKey {
+            self.resource_key(which).expect("unknown fixture resource")
+        }
+
+        async fn reset_roles(&mut self) -> Result<(), Self::Error> {
+            // Need a fresh connection for reset
+            let mut conn = (self.conn_factory)();
+            reset_roles(&mut conn);
+            // Also clear the in-memory store
+            rolify_core::user::RolifyUser::store(&mut self.subject).clear();
+            Ok(())
+        }
+
+        async fn create_role_row(&mut self, record: RoleRecord) -> Result<(), Self::Error> {
+            let (mut conn, _counter) = self.make_counted_conn();
+            rolify_core::user::RolifyUser::store(&mut self.subject).insert(record);
+            Ok(())
+        }
+
+        async fn grant_to(&mut self, login: &str, name: &RoleName, scope: ResourceRef<'_>) -> Result<(), Self::Error> {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            let (mut conn, _counter) = self.make_counted_conn();
+            let role = rolify_core::user::RolifyUser::store(&mut self.subject)
+                .find_or_create_by(&mut conn, name, scope)
+                .await?;
+            rolify_core::user::RolifyUser::store(&mut self.subject)
+                .add(&mut conn, &holder, &role)
+                .await?;
+            Ok(())
+        }
+
+        async fn role_row_count(&mut self) -> Result<usize, Self::Error> {
+            let count = rolify_core::user::RolifyUser::store(&mut self.subject).rows().len();
+            Ok(count)
+        }
+
+        fn engine(&mut self) -> &mut Rolify<Self::Store> {
+            self.subject.engine()
+        }
+
+        fn reset_query_count(&mut self) {
+            self.query_counter.store(0, Ordering::Relaxed);
+        }
+
+        fn query_count(&self) -> Option<usize> {
+            Some(self.query_counter.load(Ordering::Relaxed))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

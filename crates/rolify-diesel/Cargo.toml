@@ -27,6 +27,7 @@ sync = ["rolify-core/is_sync"]
 postgres = ["sync", "diesel/postgres", "dep:diesel_migrations"]
 mysql = ["sync", "diesel/mysql", "dep:diesel_migrations"]
 sqlite = ["sync", "diesel/sqlite", "dep:diesel_migrations", "dep:libsqlite3-sys"]
+suite = ["rolify-test/suite"]
 
 [lints]
 workspace = true
