@@ -100,7 +100,12 @@ pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
 pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
     diesel_migrations::embed_migrations!("migrations/sqlite");
 
+pub mod dialect;
 pub mod error;
+pub mod rows;
 pub mod sentinel;
+pub mod sql;
+pub mod store;
 
 pub use error::Error;
+pub use store::DieselStore;
