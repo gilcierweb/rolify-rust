@@ -1,8 +1,9 @@
 //! Write-side scope enum [`ResourceRef`] and the [`Resource`] consumer
 //! trait: the gem-traced discriminators plus the resource-side READ
 //! statics (`find_roles`, `applied_roles`, `roles_of_instance`,
-//! `applied_roles_of_instance`, RSRC-03..06), all provided and dual-mode
-//! (D-10, `maybe_async` AFIT).
+//! `applied_roles_of_instance`, RSRC-03..06) and the resource-class
+//! QUERY statics (`with_role`, `without_role`, RSRC-01/02/06), all
+//! provided and dual-mode (D-10, `maybe_async` AFIT).
 
 // `Future` is named in the provided signatures in async mode only;
 // maybe-async strips the `impl Future` return type in `is_sync` mode.
@@ -12,7 +13,7 @@ use core::future::Future;
 use crate::catalog::RoleCatalogQuery;
 use crate::manager::Rolify;
 use crate::role::{ResourceId, RoleName, RoleRecord};
-use crate::store::RoleStore;
+use crate::store::{ResourceKey, ResourceStore, RoleStore};
 
 /// Scope for role **writes** (`add_role` / `remove_role`).
 ///
@@ -255,6 +256,122 @@ pub trait Resource {
                 }
             }
             Ok(combined)
+        }
+    }
+
+    /// Class-level `with_role(role_name, user = nil)` (resource.rb:12-21):
+    /// the keys of the `Self` family's resources holding any of `names`
+    /// at class scope or at their own instance scope, optionally
+    /// narrowed to the resources `user` holds those names on.
+    ///
+    /// Name collapse (D-19): the gem's String-vs-Array branches are one
+    /// typed slice here - a one-element slice IS `find_as(name)`, the
+    /// multi-element slice IS `find_multiple_as([names])`. The alias
+    /// families (`with_roles`, `find_as`, `find_multiple_as`) are
+    /// REQUIREMENTS out-of-scope.
+    ///
+    /// Join asymmetry (resource_adapter.rb:21-23): the family join
+    /// constrains `resource_type IN (klasses)`, which can never match a
+    /// global row's NULL type. A CLASS-scoped row therefore covers
+    /// every instance key of the family while a GLOBAL row is
+    /// structurally excluded and never surfaces resources - the
+    /// asymmetry pinned by the suite's `global_exclusion_asymmetry_labeled`
+    /// case.
+    ///
+    /// `user = Some(holder)` composes the gem's `in` filter
+    /// (resource_adapter.rb:27-30) through [`ResourceStore::in_list`]:
+    /// among the candidate keys, only those where the holder's row for
+    /// `names` is bound to that key or carries a NULL `resource_id`
+    /// (class or global scope of the holder). `None` is the gem's
+    /// `user = nil` - no filter.
+    ///
+    /// Result shape (D-19 entry): the gem returns the resource
+    /// relation and comments out `.map(&:id)` at resource.rb:19; the
+    /// port returns [`ResourceKey`]s and the consumer materializes the
+    /// rows. Results are unordered sets (D-04) - a resource appears at
+    /// most once no matter how many names matched. Like every
+    /// resource-side static, `strict` is NEVER consulted (finders.rb:4
+    /// gates user finders only; resource.rb carries no strict read).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of [`ResourceStore::resources_find`]
+    /// (one call per name) and of [`ResourceStore::in_list`] (when
+    /// `user` is `Some`).
+    fn with_role<S>(
+        rolify: &mut Rolify<S>,
+        names: &[RoleName],
+        user: Option<&ResourceId>,
+    ) -> impl Future<Output = Result<Vec<ResourceKey>, <S as RoleStore>::Error>> + Send
+    where
+        Self: Sized,
+        S: RoleStore
+            + ResourceStore<Conn = <S as RoleStore>::Conn, Error = <S as RoleStore>::Error>,
+    {
+        async move {
+            let family = Self::descendant_types();
+            let mut candidates: Vec<ResourceKey> = Vec::new();
+            {
+                let (store, conn) = rolify.store_with_conn();
+                for name in names {
+                    let found = store.resources_find(&mut *conn, &family, name).await?;
+                    for key in found {
+                        if !candidates.contains(&key) {
+                            candidates.push(key);
+                        }
+                    }
+                }
+            }
+            match user {
+                None => Ok(candidates),
+                Some(holder) => {
+                    let (store, conn) = rolify.store_with_conn();
+                    store.in_list(&mut *conn, &candidates, holder, names).await
+                }
+            }
+        }
+    }
+
+    /// Class-level `without_role(role_name, user = nil)`
+    /// (resource.rb:27-29): `universe` minus the [`Resource::with_role`]
+    /// matches - the port of `all_except(self, find_as(role_name,
+    /// user))` (resource_adapter.rb:40-43), subtracted in pure code.
+    ///
+    /// D-18: the universe is CALLER-SUPPLIED. The store owns no
+    /// consumer domain tables, so where `ActiveRecord` hands the gem
+    /// `Forum.all` for free (resource_adapter.rb:40-43), the port takes
+    /// the candidate list and subtracts - the recorded D-19 divergence
+    /// (the caller passes its own full table; an empty universe yields
+    /// an empty result with no store work beyond the `with_role` call
+    /// the subtraction consumes).
+    ///
+    /// Same name-slice collapse (D-19), alias exclusion
+    /// (`without_roles`, `except_as`, `except_multiple_as`
+    /// out-of-scope), set results (D-04), and never-strict posture as
+    /// [`Resource::with_role`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of the composed [`Resource::with_role`]
+    /// call.
+    fn without_role<S>(
+        rolify: &mut Rolify<S>,
+        names: &[RoleName],
+        user: Option<&ResourceId>,
+        universe: &[ResourceKey],
+    ) -> impl Future<Output = Result<Vec<ResourceKey>, <S as RoleStore>::Error>> + Send
+    where
+        Self: Sized,
+        S: RoleStore
+            + ResourceStore<Conn = <S as RoleStore>::Conn, Error = <S as RoleStore>::Error>,
+    {
+        async move {
+            let excluded = Self::with_role(rolify, names, user).await?;
+            Ok(universe
+                .iter()
+                .filter(|key| !excluded.contains(key))
+                .cloned()
+                .collect())
         }
     }
 }
