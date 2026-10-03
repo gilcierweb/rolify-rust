@@ -144,6 +144,8 @@ where
 /// - `forums` (id BIGSERIAL/INTEGER PK, name VARCHAR)
 /// - `groups` (id BIGSERIAL/INTEGER PK, name VARCHAR)
 /// - `teams` (team_code VARCHAR PK — string PK per schema.rb)
+/// - `organizations` (id BIGSERIAL/INTEGER PK, type VARCHAR — STI family)
+/// - `rights` (id BIGSERIAL/INTEGER PK, name VARCHAR — for custom pairs)
 /// - `moderators_rights` (custom join: moderator_id + right_id)
 /// - `admin_rights` (custom join: admin_id + right_id)
 ///
@@ -177,6 +179,14 @@ where
             );
             CREATE TABLE IF NOT EXISTS teams (
                 team_code VARCHAR(191) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS organizations (
+                id BIGSERIAL PRIMARY KEY,
+                type VARCHAR(191) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rights (
+                id BIGSERIAL PRIMARY KEY,
                 name VARCHAR(255) NOT NULL
             );
             CREATE TABLE IF NOT EXISTS moderators_rights (
@@ -220,6 +230,14 @@ where
                 team_code VARCHAR(191) PRIMARY KEY,
                 name VARCHAR(255) NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+            CREATE TABLE IF NOT EXISTS organizations (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                type VARCHAR(191) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+            CREATE TABLE IF NOT EXISTS rights (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
             CREATE TABLE IF NOT EXISTS moderators_rights (
                 moderator_id VARCHAR(191) NOT NULL,
                 right_id BIGINT NOT NULL,
@@ -259,6 +277,14 @@ where
             );
             CREATE TABLE IF NOT EXISTS teams (
                 team_code TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS organizations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS moderators_rights (
@@ -500,6 +526,11 @@ pub fn mysql_pool() -> Pool<ConnectionManager<MysqlConnection>> {
     let url = format!("mysql://root@127.0.0.1:{host_port}/test");
     let manager = ConnectionManager::<MysqlConnection>::new(url);
     Pool::builder().max_size(4).build(manager).expect("mysql pool")
+}
+
+/// Default test configuration for the default role/join table pair.
+pub fn test_config() -> rolify_core::config::RolifyConfig {
+    rolify_core::config::RolifyConfig::builder().build().unwrap()
 }
 
 #[cfg(test)]

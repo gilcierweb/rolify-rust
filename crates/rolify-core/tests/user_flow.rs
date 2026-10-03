@@ -166,6 +166,15 @@ mod user {
             self.all_holders_calls.fetch_add(1, Ordering::Relaxed);
             self.inner.all_holders(conn, holder_types)
         }
+
+        fn remove_roles_for_scope(
+            &mut self,
+            conn: &mut Self::Conn,
+            resource_type: &str,
+            resource_id: &ResourceId,
+        ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            self.inner.remove_roles_for_scope(conn, resource_type, resource_id)
+        }
     }
 
     /// Test user over the counting store.
