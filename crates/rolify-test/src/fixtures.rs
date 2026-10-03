@@ -312,6 +312,10 @@ impl Resource for Company {
 pub enum FixtureResource {
     /// `Forum.first` (id "1").
     ForumFirst,
+    /// The middle forum (id "2", `data.rb:18`) - referenced by the
+    /// `Forum.all` query rows of `resource_spec.rb` (l.45, l.95,
+    /// l.177, l.223) as part of the full three-forum fixture.
+    ForumSecond,
     /// `Forum.last` (id "3").
     ForumLast,
     /// `Group.first` (id "1").
@@ -393,6 +397,9 @@ impl FixtureResources {
         match which {
             FixtureResource::ForumFirst => {
                 ResourceKey::new(Forum::type_name(), self.forums[0].id.clone())
+            }
+            FixtureResource::ForumSecond => {
+                ResourceKey::new(Forum::type_name(), self.forums[1].id.clone())
             }
             FixtureResource::ForumLast => {
                 ResourceKey::new(Forum::type_name(), self.forums[2].id.clone())
@@ -624,6 +631,7 @@ mod tests {
 
     #[rstest]
     #[case::forum_first(FixtureResource::ForumFirst, "Forum", "1")]
+    #[case::forum_second(FixtureResource::ForumSecond, "Forum", "2")]
     #[case::forum_last(FixtureResource::ForumLast, "Forum", "3")]
     #[case::group_first(FixtureResource::GroupFirst, "Group", "1")]
     #[case::group_last(FixtureResource::GroupLast, "Group", "2")]

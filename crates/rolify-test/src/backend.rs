@@ -16,6 +16,11 @@
 //! the storage SPI - the same build-time seam the fixture resources
 //! already use.
 //!
+//! Wave-3 amendment (plan 02-08): `build` also registers the middle
+//! forum (`ForumSecond`, `data.rb:18`) so the `resources_find`-driven
+//! resource queries see the FULL three-forum `Forum.all` the gem's
+//! `resource_spec.rb` rows (l.45, l.95, l.177, l.223) join against.
+//!
 //! [`Rolify`]: rolify_core::manager::Rolify
 
 #[cfg(not(feature = "is_sync"))]
@@ -167,6 +172,7 @@ impl<C: UserClass> TestBackend for InMemoryBackend<C> {
         }
         for which in [
             FixtureResource::ForumFirst,
+            FixtureResource::ForumSecond,
             FixtureResource::ForumLast,
             FixtureResource::GroupFirst,
             FixtureResource::GroupLast,
