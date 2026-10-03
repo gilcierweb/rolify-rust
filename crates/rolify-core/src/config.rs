@@ -269,11 +269,55 @@ impl RolifyConfigBuilder {
         self
     }
 
+    /// Validate an identifier against the D-08 allow-list.
+    ///
+    /// The identifier must:
+    /// - Start with an ASCII letter (A-Z, a-z) or underscore (_)
+    /// - Contain only ASCII alphanumeric characters or underscores
+    /// - Not be empty
+    ///
+    /// This is the single validation rule for all runtime table names
+    /// (role_table, join_table, and later holder_table). The same rule
+    /// is enforced at `RolifyConfig::build()` and must be reapplied by
+    /// adapter constructors for names that bypass config.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RolifyError::InvalidConfig` with a descriptive reason
+    /// if the identifier violates the allow-list.
+    pub fn validate_identifier(name: &str) -> Result<(), RolifyError> {
+        if name.is_empty() {
+            return Err(RolifyError::InvalidConfig {
+                reason: "identifier must not be empty".into(),
+            });
+        }
+        let mut chars = name.chars();
+        let first = chars.next().expect("non-empty string has first char");
+        if !first.is_ascii_alphabetic() && first != '_' {
+            return Err(RolifyError::InvalidConfig {
+                reason: format!(
+                    "identifier '{name}' must start with ASCII letter or underscore"
+                ),
+            });
+        }
+        for ch in chars {
+            if !ch.is_ascii_alphanumeric() && ch != '_' {
+                return Err(RolifyError::InvalidConfig {
+                    reason: format!(
+                        "identifier '{name}' contains invalid character '{ch}'; only ASCII alphanumeric and underscore allowed"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve the configuration.
     ///
     /// # Errors
     ///
-    /// Fails with [`RolifyError::InvalidConfig`] when a table name is empty.
+    /// Fails with [`RolifyError::InvalidConfig`] when a table name is
+    /// empty or violates the D-08 identifier allow-list.
     pub fn build(self) -> Result<RolifyConfig, RolifyError> {
         let role_table = self.role_table.unwrap_or_else(|| "roles".to_owned());
         let join_table = self.join_table.unwrap_or_else(|| "users_roles".to_owned());
@@ -287,6 +331,8 @@ impl RolifyConfigBuilder {
                 reason: "join_table must not be empty".into(),
             });
         }
+        Self::validate_identifier(&role_table)?;
+        Self::validate_identifier(&join_table)?;
         Ok(RolifyConfig {
             strict: self.strict.unwrap_or(false),
             remove_role_if_empty: self.remove_role_if_empty.unwrap_or(true),

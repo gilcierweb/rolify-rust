@@ -85,3 +85,77 @@ fn config_and_builder_are_send_sync() {
     assert_send_sync::<BeforeHook>();
     assert_send_sync::<AfterHook>();
 }
+
+#[test]
+fn validate_identifier_accepts_valid_names() {
+    assert!(RolifyConfigBuilder::validate_identifier("roles").is_ok());
+    assert!(RolifyConfigBuilder::validate_identifier("users_roles").is_ok());
+    assert!(RolifyConfigBuilder::validate_identifier("Admin_Moderator_rights").is_ok());
+    assert!(RolifyConfigBuilder::validate_identifier("_private").is_ok());
+    assert!(RolifyConfigBuilder::validate_identifier("table123").is_ok());
+}
+
+#[test]
+fn validate_identifier_rejects_invalid_names() {
+    // starts with digit
+    assert!(matches!(
+        RolifyConfigBuilder::validate_identifier("1roles"),
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("1roles")
+    ));
+    // contains space
+    assert!(matches!(
+        RolifyConfigBuilder::validate_identifier("ta ble"),
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("ta ble")
+    ));
+    // contains hyphen
+    assert!(matches!(
+        RolifyConfigBuilder::validate_identifier("bad-name"),
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("bad-name")
+    ));
+    // contains quote
+    assert!(matches!(
+        RolifyConfigBuilder::validate_identifier("tab\"le"),
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("tab\"le")
+    ));
+    // empty string
+    assert!(matches!(
+        RolifyConfigBuilder::validate_identifier(""),
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("empty")
+    ));
+}
+
+#[test]
+fn build_rejects_invalid_role_table() {
+    let outcome = RolifyConfig::builder().role_table("bad-name").build();
+    assert!(matches!(
+        outcome,
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("bad-name")
+    ));
+}
+
+#[test]
+fn build_rejects_invalid_join_table() {
+    let outcome = RolifyConfig::builder().join_table("bad-name").build();
+    assert!(matches!(
+        outcome,
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("bad-name")
+    ));
+}
+
+#[test]
+fn build_accepts_valid_custom_names() {
+    let config = RolifyConfig::builder()
+        .role_table("privileges")
+        .join_table("customers_privileges")
+        .build()
+        .unwrap();
+    assert_eq!(config.role_table(), "privileges");
+    assert_eq!(config.join_table(), "customers_privileges");
+}
+
+#[test]
+fn validate_identifier_is_public_api() {
+    // This test ensures validate_identifier is reachable from the crate's public API
+    use crate::config::RolifyConfigBuilder;
+    assert!(RolifyConfigBuilder::validate_identifier("valid_name").is_ok());
+}

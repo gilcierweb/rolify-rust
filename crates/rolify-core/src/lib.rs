@@ -69,3 +69,4 @@ pub mod user;
 
 pub use error::RolifyError;
 pub use kernel::RemovalTarget;
+pub use role::SCOPE_SENTINEL;
