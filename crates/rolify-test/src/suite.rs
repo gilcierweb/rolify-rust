@@ -17,6 +17,32 @@
 //! and `tokio` available as dev-dependencies, plus an `is_sync` feature
 //! with the workspace's forwarding semantics. The binding file to copy lives
 //! at `rolify-test/tests/parity_suite.rs`.
+//!
+//! ## Closure map (02-09)
+//!
+//! All twelve modules below are filled by plans 02-01..02-08 - no stub
+//! expansion point remains, and the phase gate proves the full suite
+//! green against `InMemoryStore` in both modes:
+//!
+//! | Module | Filled by |
+//! |---|---|
+//! | `add_role` | 02-01 |
+//! | `has_role` | 02-02 |
+//! | `remove_role`, `callbacks` | 02-03 |
+//! | `scopes`, `roles` | 02-04 |
+//! | `resource_reads` | 02-05 |
+//! | `has_all_roles`, `has_any_role`, `only_has_role` | 02-06 |
+//! | `finders` | 02-07 |
+//! | `resource_queries` | 02-08 |
+//!
+//! ## Dynamic exclusion
+//!
+//! `shared_examples_for_dynamic` (147 lines, the `method_missing`
+//! dynamic-shortcut anti-feature) intentionally has NO module here:
+//! dynamic shortcuts are REQUIREMENTS out-of-scope (Rust has no
+//! `method_missing`; `has_role` is the documented idiom). The
+//! twelve-module list is closed, and `suite_is_fully_expanded` in
+//! `tests/parity_suite.rs` re-asserts the exclusion at test time.
 
 pub mod add_role;
 pub mod callbacks;
