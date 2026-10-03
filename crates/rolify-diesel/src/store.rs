@@ -85,7 +85,7 @@ impl DieselStore {
         RolifyConfigBuilder::validate_identifier(type_name).expect("type name must pass validation");
 
         self.resource_tables
-            .push((type_name.to_owned(), quote_identifier(table_name), pk_column.to_owned()));
+            .push((type_name.to_string(), quote_identifier(table_name), pk_column.to_owned()));
         self
     }
 
@@ -112,8 +112,8 @@ impl DieselStore {
     fn scope_to_triple(&self, name: &RoleName, scope: ResourceRef<'_>) -> (String, String, String) {
         let (rt, rid) = match scope {
             ResourceRef::Global => (SCOPE_SENTINEL.to_owned(), SCOPE_SENTINEL.to_owned()),
-            ResourceRef::Class(type_name) => (type_name.to_owned(), SCOPE_SENTINEL.to_owned()),
-            ResourceRef::Instance(type_name, id) => (type_name.to_owned(), id.as_str().to_owned()),
+            ResourceRef::Class(type_name) => (type_name.to_string(), SCOPE_SENTINEL.to_owned()),
+            ResourceRef::Instance(type_name, id) => (type_name.to_string(), id.as_str().to_owned()),
         };
         (name.as_str().to_owned(), rt, rid)
     }
@@ -211,8 +211,49 @@ mod pg_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            let name = query.name.as_str();
+            let rows: Vec<RoleRow> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>(resource_id.as_str())
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Any => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+            };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -230,8 +271,43 @@ mod pg_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            let name = query.name.as_str();
+            let rows: Vec<RoleRow> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>(resource_id.as_str())
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Any => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+            };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -252,8 +328,63 @@ mod pg_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            // Collect all bind values in order, then match on query count for typed binds
+            let mut all_values: Vec<String> = Vec::new();
+            all_values.push(holder.as_str().to_owned());
+            for query in queries {
+                let name = query.name.as_str();
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            }
+            let q = diesel::sql_query(sql);
+            let rows: Vec<RoleRow> = match all_values.len() {
+                0 => unreachable!(),
+                1 => q.bind::<Text, _>(&all_values[0]).load(conn).map_err(Error::Diesel)?,
+                2 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).load(conn).map_err(Error::Diesel)?,
+                3 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).load(conn).map_err(Error::Diesel)?,
+                4 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).load(conn).map_err(Error::Diesel)?,
+                5 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).load(conn).map_err(Error::Diesel)?,
+                6 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).load(conn).map_err(Error::Diesel)?,
+                7 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).load(conn).map_err(Error::Diesel)?,
+                8 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).load(conn).map_err(Error::Diesel)?,
+                9 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).load(conn).map_err(Error::Diesel)?,
+                10 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).load(conn).map_err(Error::Diesel)?,
+                11 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).load(conn).map_err(Error::Diesel)?,
+                12 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).load(conn).map_err(Error::Diesel)?,
+                13 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).load(conn).map_err(Error::Diesel)?,
+                14 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).load(conn).map_err(Error::Diesel)?,
+                15 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).load(conn).map_err(Error::Diesel)?,
+                16 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).load(conn).map_err(Error::Diesel)?,
+                17 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).load(conn).map_err(Error::Diesel)?,
+                18 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).load(conn).map_err(Error::Diesel)?,
+                19 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).load(conn).map_err(Error::Diesel)?,
+                20 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).bind::<Text, _>(&all_values[19]).load(conn).map_err(Error::Diesel)?,
+                _ => panic!("where_any: too many bind values (max 20)"),
+            };
             async move {
                 let mut seen = Vec::new();
                 for row in rows {
@@ -841,8 +972,49 @@ mod mysql_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            let name = query.name.as_str();
+            let rows: Vec<RoleRow> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>(resource_id.as_str())
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Any => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+            };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -860,8 +1032,43 @@ mod mysql_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            let name = query.name.as_str();
+            let rows: Vec<RoleRow> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>(resource_id.as_str())
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Any => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+            };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -882,8 +1089,63 @@ mod mysql_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            // Collect all bind values in order, then match on query count for typed binds
+            let mut all_values: Vec<String> = Vec::new();
+            all_values.push(holder.as_str().to_owned());
+            for query in queries {
+                let name = query.name.as_str();
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            }
+            let q = diesel::sql_query(sql);
+            let rows: Vec<RoleRow> = match all_values.len() {
+                0 => unreachable!(),
+                1 => q.bind::<Text, _>(&all_values[0]).load(conn).map_err(Error::Diesel)?,
+                2 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).load(conn).map_err(Error::Diesel)?,
+                3 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).load(conn).map_err(Error::Diesel)?,
+                4 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).load(conn).map_err(Error::Diesel)?,
+                5 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).load(conn).map_err(Error::Diesel)?,
+                6 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).load(conn).map_err(Error::Diesel)?,
+                7 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).load(conn).map_err(Error::Diesel)?,
+                8 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).load(conn).map_err(Error::Diesel)?,
+                9 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).load(conn).map_err(Error::Diesel)?,
+                10 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).load(conn).map_err(Error::Diesel)?,
+                11 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).load(conn).map_err(Error::Diesel)?,
+                12 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).load(conn).map_err(Error::Diesel)?,
+                13 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).load(conn).map_err(Error::Diesel)?,
+                14 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).load(conn).map_err(Error::Diesel)?,
+                15 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).load(conn).map_err(Error::Diesel)?,
+                16 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).load(conn).map_err(Error::Diesel)?,
+                17 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).load(conn).map_err(Error::Diesel)?,
+                18 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).load(conn).map_err(Error::Diesel)?,
+                19 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).load(conn).map_err(Error::Diesel)?,
+                20 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).bind::<Text, _>(&all_values[19]).load(conn).map_err(Error::Diesel)?,
+                _ => panic!("where_any: too many bind values (max 20)"),
+            };
             async move {
                 let mut seen = Vec::new();
                 for row in rows {
@@ -1468,8 +1730,49 @@ mod sqlite_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            let name = query.name.as_str();
+            let rows: Vec<RoleRow> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>(resource_id.as_str())
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Any => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+            };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -1487,8 +1790,43 @@ mod sqlite_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            let name = query.name.as_str();
+            let rows: Vec<RoleRow> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>("")
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>("")
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .bind::<Text, _>(type_name)
+                        .bind::<Text, _>(resource_id.as_str())
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+                rolify_core::query::ResourceFilter::Any => {
+                    diesel::sql_query(sql)
+                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(name)
+                        .load(conn)
+                        .map_err(Error::Diesel)?
+                }
+            };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -1509,8 +1847,63 @@ mod sqlite_impl {
                 2,
             );
             let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
+            // Collect all bind values in order, then match on query count for typed binds
+            let mut all_values: Vec<String> = Vec::new();
+            all_values.push(holder.as_str().to_owned());
+            for query in queries {
+                let name = query.name.as_str();
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push("".to_owned());
+                        all_values.push(type_name.to_string());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            }
+            let q = diesel::sql_query(sql);
+            let rows: Vec<RoleRow> = match all_values.len() {
+                0 => unreachable!(),
+                1 => q.bind::<Text, _>(&all_values[0]).load(conn).map_err(Error::Diesel)?,
+                2 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).load(conn).map_err(Error::Diesel)?,
+                3 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).load(conn).map_err(Error::Diesel)?,
+                4 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).load(conn).map_err(Error::Diesel)?,
+                5 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).load(conn).map_err(Error::Diesel)?,
+                6 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).load(conn).map_err(Error::Diesel)?,
+                7 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).load(conn).map_err(Error::Diesel)?,
+                8 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).load(conn).map_err(Error::Diesel)?,
+                9 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).load(conn).map_err(Error::Diesel)?,
+                10 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).load(conn).map_err(Error::Diesel)?,
+                11 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).load(conn).map_err(Error::Diesel)?,
+                12 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).load(conn).map_err(Error::Diesel)?,
+                13 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).load(conn).map_err(Error::Diesel)?,
+                14 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).load(conn).map_err(Error::Diesel)?,
+                15 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).load(conn).map_err(Error::Diesel)?,
+                16 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).load(conn).map_err(Error::Diesel)?,
+                17 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).load(conn).map_err(Error::Diesel)?,
+                18 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).load(conn).map_err(Error::Diesel)?,
+                19 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).load(conn).map_err(Error::Diesel)?,
+                20 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).bind::<Text, _>(&all_values[19]).load(conn).map_err(Error::Diesel)?,
+                _ => panic!("where_any: too many bind values (max 20)"),
+            };
             async move {
                 let mut seen = Vec::new();
                 for row in rows {

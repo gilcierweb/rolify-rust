@@ -49,8 +49,7 @@ pub fn build_ladder_where(
     // Short-circuit for Any: name-only (gem: build_query:107)
     if matches!(query.filter, ResourceFilter::Any) {
         let sql = format!(
-            "({role_table}.name = {name_ph})",
-            role_table = role_table,
+            "(role_row.name = {name_ph})",
             name_ph = name_ph
         );
         return (sql, idx);
@@ -63,8 +62,7 @@ pub fn build_ladder_where(
     idx += 2;
 
     let global_disjunct = format!(
-        "({role_table}.name = {name_ph} AND {role_table}.resource_type = {rt_ph} AND {role_table}.resource_id = {rid_ph})",
-        role_table = role_table,
+        "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
         name_ph = name_ph,
         rt_ph = rt_ph,
         rid_ph = rid_ph
@@ -83,8 +81,7 @@ pub fn build_ladder_where(
             idx += 1;
 
             let class_disjunct = format!(
-                "({role_table}.name = {name_ph} AND {role_table}.resource_type = {class_rt_ph} AND {role_table}.resource_id = {class_rid_ph})",
-                role_table = role_table,
+                "(role_row.name = {name_ph} AND role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
                 name_ph = name_ph,
                 class_rt_ph = class_rt_ph,
                 class_rid_ph = class_rid_ph
@@ -100,8 +97,7 @@ pub fn build_ladder_where(
             idx += 1;
 
             let class_disjunct = format!(
-                "({role_table}.name = {name_ph} AND {role_table}.resource_type = {class_rt_ph} AND {role_table}.resource_id = {class_rid_ph})",
-                role_table = role_table,
+                "(role_row.name = {name_ph} AND role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
                 name_ph = name_ph,
                 class_rt_ph = class_rt_ph,
                 class_rid_ph = class_rid_ph
@@ -113,8 +109,7 @@ pub fn build_ladder_where(
             idx += 1;
 
             let inst_disjunct = format!(
-                "({role_table}.name = {name_ph} AND {role_table}.resource_type = {inst_rt_ph} AND {role_table}.resource_id = {inst_rid_ph})",
-                role_table = role_table,
+                "(role_row.name = {name_ph} AND role_row.resource_type = {inst_rt_ph} AND role_row.resource_id = {inst_rid_ph})",
                 name_ph = name_ph,
                 inst_rt_ph = inst_rt_ph,
                 inst_rid_ph = inst_rid_ph
@@ -139,11 +134,13 @@ pub fn build_ladder_where(
 /// - Any: name-only (kernel ratified corner)
 ///
 /// `holder_id_placeholder` is the bind for the join's user_id.
+///
+/// The WHERE clause references the `role_row` alias used in `select_roles_for_holder`.
 #[must_use]
 pub fn build_strict_where(
-    role_table: &str,
-    join_table: &str,
-    holder_id_placeholder: &str,
+    _role_table: &str,
+    _join_table: &str,
+    _holder_id_placeholder: &str,
     query: &RoleQuery<'_>,
     start_index: usize,
 ) -> (String, usize) {
@@ -153,8 +150,7 @@ pub fn build_strict_where(
     // Any short-circuits to name-only (kernel ratified)
     if matches!(query.filter, ResourceFilter::Any) {
         let sql = format!(
-            "({role_table}.name = {name_ph})",
-            role_table = role_table,
+            "(role_row.name = {name_ph})",
             name_ph = name_ph
         );
         return (sql, idx);
@@ -166,29 +162,25 @@ pub fn build_strict_where(
 
     let sql = match &query.filter {
         ResourceFilter::Global => format!(
-            "({role_table}.name = {name_ph} AND {role_table}.resource_type = {rt_ph} AND {role_table}.resource_id = {rid_ph})",
-            role_table = role_table,
+            "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
             name_ph = name_ph,
             rt_ph = rt_ph,
             rid_ph = rid_ph
         ),
         ResourceFilter::Class(_) => format!(
-            "({role_table}.name = {name_ph} AND {role_table}.resource_type = {rt_ph} AND {role_table}.resource_id = {rid_ph})",
-            role_table = role_table,
+            "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
             name_ph = name_ph,
             rt_ph = rt_ph,
             rid_ph = rid_ph
         ),
         ResourceFilter::Instance(_, _) => format!(
-            "({role_table}.name = {name_ph} AND {role_table}.resource_type = {rt_ph} AND {role_table}.resource_id = {rid_ph})",
-            role_table = role_table,
+            "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
             name_ph = name_ph,
             rt_ph = rt_ph,
             rid_ph = rid_ph
         ),
         ResourceFilter::Any => format!(
-            "({role_table}.name = {name_ph})",
-            role_table = role_table,
+            "(role_row.name = {name_ph})",
             name_ph = name_ph
         ),
     };

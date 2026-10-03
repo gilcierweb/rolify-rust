@@ -45,7 +45,7 @@ impl RoleRow {
 /// Single-column row for `SELECT id FROM roles ...` (re-SELECT after INSERT).
 #[derive(Debug, Clone, QueryableByName)]
 #[diesel(table_name = roles)]
-pub(crate) struct IdRow {
+pub struct IdRow {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub id: i64,
 }
@@ -53,7 +53,7 @@ pub(crate) struct IdRow {
 /// Single-column row for `SELECT COUNT(*) ...` queries.
 #[derive(Debug, Clone, QueryableByName)]
 #[diesel(table_name = roles)]
-pub(crate) struct CountRow {
+pub struct CountRow {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub count: i64,
 }
