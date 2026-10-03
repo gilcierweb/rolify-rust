@@ -5,5 +5,27 @@ edition = "2024"
 rust-version = "1.86"
 license = "MIT"
 
+[dependencies]
+rolify-core = { workspace = true }
+diesel = { workspace = true, default-features = false }
+diesel_migrations = { workspace = true, optional = true }
+thiserror = { workspace = true }
+libsqlite3-sys = { version = ">=0.17.2, <0.39.0", features = ["bundled"], optional = true }
+
+[dev-dependencies]
+diesel = { workspace = true, features = ["r2d2"] }
+rolify-test = { workspace = true, features = ["suite"] }
+testcontainers = "=0.27.3"
+testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["postgres", "mysql", "blocking"] }
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[features]
+default = []
+sync = ["rolify-core/is_sync"]
+postgres = ["sync", "diesel/postgres", "dep:diesel_migrations"]
+mysql = ["sync", "diesel/mysql", "dep:diesel_migrations"]
+sqlite = ["sync", "diesel/sqlite", "dep:diesel_migrations", "dep:libsqlite3-sys"]
+
 [lints]
 workspace = true
