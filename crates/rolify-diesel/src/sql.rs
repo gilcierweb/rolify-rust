@@ -406,6 +406,64 @@ pub fn delete_orphan_role(role_table: &str, join_table: &str) -> String {
     )
 }
 
+/// DELETE roles by exact resource scope (resource_type, resource_id).
+///
+/// Implements `RoleStore::remove_roles_for_scope` (OQ1 / SC-3 / D-10).
+/// Deletes exactly the role rows matching the given resource_type and resource_id.
+/// Join rows vanish via FK ON DELETE CASCADE (D-10). Class-scoped rows of the
+/// same type (where resource_id = '') are NOT touched — the WHERE is the exact
+/// scope pair, never a type-only sweep.
+///
+/// Mirrors the gem's `dependent: :destroy` on resource destruction
+/// (`rolify/spec/rolify/resource_spec.rb:507-510`).
+///
+/// Bind order: 1=resource_type, 2=resource_id.
+#[must_use]
+pub fn delete_roles_by_scope(role_table: &str) -> String {
+    format!(
+        "DELETE FROM {role_table} WHERE resource_type = $1 AND resource_id = $2",
+        role_table = role_table
+    )
+}
+
+/// SELECT resource keys for class-scope role expansion in `resources_find`.
+///
+/// For a given resource type with a class-scoped role (resource_id = ''),
+/// expand to all instances by joining with the resource's table.
+///
+/// Mirrors `resource_adapter.rb:13-25`:
+/// ```ruby
+/// resources = relation.joins("INNER JOIN roles ON roles.resource_type IN (...) AND
+///                               (roles.resource_id IS NULL OR roles.resource_id = relation.id)")
+/// ```
+///
+/// Bind order: 1=name.
+/// The resource_type is interpolated as a literal (validated via registry).
+/// The resource_table and pk_column are interpolated (validated identifiers).
+#[must_use]
+pub fn select_resources_find_class_expansion(
+    role_table: &str,
+    resource_table: &str,
+    pk_column: &str,
+    resource_type: &str,
+    name_placeholder: &str,
+) -> String {
+    format!(
+        "SELECT DISTINCT '{}' AS resource_type, res.{} AS resource_id \
+         FROM {} AS role_row \
+         INNER JOIN {} AS res \
+           ON role_row.resource_type = '{}' \
+          AND role_row.resource_id = '' \
+          AND role_row.name = {}",
+        resource_type,
+        pk_column,
+        role_table,
+        resource_table,
+        resource_type,
+        name_placeholder,
+    )
+}
+
 /// SELECT 1 if a role with the exact triple exists (for `exists` SPI).
 ///
 /// Bind order: 1=name, 2=resource_type, 3=resource_id.

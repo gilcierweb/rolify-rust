@@ -449,6 +449,39 @@ impl RoleStore for InMemoryStore {
             .collect();
         async move { Ok(found) }
     }
+
+    /// Resource-scoped role deletion (OQ1 / SC-3 / D-10): delete exactly the
+    /// role rows matching `(resource_type, resource_id)` and return the count.
+    /// Join rows for those roles are also removed (cascade simulation).
+    fn remove_roles_for_scope(
+        &mut self,
+        _conn: &mut Self::Conn,
+        resource_type: &str,
+        resource_id: &ResourceId,
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+        let rt = Some(resource_type.to_owned());
+        let rid = Some(resource_id.clone());
+
+        // Find matching role records
+        let matching: Vec<RoleRecord> = self
+            .rows
+            .iter()
+            .filter(|row| row.resource_type == rt && row.resource_id == rid)
+            .cloned()
+            .collect();
+
+        let count = matching.len();
+
+        // Remove those role rows
+        self.rows.retain(|row| !(row.resource_type == rt && row.resource_id == rid));
+
+        // Remove associated links (cascade)
+        for role in &matching {
+            self.links.retain(|(_, row)| row != role);
+        }
+
+        async move { Ok(count) }
+    }
 }
 
 #[maybe_async(AFIT)]

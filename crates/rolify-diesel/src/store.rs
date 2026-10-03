@@ -8,7 +8,7 @@ use diesel::sql_types::BigInt;
 use diesel::sql_types::Text;
 use maybe_async::maybe_async;
 use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
-use rolify_core::config::RolifyConfig;
+use rolify_core::config::{RolifyConfig, RolifyConfigBuilder};
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::RoleQuery;
 use rolify_core::resource::ResourceRef;
@@ -20,11 +20,14 @@ use crate::error::Error;
 use crate::rows::{HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
 use crate::sentinel::{resource_id_to_storage, to_storage};
 
-/// Diesel sync store — holds only the configured table names.
+/// Diesel sync store — holds the configured table names and a resource registry.
 ///
 /// One store per holder/role-table pair (D-07). Construct via
 /// `DieselStore::new(&RolifyConfig)` (uses config's default table names) or
 /// `DieselStore::with_tables(role_table, join_table)` for custom names.
+/// Then chain `.for_holder_table("users")` to set the holder table (validated).
+/// Register resource types with `.register_resource_table("Forum", "forums", "id")`
+/// for class-scope expansion in `resources_find`.
 ///
 /// The store is NOT generic — the connection type is fixed per backend feature:
 /// - `postgres` feature: `Conn = PgConnection` (also works with r2d2 pool checkouts via `DerefMut`)
@@ -34,6 +37,8 @@ use crate::sentinel::{resource_id_to_storage, to_storage};
 pub struct DieselStore {
     role_table: String,
     join_table: String,
+    holder_table: Option<String>,
+    resource_tables: Vec<(String, String, String)>, // (type_name, table_name, pk_column)
 }
 
 impl DieselStore {
@@ -43,6 +48,8 @@ impl DieselStore {
         Self {
             role_table: quote_identifier(&config.role_table()),
             join_table: quote_identifier(&config.join_table()),
+            holder_table: None,
+            resource_tables: Vec::new(),
         }
     }
 
@@ -52,7 +59,34 @@ impl DieselStore {
         Self {
             role_table: quote_identifier(role_table),
             join_table: quote_identifier(join_table),
+            holder_table: None,
+            resource_tables: Vec::new(),
         }
+    }
+
+    /// Set the holder table (e.g., "users", "customers") for `holders_where` / `all_holders`.
+    /// Validates the identifier via `RolifyConfig`'s allow-list and quotes per engine.
+    #[must_use]
+    pub fn for_holder_table(mut self, holder_table: &str) -> Self {
+        // Validate via config's identifier validation (allow-list ^[A-Za-z_][A-Za-z0-9_]*$)
+        RolifyConfigBuilder::validate_identifier(holder_table).expect("holder table name must pass validation");
+        self.holder_table = Some(quote_identifier(holder_table));
+        self
+    }
+
+    /// Register a resource type for class-scope expansion in `resources_find`.
+    /// `type_name` is the STI type (e.g., "Forum"), `table_name` is the DB table (e.g., "forums"),
+    /// `pk_column` is the primary key column (e.g., "id" or "team_code").
+    #[must_use]
+    pub fn register_resource_table(mut self, type_name: &str, table_name: &str, pk_column: &str) -> Self {
+        // Validate identifiers using the same allow-list as config
+        RolifyConfigBuilder::validate_identifier(table_name).expect("resource table name must pass validation");
+        RolifyConfigBuilder::validate_identifier(pk_column).expect("pk column name must pass validation");
+        RolifyConfigBuilder::validate_identifier(type_name).expect("type name must pass validation");
+
+        self.resource_tables
+            .push((type_name.to_owned(), quote_identifier(table_name), pk_column.to_owned()));
+        self
     }
 
     #[must_use]
@@ -65,6 +99,16 @@ impl DieselStore {
         &self.join_table
     }
 
+    #[must_use]
+    pub fn holder_table(&self) -> Option<&str> {
+        self.holder_table.as_deref()
+    }
+
+    #[must_use]
+    pub fn resource_tables(&self) -> &[(String, String, String)] {
+        &self.resource_tables
+    }
+
     fn scope_to_triple(&self, name: &RoleName, scope: ResourceRef<'_>) -> (String, String, String) {
         let (rt, rid) = match scope {
             ResourceRef::Global => (SCOPE_SENTINEL.to_owned(), SCOPE_SENTINEL.to_owned()),
@@ -72,6 +116,13 @@ impl DieselStore {
             ResourceRef::Instance(type_name, id) => (type_name.to_owned(), id.as_str().to_owned()),
         };
         (name.as_str().to_owned(), rt, rid)
+    }
+
+    /// Build the holder table reference for SQL, defaulting to "users" if not set.
+    fn holder_table_sql(&self) -> String {
+        self.holder_table
+            .clone()
+            .unwrap_or_else(|| quote_identifier("users"))
     }
 }
 
@@ -367,6 +418,28 @@ mod pg_impl {
             }
         }
 
+        fn remove_roles_for_scope(
+            &mut self,
+            conn: &mut Self::Conn,
+            resource_type: &str,
+            resource_id: &ResourceId,
+        ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let rt = resource_type.to_owned();
+            let rid = resource_id.as_str().to_owned();
+            let role_table = self.role_table.clone();
+
+            async move {
+                let sql = crate::sql::delete_roles_by_scope(&role_table);
+                let deleted = diesel::sql_query(sql)
+                    .bind::<Text, _>(rt)
+                    .bind::<Text, _>(rid)
+                    .execute(conn)
+                    .map_err(Error::Diesel)?;
+                Ok(deleted)
+            }
+        }
+
+
         fn exists(
             &self,
             conn: &mut Self::Conn,
@@ -397,7 +470,7 @@ mod pg_impl {
             async move { Ok(found) }
         }
 
-        fn roles_of(
+fn roles_of(
             &self,
             conn: &mut Self::Conn,
             holder: &ResourceId,
@@ -407,7 +480,7 @@ mod pg_impl {
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = $1",
+                 WHERE link.user_id = ?",
                 role_table = self.role_table,
                 join_table = self.join_table,
             );
@@ -445,7 +518,7 @@ mod pg_impl {
                 )
             };
 
-            let holder_table = quote_identifier("users");
+            let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
@@ -483,7 +556,7 @@ mod pg_impl {
                 return async { Ok(Vec::new()) };
             }
 
-            let holder_table = quote_identifier("users");
+            let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
@@ -515,7 +588,7 @@ mod pg_impl {
             }
 
             let has_holder = query.holder.is_some();
-            let holder_table = query.holder.map(|_| quote_identifier("users"));
+            let holder_table = query.holder.map(|_| self.holder_table_sql());
 
             let base_sql = crate::sql::select_roles_matching(&self.role_table, &self.join_table, holder_table.as_deref(), has_holder);
 
@@ -591,6 +664,9 @@ mod pg_impl {
                 return async { Ok(Vec::new()) };
             }
 
+            let mut all_keys: Vec<ResourceKey> = Vec::new();
+
+            // 1. Instance-scoped roles: direct query on roles table
             let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
 
@@ -599,14 +675,14 @@ mod pg_impl {
                  FROM {role_table} \
                  WHERE {type_filter} \
                    AND name = {} \
-                   AND resource_type != ''",
+                   AND resource_id != ''",
                 placeholder(type_placeholders.len() + 1),
                 role_table = self.role_table,
                 type_filter = type_filter,
             );
 
             let q = diesel::sql_query(sql);
-            let rows: Vec<ResourceKeyRow> = match types.len() {
+            let instance_rows: Vec<ResourceKeyRow> = match types.len() {
                 0 => unreachable!(),
                 1 => q.bind::<Text, _>(types[0]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
                 2 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
@@ -614,7 +690,30 @@ mod pg_impl {
                 4 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(types[3]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
                 _ => panic!("resources_find: too many types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
+            for row in instance_rows {
+                all_keys.push(row.to_key());
+            }
+
+            // 2. Class-scoped roles: expand via resource registry
+            for (type_name, resource_table, pk_column) in &self.resource_tables {
+                if types.contains(&type_name.as_str()) {
+                    let name_ph = placeholder(1);
+                    let expansion_sql = crate::sql::select_resources_find_class_expansion(
+                        &self.role_table,
+                        resource_table,
+                        pk_column,
+                        type_name,
+                        &name_ph,
+                    );
+                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
+                    let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
+                    for row in class_rows {
+                        all_keys.push(row.to_key());
+                    }
+                }
+            }
+
+            async move { Ok(all_keys) }
         }
 
         fn in_list(
@@ -949,6 +1048,27 @@ mod mysql_impl {
             }
         }
 
+        fn remove_roles_for_scope(
+            &mut self,
+            conn: &mut Self::Conn,
+            resource_type: &str,
+            resource_id: &ResourceId,
+        ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let rt = resource_type.to_owned();
+            let rid = resource_id.as_str().to_owned();
+            let role_table = self.role_table.clone();
+
+            async move {
+                let sql = crate::sql::delete_roles_by_scope(&role_table);
+                let deleted = diesel::sql_query(sql)
+                    .bind::<Text, _>(rt)
+                    .bind::<Text, _>(rid)
+                    .execute(conn)
+                    .map_err(Error::Diesel)?;
+                Ok(deleted)
+            }
+        }
+
         fn exists(
             &self,
             conn: &mut Self::Conn,
@@ -1027,7 +1147,7 @@ mod mysql_impl {
                 )
             };
 
-            let holder_table = quote_identifier("users");
+            let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
@@ -1065,7 +1185,7 @@ mod mysql_impl {
                 return async { Ok(Vec::new()) };
             }
 
-            let holder_table = quote_identifier("users");
+            let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
@@ -1097,7 +1217,7 @@ mod mysql_impl {
             }
 
             let has_holder = query.holder.is_some();
-            let holder_table = query.holder.map(|_| quote_identifier("users"));
+            let holder_table = query.holder.map(|_| self.holder_table_sql());
 
             let base_sql = crate::sql::select_roles_matching(&self.role_table, &self.join_table, holder_table.as_deref(), has_holder);
 
@@ -1171,6 +1291,9 @@ mod mysql_impl {
                 return async { Ok(Vec::new()) };
             }
 
+            let mut all_keys: Vec<ResourceKey> = Vec::new();
+
+            // 1. Instance-scoped roles: direct query on roles table
             let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
 
@@ -1179,14 +1302,14 @@ mod mysql_impl {
                  FROM {role_table} \
                  WHERE {type_filter} \
                    AND name = ? \
-                   AND resource_type != ''",
+                   AND resource_id != ''",
                 placeholder(type_placeholders.len() + 1),
                 role_table = self.role_table,
                 type_filter = type_filter,
             );
 
             let q = diesel::sql_query(sql);
-            let rows: Vec<ResourceKeyRow> = match types.len() {
+            let instance_rows: Vec<ResourceKeyRow> = match types.len() {
                 0 => unreachable!(),
                 1 => q.bind::<Text, _>(types[0]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
                 2 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
@@ -1194,7 +1317,30 @@ mod mysql_impl {
                 4 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(types[3]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
                 _ => panic!("resources_find: too many types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
+            for row in instance_rows {
+                all_keys.push(row.to_key());
+            }
+
+            // 2. Class-scoped roles: expand via resource registry
+            for (type_name, resource_table, pk_column) in &self.resource_tables {
+                if types.contains(&type_name.as_str()) {
+                    let name_ph = placeholder(1);
+                    let expansion_sql = crate::sql::select_resources_find_class_expansion(
+                        &self.role_table,
+                        resource_table,
+                        pk_column,
+                        type_name,
+                        &name_ph,
+                    );
+                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
+                    let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
+                    for row in class_rows {
+                        all_keys.push(row.to_key());
+                    }
+                }
+            }
+
+            async move { Ok(all_keys) }
         }
 
         fn in_list(
@@ -1529,6 +1675,27 @@ mod sqlite_impl {
             }
         }
 
+        fn remove_roles_for_scope(
+            &mut self,
+            conn: &mut Self::Conn,
+            resource_type: &str,
+            resource_id: &ResourceId,
+        ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let rt = resource_type.to_owned();
+            let rid = resource_id.as_str().to_owned();
+            let role_table = self.role_table.clone();
+
+            async move {
+                let sql = crate::sql::delete_roles_by_scope(&role_table);
+                let deleted = diesel::sql_query(sql)
+                    .bind::<Text, _>(rt)
+                    .bind::<Text, _>(rid)
+                    .execute(conn)
+                    .map_err(Error::Diesel)?;
+                Ok(deleted)
+            }
+        }
+
         fn exists(
             &self,
             conn: &mut Self::Conn,
@@ -1607,7 +1774,7 @@ mod sqlite_impl {
                 )
             };
 
-            let holder_table = quote_identifier("users");
+            let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
@@ -1645,7 +1812,7 @@ mod sqlite_impl {
                 return async { Ok(Vec::new()) };
             }
 
-            let holder_table = quote_identifier("users");
+            let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
@@ -1677,7 +1844,7 @@ mod sqlite_impl {
             }
 
             let has_holder = query.holder.is_some();
-            let holder_table = query.holder.map(|_| quote_identifier("users"));
+            let holder_table = query.holder.map(|_| self.holder_table_sql());
 
             let base_sql = crate::sql::select_roles_matching(&self.role_table, &self.join_table, holder_table.as_deref(), has_holder);
 
@@ -1751,6 +1918,9 @@ mod sqlite_impl {
                 return async { Ok(Vec::new()) };
             }
 
+            let mut all_keys: Vec<ResourceKey> = Vec::new();
+
+            // 1. Instance-scoped roles: direct query on roles table
             let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
 
@@ -1759,14 +1929,14 @@ mod sqlite_impl {
                  FROM {role_table} \
                  WHERE {type_filter} \
                    AND name = ? \
-                   AND resource_type != ''",
+                   AND resource_id != ''",
                 placeholder(type_placeholders.len() + 1),
                 role_table = self.role_table,
                 type_filter = type_filter,
             );
 
             let q = diesel::sql_query(sql);
-            let rows: Vec<ResourceKeyRow> = match types.len() {
+            let instance_rows: Vec<ResourceKeyRow> = match types.len() {
                 0 => unreachable!(),
                 1 => q.bind::<Text, _>(types[0]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
                 2 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
@@ -1774,7 +1944,30 @@ mod sqlite_impl {
                 4 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(types[3]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
                 _ => panic!("resources_find: too many types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
+            for row in instance_rows {
+                all_keys.push(row.to_key());
+            }
+
+            // 2. Class-scoped roles: expand via resource registry
+            for (type_name, resource_table, pk_column) in &self.resource_tables {
+                if types.contains(&type_name.as_str()) {
+                    let name_ph = placeholder(1);
+                    let expansion_sql = crate::sql::select_resources_find_class_expansion(
+                        &self.role_table,
+                        resource_table,
+                        pk_column,
+                        type_name,
+                        &name_ph,
+                    );
+                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
+                    let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
+                    for row in class_rows {
+                        all_keys.push(row.to_key());
+                    }
+                }
+            }
+
+            async move { Ok(all_keys) }
         }
 
         fn in_list(

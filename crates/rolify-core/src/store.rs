@@ -261,6 +261,23 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
         conn: &mut Self::Conn,
         query: &RoleCatalogQuery<'_>,
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
+
+    /// Resource-scoped role deletion (OQ1 / SC-3 / D-10): delete exactly the
+    /// role rows matching `(resource_type, resource_id)` — i.e. instance-bound
+    /// roles for a specific resource — and return the count of deleted rows.
+    /// Join rows vanish via FK `ON DELETE CASCADE` (D-10). Class-scoped rows
+    /// of the same type (where `resource_id = ''`) are NOT touched — the WHERE
+    /// is the exact scope pair, never a type-only sweep (that semantics lives
+    /// in `RemovalTarget::TypeSweep`, a different path).
+    ///
+    /// Mirrors the gem's `dependent: :destroy` behavior on the resource side
+    /// (`rolify/spec/rolify/resource_spec.rb:507-510`: `expect { subject.destroy }.to change { Role.count }.by(-2)`).
+    fn remove_roles_for_scope(
+        &mut self,
+        conn: &mut Self::Conn,
+        resource_type: &str,
+        resource_id: &ResourceId,
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send;
 }
 
 /// Identity of a persisted consumer resource (its type name plus its
