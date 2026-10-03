@@ -30,7 +30,7 @@ use rolify_core::error::RolifyError;
 use rolify_core::manager::Rolify;
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
-use rolify_core::store::{ResourceKey, RoleStore, Sealed};
+use rolify_core::store::{ResourceKey, ResourceStore, RoleStore, Sealed};
 use rolify_core::user::RolifyUser;
 
 use crate::InMemoryStore;
@@ -50,6 +50,10 @@ use crate::fixtures::{
 pub trait TestBackend: Sealed + Send + Sync + 'static
 where
     Self::Error: From<<Self::Store as RoleStore>::Error>,
+    Self::Store: ResourceStore<
+            Conn = <Self::Store as RoleStore>::Conn,
+            Error = <Self::Store as RoleStore>::Error,
+        >,
 {
     /// The role-row store under test.
     type Store: RoleStore;
