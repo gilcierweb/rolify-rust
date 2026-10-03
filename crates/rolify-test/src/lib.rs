@@ -347,10 +347,12 @@ impl RoleStore for InMemoryStore {
                             return false;
                         }
                     }
-                    CatalogScope::InstanceOnly { resource_id } => match (&row.resource_id, resource_id) {
-                        (Some(row_id), Some(wanted)) if row_id == *wanted => {}
-                        _ => return false,
-                    },
+                    CatalogScope::InstanceOnly { resource_id } => {
+                        match (&row.resource_id, resource_id) {
+                            (Some(row_id), Some(wanted)) if row_id == *wanted => {}
+                            _ => return false,
+                        }
+                    }
                 }
                 if let Some(holder) = query.holder {
                     let linked = self

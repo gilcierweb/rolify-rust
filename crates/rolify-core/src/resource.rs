@@ -89,15 +89,15 @@ pub trait Resource {
     /// #     fn type_name() -> &'static str { "Vehicle" }
     /// #     fn resource_id(&self) -> ResourceId { ResourceId::from(self.id) }
     /// # }
-/// struct Car { id: i64 }
-/// impl Resource for Car {
-///     fn type_name() -> &'static str { "Car" }
-///     fn descendant_types() -> Vec<&'static str> { vec!["Vehicle", "Car"] }
-///     fn resource_id(&self) -> ResourceId { ResourceId::from(self.id) }
-/// }
-/// assert_eq!(Vehicle::descendant_types(), vec!["Vehicle"]); // default
-/// assert_eq!(Car::descendant_types(), vec!["Vehicle", "Car"]); // STI
-/// ```
+    /// struct Car { id: i64 }
+    /// impl Resource for Car {
+    ///     fn type_name() -> &'static str { "Car" }
+    ///     fn descendant_types() -> Vec<&'static str> { vec!["Vehicle", "Car"] }
+    ///     fn resource_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    /// }
+    /// assert_eq!(Vehicle::descendant_types(), vec!["Vehicle"]); // default
+    /// assert_eq!(Car::descendant_types(), vec!["Vehicle", "Car"]); // STI
+    /// ```
     #[must_use]
     fn descendant_types() -> Vec<&'static str>
     where
