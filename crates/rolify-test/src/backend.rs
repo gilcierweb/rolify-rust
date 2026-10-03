@@ -142,6 +142,24 @@ where
     /// Propagates backend count failures.
     fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send;
 
+    /// Reset the query counter for TEST-05 query-count guards.
+    ///
+    /// Backends that support query counting (e.g., via Diesel's
+    /// `set_instrumentation`) should reset their internal counter here.
+    /// Backends without counting support (e.g., `InMemoryStore`) leave
+    /// this as a no-op — the guard cases early-return when
+    /// `query_count()` returns `None`.
+    fn reset_query_count(&mut self);
+
+    /// Return the current query count for TEST-05 query-count guards.
+    ///
+    /// Returns `Some(count)` if the backend tracks queries (e.g., by
+    /// counting `InstrumentationEvent::StartQuery` events). Returns
+    /// `None` if the backend cannot count queries — the guard cases
+    /// skip assertions in this case, making the hook non-breaking for
+    /// backends like `InMemoryStore`.
+    fn query_count(&self) -> Option<usize>;
+
     /// The D-06 engine handle owned by the subject: store plus connection
     /// plus the single configuration. The seam the D-05 class statics
     /// consume (`Resource::find_roles(&mut backend.engine(), ...)`).
@@ -255,6 +273,14 @@ impl<C: UserClass> TestBackend for InMemoryBackend<C> {
     fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send {
         let count = self.subject.store().rows().len();
         async move { Ok(count) }
+    }
+
+    fn reset_query_count(&mut self) {
+        // InMemoryStore has no query counting — no-op (guards early-return on None)
+    }
+
+    fn query_count(&self) -> Option<usize> {
+        None // Non-counting backend: guards skip when None
     }
 
     fn engine(&mut self) -> &mut Rolify<Self::Store> {

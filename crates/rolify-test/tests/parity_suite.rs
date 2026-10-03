@@ -81,6 +81,7 @@ const MODULE_CASE_MINIMUMS: &[(&str, usize)] = &[
     ("has_any_role", 4),
     ("has_role", 28),
     ("only_has_role", 10),
+    ("query_guards", 2),
     ("remove_role", 15),
     ("resource_queries", 10),
     ("resource_reads", 9),
@@ -88,14 +89,15 @@ const MODULE_CASE_MINIMUMS: &[(&str, usize)] = &[
     ("scopes", 4),
 ];
 
-/// The wrapper total the twelve minimums sum to (15 + 28 + 15 + 7 + 4 +
-/// 3 + 9 + 7 + 4 + 10 + 9 + 10): the structural half of the 02-09 gate.
-const WRAPPER_TOTAL_MINIMUM: usize = 121;
+/// The wrapper total the thirteen minimums sum to (15 + 28 + 15 + 7 + 4 +
+/// 3 + 9 + 7 + 4 + 10 + 9 + 10 + 2): the structural half of the 02-09 gate
+/// plus the 03-04 query_guards extension.
+const WRAPPER_TOTAL_MINIMUM: usize = 123;
 
-/// Structural closure proof for the 02-09 phase gate: every suite
+/// Structural closure proof for the 02-09/03-04 phase gate: every suite
 /// module is a real expansion.
 ///
-/// Parses the twelve module FILES directly - a nested `cargo test`
+/// Parses the thirteen module FILES directly - a nested `cargo test`
 /// from inside a cargo test binary would deadlock on the
 /// build-directory lock, so this test never spawns cargo; the
 /// behavioral green proof comes from the phase-gate cargo runs. Per
@@ -132,7 +134,7 @@ fn suite_is_fully_expanded() {
     }
     assert!(
         total_found >= WRAPPER_TOTAL_MINIMUM,
-        "the twelve modules declare {total_found} case fns in total, expected at least {WRAPPER_TOTAL_MINIMUM}"
+        "the thirteen modules declare {total_found} case fns in total, expected at least {WRAPPER_TOTAL_MINIMUM}"
     );
 
     let suite_rs_path = manifest_dir.join("src").join("suite.rs");

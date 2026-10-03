@@ -27,13 +27,18 @@
 //! | Module | Filled by |
 //! |---|---|
 //! | `add_role` | 02-01 |
-//! | `has_role` | 02-02 |
-//! | `remove_role`, `callbacks` | 02-03 |
-//! | `scopes`, `roles` | 02-04 |
-//! | `resource_reads` | 02-05 |
-//! | `has_all_roles`, `has_any_role`, `only_has_role` | 02-06 |
+//! | `callbacks` | 02-03 |
 //! | `finders` | 02-07 |
+//! | `has_all_roles` | 02-06 |
+//! | `has_any_role` | 02-06 |
+//! | `has_role` | 02-02 |
+//! | `only_has_role` | 02-06 |
+//! | `query_guards` | 03-04 |
+//! | `remove_role` | 02-03 |
 //! | `resource_queries` | 02-08 |
+//! | `resource_reads` | 02-05 |
+//! | `roles` | 02-04 |
+//! | `scopes` | 02-04 |
 //!
 //! ## Dynamic exclusion
 //!
@@ -51,6 +56,7 @@ pub mod has_all_roles;
 pub mod has_any_role;
 pub mod has_role;
 pub mod only_has_role;
+pub mod query_guards;
 pub mod remove_role;
 pub mod resource_queries;
 pub mod resource_reads;
@@ -78,6 +84,7 @@ macro_rules! parity_suite {
             $crate::parity_has_any_role_cases!($backend);
             $crate::parity_has_role_cases!($backend);
             $crate::parity_only_has_role_cases!($backend);
+            $crate::parity_query_guards_cases!($backend);
             $crate::parity_remove_role_cases!($backend);
             $crate::parity_roles_cases!($backend);
             $crate::parity_scopes_cases!($backend);
