@@ -4,20 +4,18 @@
 //! embed correctly and apply/revert cleanly on SQLite (the hermetic leg),
 //! Postgres, and MySQL (the parity gate legs per D-14).
 
-use diesel::Connection;
-use diesel::RunQueryDsl;
-use diesel::deserialize::QueryableByName;
-use diesel_migrations::MigrationHarness;
-use rolify_diesel::MIGRATIONS;
-
 #[cfg(feature = "sqlite")]
 use diesel::sqlite::SqliteConnection;
 
 #[cfg(feature = "postgres")]
 mod pg_migrations {
-    use super::*;
+    use diesel::Connection;
+    use diesel::RunQueryDsl;
+    use diesel::deserialize::QueryableByName;
     use diesel::pg::PgConnection;
     use diesel::sql_types::Text;
+    use diesel_migrations::MigrationHarness;
+    use rolify_diesel::MIGRATIONS;
     use testcontainers_modules::{postgres, testcontainers::runners::SyncRunner};
     use testcontainers::ImageExt;
 
@@ -181,9 +179,13 @@ mod pg_migrations {
 
 #[cfg(feature = "mysql")]
 mod mysql_migrations {
-    use super::*;
+    use diesel::Connection;
+    use diesel::RunQueryDsl;
+    use diesel::deserialize::QueryableByName;
     use diesel::mysql::MysqlConnection;
     use diesel::sql_types::Text;
+    use diesel_migrations::MigrationHarness;
+    use rolify_diesel::MIGRATIONS;
     use testcontainers_modules::{mysql, testcontainers::runners::SyncRunner};
     use testcontainers::ImageExt;
 
@@ -358,8 +360,11 @@ mod mysql_migrations {
 
 #[cfg(feature = "sqlite")]
 mod sqlite_migrations {
-    use super::*;
+    use diesel::Connection;
+    use diesel::RunQueryDsl;
     use diesel::sqlite::SqliteConnection;
+    use diesel_migrations::MigrationHarness;
+    use rolify_diesel::MIGRATIONS;
 
     #[test]
     fn migrations_apply_and_revert_cleanly_on_sqlite() {
