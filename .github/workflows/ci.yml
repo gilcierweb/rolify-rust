@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: ["*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check (fmt, clippy, doc)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy (default)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo clippy (is_sync)
+        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync -- -D warnings
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+
+  test:
+    name: Test (dual-mode + in-memory suite)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test (async default)
+        run: cargo test --workspace
+      - name: cargo test (sync mode)
+        run: cargo test --workspace --features rolify-core/is_sync
+      - name: cargo test (rolify-test suite async)
+        run: cargo test -p rolify-test --features suite
+      - name: cargo test (rolify-test suite sync)
+        run: cargo test -p rolify-test --features "suite is_sync"
+
+  adapters:
+    name: Adapter legs (Postgres, MySQL, SQLite)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [postgres, mysql, sqlite]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev libmysqlclient-dev libsqlite3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test (rolify-diesel ${{ matrix.backend }})
+        run: cargo test -p rolify-diesel --no-default-features --features "sync,${{ matrix.backend }}"
+        env:
+          # Ensure testcontainers can pull images
+          DOCKER_HOST: unix:///var/run/docker.sock
+
+  msrv:
+    name: MSRV check (1.86)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [postgres, mysql, sqlite]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev libmysqlclient-dev libsqlite3-dev
+      - uses: dtolnay/rust-toolchain@1.86
+      - name: cargo +1.86 check (rolify-diesel ${{ matrix.backend }})
+        run: cargo +1.86 check -p rolify-diesel --no-default-features --features "sync,${{ matrix.backend }}"

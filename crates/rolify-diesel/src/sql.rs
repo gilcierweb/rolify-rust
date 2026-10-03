@@ -13,30 +13,36 @@
 //! - Sentinel `''` for global/class scope (D-01/D-02): scope branches
 //!   compare against `= ''`, never `= NULL` or binding `Option::None`.
 //! - Each function cites the gem file:line range it mirrors.
+//!
+//! This module is only compiled when a backend feature is enabled
+//! (`postgres`, `mysql`, or `sqlite`). When no backend feature is enabled,
+//! the crate compiles as an inert stub.
 
-use crate::dialect::{placeholder, quote_identifier};
-use crate::rows::{CountRow, HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
-use rolify_core::query::{ResourceFilter, RoleQuery};
-use rolify_core::role::{ResourceId, RoleName};
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+mod backend_sql {
+    use crate::dialect::{placeholder, quote_identifier};
+    use crate::rows::{CountRow, HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
+    use rolify_core::query::{ResourceFilter, RoleQuery};
+    use rolify_core::role::{ResourceId, RoleName};
 
-/// Build the non-strict ladder WHERE clause for a single `RoleQuery`.
-///
-/// Mirrors `build_query` (role_adapter.rb:106-121) and the disjunct table
-/// in `kernel.rs:34-41`. Disjunct counts per filter:
-/// - Global: 1 disjunct (name + both sentinel)
-/// - Class: 2 disjuncts (global OR class-scope)
-/// - Instance: 3 disjuncts (global OR class OR instance)
-/// - Any: name-only short-circuit (D-02 DB path)
-///
-/// The `role_table` and `join_table` parameters are **already quoted**
-/// identifiers (from `quote_identifier`).
-///
-/// The `holder_id_placeholder` is the bind index for the holder's user_id
-/// in the join condition (typically `$1` / `?`).
-///
-/// Returns (sql_fragment, next_placeholder_index_after_this_fragment).
-#[must_use]
-pub fn build_ladder_where(
+    /// Build the non-strict ladder WHERE clause for a single `RoleQuery`.
+    ///
+    /// Mirrors `build_query` (role_adapter.rb:106-121) and the disjunct table
+    /// in `kernel.rs:34-41`. Disjunct counts per filter:
+    /// - Global: 1 disjunct (name + both sentinel)
+    /// - Class: 2 disjuncts (global OR class-scope)
+    /// - Instance: 3 disjuncts (global OR class OR instance)
+    /// - Any: name-only short-circuit (D-02 DB path)
+    ///
+    /// The `role_table` and `join_table` parameters are **already quoted**
+    /// identifiers (from `quote_identifier`).
+    ///
+    /// The `holder_id_placeholder` is the bind index for the holder's user_id
+    /// in the join condition (typically `$1` / `?`).
+    ///
+    /// Returns (sql_fragment, next_placeholder_index_after_this_fragment).
+    #[must_use]
+    pub fn build_ladder_where(
     role_table: &str,
     join_table: &str,
     holder_id_placeholder: &str,
@@ -711,3 +717,9 @@ mod tests {
         assert!(sql.contains("role_id = $1"));
     }
 }
+
+} // Close backend_sql module
+
+// Re-export all SQL template functions when a backend feature is enabled.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+pub use backend_sql::*;

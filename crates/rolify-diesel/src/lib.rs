@@ -54,15 +54,22 @@
 //!
 //! ```ignore
 //! use diesel::prelude::*;
+//! use diesel_migrations::MigrationHarness;
 //! use rolify_diesel::{DieselStore, MIGRATIONS};
 //! use rolify_core::config::RolifyConfig;
 //!
 //! let config = RolifyConfig::builder().build().unwrap();
 //! let store = DieselStore::new(&config);
 //! let mut conn = PgConnection::establish(&database_url)?;
-//! MIGRATIONS.run_pending_migrations(&mut conn)?;
+//! // Run embedded migrations explicitly — the crate NEVER migrates automatically (D-11).
+//! conn.run_pending_migrations(MIGRATIONS)?;
 //! // ... use store with SPI methods
 //! ```
+//!
+//! **Local prerequisites:** Building with the `postgres` or `mysql` features
+//! requires the respective client development headers (`libpq-dev` and
+//! `libmysqlclient-dev` on Debian/Ubuntu). The `sqlite` feature uses the
+//! bundled `libsqlite3-sys` and has no external dependencies.
 //!
 //! The store is generic over the connection type, so pool checkouts,
 //! raw connections, and caller-owned transactions all work uniformly

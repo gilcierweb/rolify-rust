@@ -327,6 +327,37 @@ cargo doc --workspace --no-deps --open
 With `cargo-nextest` installed, `cargo nextest run --workspace` runs the
 same suites partitioned per backend.
 
+## Development
+
+### Adapter integration test prerequisites
+
+Running the `rolify-diesel` adapter integration tests against real databases
+requires:
+
+- A running Docker daemon (for testcontainers).
+- System development headers for PostgreSQL and MySQL client libraries:
+  - Debian/Ubuntu: `sudo apt-get install libpq-dev libmysqlclient-dev`
+  - SQLite is bundled via `libsqlite3-sys` and requires no system packages.
+
+### Adapter test commands
+
+Once prerequisites are met, run the three adapter legs locally:
+
+```sh
+# PostgreSQL (requires Docker + libpq-dev)
+cargo test -p rolify-diesel --no-default-features --features sync,postgres
+
+# MySQL (requires Docker + libmysqlclient-dev)
+cargo test -p rolify-diesel --no-default-features --features sync,mysql
+
+# SQLite (no Docker, no system packages)
+cargo test -p rolify-diesel --no-default-features --features sync,sqlite
+```
+
+The PostgreSQL and MySQL legs use testcontainers to start ephemeral
+`postgres:17` and `mysql:8.4` containers with built-in readiness waits.
+The SQLite leg runs against an in-memory database.
+
 ## Docker and databases
 
 A library ships no service, so there is no application image and no

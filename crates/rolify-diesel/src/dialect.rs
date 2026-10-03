@@ -54,6 +54,24 @@ pub fn quote_identifier(name: &str) -> String {
     format!("`{name}`")
 }
 
+/// Fallback placeholder when no backend feature is enabled (inert stub).
+/// Returns a generic placeholder that won't be used since SQL generation
+/// is only called when a backend feature is active.
+#[cfg(not(any(feature = "postgres", feature = "mysql", feature = "sqlite")))]
+#[must_use]
+pub fn placeholder(_index: usize) -> String {
+    "?".to_string()
+}
+
+/// Fallback quote_identifier when no backend feature is enabled (inert stub).
+/// Returns the name unquoted since this is only used for the inert stub
+/// compilation path where no actual SQL is executed.
+#[cfg(not(any(feature = "postgres", feature = "mysql", feature = "sqlite")))]
+#[must_use]
+pub fn quote_identifier(name: &str) -> String {
+    name.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
