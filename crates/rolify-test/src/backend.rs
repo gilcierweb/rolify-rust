@@ -10,6 +10,12 @@
 //! `grant_to`, `add_role`, `rolify_config`, `reset_roles`,
 //! `create_role_row`, `role_row_count`) is unchanged.
 //!
+//! Wave-3 amendment (plan 02-07): `InMemoryBackend::build` registers the
+//! fixture holders under `C::rolify_type()` so the 02-07 finder reads
+//! (`all_holders` / `holders_where`) see the full `users` table through
+//! the storage SPI - the same build-time seam the fixture resources
+//! already use.
+//!
 //! [`Rolify`]: rolify_core::manager::Rolify
 
 #[cfg(not(feature = "is_sync"))]
@@ -152,6 +158,13 @@ impl<C: UserClass> TestBackend for InMemoryBackend<C> {
     fn build() -> impl Future<Output = Result<Self, Self::Error>> + Send {
         let resources = FixtureResources::new();
         let mut store = InMemoryStore::new();
+        // The 02-07 holder universe: the fixture `users` table rows
+        // (D-02 full-table semantics - `all_holders` must see ids that
+        // never receive a link, so registration happens at build time,
+        // never lazily from the join table).
+        for (_, holder_id) in fixture_holders() {
+            store.register_holder(C::rolify_type(), holder_id.clone());
+        }
         for which in [
             FixtureResource::ForumFirst,
             FixtureResource::ForumLast,

@@ -195,6 +195,50 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
         holder: &ResourceId,
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send;
 
+    /// User-class finder read (D-01, `adapter.scope` behind
+    /// `finders.rb:5-9`): the holder ids whose LINKED role rows match
+    /// `query` - ONE round-trip per call (the store composes the join
+    /// itself; there is never one store call per holder).
+    ///
+    /// * `holder_types` - the holder-side type registry filter (D-03,
+    ///   the `types: &[&str]` precedent of
+    ///   [`ResourceStore::resources_find`]): only holders registered
+    ///   under one of these types can appear; an empty slice matches
+    ///   nothing. One store serves several user classes (`User` and
+    ///   `Customer` alike) through this slice.
+    /// * `strict` - selects the ladder the matching rows must satisfy:
+    ///   the SAME kernel predicates behind [`RoleStore::where_`] and
+    ///   [`RoleStore::where_strict`] (`where_` semantics when false,
+    ///   `where_strict` semantics when true). The caller resolves the
+    ///   flag from its configuration plus the query's filter
+    ///   (finders.rb:4); the store never re-derives it.
+    ///
+    /// The gem returns the user-class relation; the SPI returns ids
+    /// (D-19, see [`crate::finders`]): the consumer filters its own
+    /// table with `IN`. Results are unordered sets (D-04) - each holder
+    /// id appears at most once no matter how many rows matched.
+    fn holders_where(
+        &self,
+        conn: &mut Self::Conn,
+        holder_types: &[&str],
+        query: &RoleQuery<'_>,
+        strict: bool,
+    ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send;
+
+    /// The FULL holder table for the given types - the holder universe
+    /// D-02 pins: INCLUDING never-rolificated holders, NOT "holders
+    /// that have roles". The gem reads `User.all` behind `all_except`
+    /// (`finders.rb:13`); `without_role` subtracts the
+    /// [`RoleStore::holders_where`] matches from this list.
+    ///
+    /// Same `holder_types` registry filter (D-03) as
+    /// [`RoleStore::holders_where`]; results are unordered (D-04).
+    fn all_holders(
+        &self,
+        conn: &mut Self::Conn,
+        holder_types: &[&str],
+    ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send;
+
     /// Gem `find_roles` catalog branch (`resource_adapter.rb:6-11`) - the
     /// ONE catalog read per adapter (D-15). Filter semantics, documented
     /// once here and mirrored by every adapter:

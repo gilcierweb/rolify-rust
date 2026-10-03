@@ -31,6 +31,8 @@ mod user {
         where_calls: AtomicUsize,
         where_strict_calls: AtomicUsize,
         where_any_calls: AtomicUsize,
+        holders_where_calls: AtomicUsize,
+        all_holders_calls: AtomicUsize,
     }
 
     impl CountingStore {
@@ -39,6 +41,16 @@ mod user {
                 self.where_calls.load(Ordering::Relaxed),
                 self.where_strict_calls.load(Ordering::Relaxed),
                 self.where_any_calls.load(Ordering::Relaxed),
+            )
+        }
+
+        /// 02-07 probe counters: `holders_where` and `all_holders` calls.
+        /// Consumed by the finder composition pins below.
+        #[allow(dead_code)]
+        fn finder_counters(&self) -> (usize, usize) {
+            (
+                self.holders_where_calls.load(Ordering::Relaxed),
+                self.all_holders_calls.load(Ordering::Relaxed),
             )
         }
     }
@@ -133,6 +145,26 @@ mod user {
             query: &RoleCatalogQuery<'_>,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
             self.inner.roles_matching(conn, query)
+        }
+
+        fn holders_where(
+            &self,
+            conn: &mut Self::Conn,
+            holder_types: &[&str],
+            query: &RoleQuery<'_>,
+            strict: bool,
+        ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send {
+            self.holders_where_calls.fetch_add(1, Ordering::Relaxed);
+            self.inner.holders_where(conn, holder_types, query, strict)
+        }
+
+        fn all_holders(
+            &self,
+            conn: &mut Self::Conn,
+            holder_types: &[&str],
+        ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send {
+            self.all_holders_calls.fetch_add(1, Ordering::Relaxed);
+            self.inner.all_holders(conn, holder_types)
         }
     }
 

@@ -53,6 +53,9 @@ pub mod suite;
 /// * `links` - the join table: `(holder, role-row)` pairs (the gem's
 ///   `users_roles` HABTM join).
 /// * `registry` - fixture resources for the `ResourceStore` finder contract.
+/// * `holders` - the fixture holder registry (the in-memory `users`
+///   table): `(rolify_type, holder id)` pairs feeding the 02-07 finder
+///   reads [`RoleStore::holders_where`] / [`RoleStore::all_holders`].
 ///
 /// `Conn` is `()`: there is no external connection to manage.
 #[derive(Debug, Default)]
@@ -60,6 +63,7 @@ pub struct InMemoryStore {
     rows: Vec<RoleRecord>,
     links: Vec<(ResourceId, RoleRecord)>,
     registry: Vec<ResourceKey>,
+    holders: Vec<(String, ResourceId)>,
 }
 
 impl InMemoryStore {
@@ -97,10 +101,10 @@ impl InMemoryStore {
         &self.rows
     }
 
-    /// Empty the role rows and links, keeping the resource registry intact
-    /// (resources are schema-shaped fixtures, not role state) - the port of
-    /// the suite preamble `role_class.destroy_all` plus `roles = []`
-    /// (`shared_contexts.rb:14-15`).
+    /// Empty the role rows and links, keeping the fixture registries
+    /// intact (resources and holders are schema-shaped fixtures, not
+    /// role state) - the port of the suite preamble
+    /// `role_class.destroy_all` plus `roles = []` (`shared_contexts.rb:14-15`).
     pub fn clear(&mut self) {
         self.rows.clear();
         self.links.clear();
@@ -131,6 +135,27 @@ impl InMemoryStore {
     pub fn register_resource(&mut self, key: ResourceKey) {
         if !self.registry.contains(&key) {
             self.registry.push(key);
+        }
+    }
+
+    /// Register a fixture holder: a `users`-table row for the 02-07
+    /// finder reads - the holder's type discriminator (the D-08
+    /// `rolify_type` literal) plus its stringified primary key. Feeds
+    /// [`RoleStore::all_holders`] and the `holder_types` filter of
+    /// [`RoleStore::holders_where`]; idempotent per `(type, id)` pair.
+    pub fn register_holder(
+        &mut self,
+        holder_type: impl Into<String>,
+        holder_id: impl Into<ResourceId>,
+    ) {
+        let holder_type = holder_type.into();
+        let holder_id = holder_id.into();
+        if !self
+            .holders
+            .iter()
+            .any(|(known_type, known_id)| known_type == &holder_type && known_id == &holder_id)
+        {
+            self.holders.push((holder_type, holder_id));
         }
     }
 
@@ -366,6 +391,61 @@ impl RoleStore for InMemoryStore {
                 true
             })
             .cloned()
+            .collect();
+        async move { Ok(found) }
+    }
+
+    /// D-01 finder read over the join table: holder ids whose linked
+    /// rows satisfy the kernel ladder (`where_strict` semantics when
+    /// `strict`, `where_` semantics otherwise), restricted to holders
+    /// registered under one of `holder_types`. A linked holder absent
+    /// from the registry is invisible - the users-table INNER JOIN
+    /// drops dangling join rows. Holder ids are deduped: one entry per
+    /// holder no matter how many rows matched.
+    fn holders_where(
+        &self,
+        _conn: &mut Self::Conn,
+        holder_types: &[&str],
+        query: &RoleQuery<'_>,
+        strict: bool,
+    ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send {
+        let mut matched: Vec<ResourceId> = Vec::new();
+        for (holder, row) in &self.links {
+            if matched.contains(holder) {
+                continue;
+            }
+            let registered = self.holders.iter().any(|(known_type, known_id)| {
+                known_id == holder && holder_types.contains(&known_type.as_str())
+            });
+            if !registered {
+                continue;
+            }
+            let held = core::slice::from_ref(row);
+            let hit = if strict {
+                !kernel::where_strict(held, query).is_empty()
+            } else {
+                !kernel::where_(held, query).is_empty()
+            };
+            if hit {
+                matched.push(holder.clone());
+            }
+        }
+        async move { Ok(matched) }
+    }
+
+    /// D-02 finder read: every holder id registered under one of
+    /// `holder_types` - the FULL fixture `users` table, including
+    /// never-rolificated holders (ids with no links return too).
+    fn all_holders(
+        &self,
+        _conn: &mut Self::Conn,
+        holder_types: &[&str],
+    ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send {
+        let found = self
+            .holders
+            .iter()
+            .filter(|(known_type, _)| holder_types.contains(&known_type.as_str()))
+            .map(|(_, holder_id)| holder_id.clone())
             .collect();
         async move { Ok(found) }
     }
