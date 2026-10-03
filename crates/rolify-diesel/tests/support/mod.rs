@@ -13,7 +13,8 @@ use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use diesel::Connection;
-use diesel::connection::{Connection as _, InstrumentationEvent};
+use diesel::RunQueryDsl;
+use diesel::connection::InstrumentationEvent;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel_migrations::MigrationHarness;
 use rolify_core::role::ResourceId;
@@ -27,6 +28,10 @@ use testcontainers_modules::{postgres, testcontainers::runners::SyncRunner};
 #[cfg(feature = "mysql")]
 use diesel::mysql::MysqlConnection;
 #[cfg(feature = "mysql")]
+use testcontainers_modules::{mysql, testcontainers::runners::SyncRunner};
+
+#[cfg(feature = "sqlite")]
+use diesel::sqlite::SqliteConnection;
 use testcontainers_modules::{mysql, testcontainers::runners::SyncRunner};
 
 #[cfg(feature = "sqlite")]
@@ -361,15 +366,15 @@ where
 {
     #[cfg(feature = "postgres")]
     {
-        let row: (String, String) = diesel::sql_query(&format!(
-            "INSERT INTO {} (name) VALUES ($1) RETURNING id, name",
+        // Use RETURNING id in the INSERT (works for integer PK tables like forums, groups, etc.)
+        let id: i64 = diesel::sql_query(&format!(
+            "INSERT INTO {} (name) VALUES ($1) RETURNING id",
             table
         ))
         .bind::<diesel::sql_types::Text, _>(name)
         .get_result(conn)
         .expect("insert resource");
-        let (id, _name) = row;
-        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), id) // forums -> forum
+        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), id.to_string())
     }
     #[cfg(feature = "mysql")]
     {
@@ -403,98 +408,8 @@ where
 
 /// Query counting instrumentation for TEST-05.
 ///
-/// Wraps a connection and counts `InstrumentationEvent::StartQuery` events.
+/// Installs a counter on a raw connection that counts `InstrumentationEvent::StartQuery` events.
 /// Transaction control events (Begin/Commit/Rollback) are NOT counted.
-pub struct CountingConn<C> {
-    conn: C,
-    counter: Arc<AtomicUsize>,
-}
-
-impl<C> CountingConn<C>
-where
-    C: Connection,
-{
-    pub fn new(conn: C) -> (Self, Arc<AtomicUsize>) {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counting = CountingConn {
-            conn,
-            counter: Arc::clone(&counter),
-        };
-        (counting, counter)
-    }
-
-    pub fn into_inner(self) -> C {
-        self.conn
-    }
-}
-
-impl<C> std::ops::Deref for CountingConn<C> {
-    type Target = C;
-    fn deref(&self) -> &Self::Target {
-        &self.conn
-    }
-}
-
-impl<C> std::ops::DerefMut for CountingConn<C> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.conn
-    }
-}
-
-impl<C> Connection for CountingConn<C>
-where
-    C: Connection,
-{
-    type Backend = C::Backend;
-    type TransactionManager = C::TransactionManager;
-
-    fn establish(database_url: &str) -> Result<Self, diesel::ConnectionError>
-    where
-        Self: Sized,
-    {
-        C::establish(database_url).map(|conn| {
-            let counter = Arc::new(AtomicUsize::new(0));
-            CountingConn { conn, counter }
-        })
-    }
-
-    fn execute(&mut self, query: &str) -> Result<usize, diesel::result::Error> {
-        self.counter.fetch_add(1, Ordering::Relaxed);
-        self.conn.execute(query)
-    }
-
-    fn transaction<T, E, F>(&mut self, f: F) -> Result<T, E>
-    where
-        F: FnOnce(&mut Self) -> Result<T, E>,
-        E: From<diesel::result::Error>,
-    {
-        self.conn.transaction(|conn| {
-            let mut wrapped = CountingConn {
-                conn,
-                counter: Arc::clone(&self.counter),
-            };
-            f(&mut wrapped)
-        })
-    }
-
-    fn begin_test_transaction(&mut self) -> Result<(), diesel::result::Error> {
-        self.conn.begin_test_transaction()
-    }
-
-    fn rollback_test_transaction(&mut self) -> Result<(), diesel::result::Error> {
-        self.conn.rollback_test_transaction()
-    }
-
-    fn get_instrumentation(&mut self) -> &mut dyn diesel::connection::Instrumentation {
-        self.conn.get_instrumentation()
-    }
-
-    fn set_instrumentation(&mut self, instrumentation: Box<dyn diesel::connection::Instrumentation>) {
-        self.conn.set_instrumentation(instrumentation)
-    }
-}
-
-/// Helper to install a query counter on a raw connection.
 pub fn install_query_counter<C>(conn: &mut C) -> Arc<AtomicUsize>
 where
     C: Connection,

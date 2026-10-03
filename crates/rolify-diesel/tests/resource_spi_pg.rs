@@ -421,3 +421,4 @@ mod tests {
         let in_results = custom_store.in_list(&mut conn, &[forum_key.clone()], &holder, &[RoleName::from("moderator")]).wait().unwrap();
         assert_eq!(in_results.len(), 1);
     }
+}
