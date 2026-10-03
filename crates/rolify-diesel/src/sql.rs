@@ -21,7 +21,7 @@
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 mod backend_sql {
     use crate::dialect::{placeholder, quote_identifier};
-    use crate::rows::{CountRow, HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
+    use crate::rows::{IdRow, ResourceKeyRow, RoleRow};
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::role::{ResourceId, RoleName};
 
@@ -37,15 +37,15 @@ mod backend_sql {
     /// The `role_table` and `join_table` parameters are **already quoted**
     /// identifiers (from `quote_identifier`).
     ///
-    /// The `holder_id_placeholder` is the bind index for the holder's user_id
-    /// in the join condition (typically `$1` / `?`).
-    ///
-    /// Returns (sql_fragment, next_placeholder_index_after_this_fragment).
-    #[must_use]
-    pub fn build_ladder_where(
-    role_table: &str,
-    join_table: &str,
-    holder_id_placeholder: &str,
+/// The `holder_id_placeholder` is the bind index for the holder's user_id
+/// in the join condition (typically `$1` / `?`).
+///
+/// Returns (sql_fragment, next_placeholder_index_after_this_fragment).
+#[must_use]
+pub fn build_ladder_where(
+    _role_table: &str,
+    _join_table: &str,
+    _holder_id_placeholder: &str,
     query: &RoleQuery<'_>,
     start_index: usize,
 ) -> (String, usize) {
@@ -79,7 +79,7 @@ mod backend_sql {
             // Only the global disjunct
             (format!("({global_disjunct})"), idx)
         }
-        ResourceFilter::Class(type_name) => {
+        ResourceFilter::Class(_type_name) => {
             // Global OR (type + sentinel id) — gem: build_query:112-113
             let class_rt_ph = placeholder(idx);
             idx += 1;
@@ -95,7 +95,7 @@ mod backend_sql {
             let sql = format!("({global_disjunct} OR {class_disjunct})");
             (sql, idx)
         }
-        ResourceFilter::Instance(type_name, _resource_id) => {
+        ResourceFilter::Instance(_type_name, _resource_id) => {
             // Global OR Class(type) OR Instance(type, id) — gem: build_query:114-117
             let class_rt_ph = placeholder(idx);
             idx += 1;
@@ -227,15 +227,17 @@ pub fn select_roles_for_holder(
     role_table: &str,
     join_table: &str,
     where_clause: &str,
+    holder_id_placeholder: &str,
 ) -> String {
     format!(
         "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
          FROM {role_table} AS role_row \
          INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-         WHERE link.user_id = $1 AND {where_clause}",
+         WHERE link.user_id = {holder_id_placeholder} AND {where_clause}",
         role_table = role_table,
         join_table = join_table,
-        where_clause = where_clause
+        where_clause = where_clause,
+        holder_id_placeholder = holder_id_placeholder
     )
 }
 
@@ -564,7 +566,7 @@ pub fn roles_matching_type_filter(types: &[&str], start_index: usize) -> (String
 
 /// Build the name filter fragment for `roles_matching`.
 #[must_use]
-pub fn roles_matching_name_filter(name: &RoleName, index: usize) -> (String, usize) {
+pub fn roles_matching_name_filter(_name: &RoleName, index: usize) -> (String, usize) {
     let ph = placeholder(index);
     (format!("AND role_row.name = {}", ph), index + 1)
 }
@@ -603,7 +605,7 @@ pub fn roles_matching_scope_filter(
 
 /// Build the holder filter fragment for `roles_matching` (when holder is Some).
 #[must_use]
-pub fn roles_matching_holder_filter(holder_id: &ResourceId, index: usize) -> (String, usize) {
+pub fn roles_matching_holder_filter(_holder_id: &ResourceId, index: usize) -> (String, usize) {
     let ph = placeholder(index);
     (format!("AND holder.id = {}", ph), index + 1)
 }

@@ -17,7 +17,7 @@ use rolify_core::store::{RemovalOutcome, ResourceKey, ResourceStore, RoleStore, 
 
 use crate::dialect::{placeholder, quote_identifier};
 use crate::error::Error;
-use crate::rows::{HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
+use crate::rows::{ResourceKeyRow, RoleRow, IdRow, HolderIdRow};
 use crate::sentinel::{resource_id_to_storage, to_storage};
 
 /// Diesel sync store — holds the configured table names and a resource registry.
@@ -210,7 +210,7 @@ mod pg_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => {
@@ -270,7 +270,7 @@ mod pg_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => {
@@ -327,7 +327,7 @@ mod pg_impl {
                 queries,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             // Collect all bind values in order, then match on query count for typed binds
             let mut all_values: Vec<String> = Vec::new();
             all_values.push(holder.as_str().to_owned());
@@ -585,16 +585,17 @@ mod pg_impl {
             let sql = format!(
                 "SELECT 1 AS dummy FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = $1 AND {rt_cond} {rid_cond} LIMIT 1",
+                 WHERE link.user_id = {holder_ph} AND {rt_cond} {rid_cond} LIMIT 1",
                 role_table = self.role_table,
                 join_table = self.join_table,
                 rt_cond = rt_cond,
                 rid_cond = rid_cond,
+                holder_ph = placeholder(1),
             );
             #[derive(diesel::deserialize::QueryableByName)]
             struct ExistsRow {
                 #[diesel(sql_type = diesel::sql_types::Integer)]
-                dummy: i32,
+                _dummy: i32,
             }
             let q = diesel::sql_query(sql).bind::<Text, _>(holder_id);
             let found = q.get_result::<ExistsRow>(conn).is_ok();
@@ -611,9 +612,10 @@ fn roles_of(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = ?",
+                 WHERE link.user_id = {holder_ph}",
                 role_table = self.role_table,
                 join_table = self.join_table,
+                holder_ph = placeholder(1),
             );
             let q = diesel::sql_query(sql).bind::<Text, _>(holder_id);
             let rows: Vec<RoleRow> = q.load(conn).map_err(Error::Diesel)?;
@@ -800,25 +802,46 @@ fn roles_of(
             // 1. Instance-scoped roles: direct query on roles table
             let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
+            let name_ph = placeholder(type_placeholders.len() + 1);
 
             let sql = format!(
                 "SELECT DISTINCT resource_type, resource_id \
                  FROM {role_table} \
                  WHERE {type_filter} \
-                   AND name = {} \
+                   AND name = {name_ph} \
                    AND resource_id != ''",
-                placeholder(type_placeholders.len() + 1),
                 role_table = self.role_table,
                 type_filter = type_filter,
+                name_ph = name_ph,
             );
 
-            let q = diesel::sql_query(sql);
             let instance_rows: Vec<ResourceKeyRow> = match types.len() {
-                0 => unreachable!(),
-                1 => q.bind::<Text, _>(types[0]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(types[3]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
+                1 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(types[2])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(types[2])
+                    .bind::<Text, _>(types[3])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("resources_find: too many types (max 4)"),
             };
             for row in instance_rows {
@@ -858,36 +881,179 @@ fn roles_of(
                 return async { Ok(Vec::new()) };
             }
 
-            let candidate_pairs: Vec<String> = candidates
-                .iter()
-                .map(|c| format!("('{}', '{}')", c.resource_type, c.resource_id.as_str()))
-                .collect();
-            let candidate_filter = format!("(role_row.resource_type, role_row.resource_id) IN ({})", candidate_pairs.join(", "));
+            // Build candidate pairs using bind parameters to avoid SQL injection
+            let mut candidate_conditions = Vec::new();
+            let mut bind_idx = 2; // 1 is holder_id
+            for _ in candidates {
+                candidate_conditions.push(format!(
+                    "(role_row.resource_type = {} AND role_row.resource_id = {})",
+                    placeholder(bind_idx),
+                    placeholder(bind_idx + 1)
+                ));
+                bind_idx += 2;
+            }
+            let candidate_filter = candidate_conditions.join(" OR ");
 
-            let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
+            let name_placeholders: Vec<String> = (bind_idx..bind_idx + names.len()).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
 
             let sql = format!(
                 "SELECT DISTINCT role_row.resource_type, role_row.resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = $1 \
+                 WHERE link.user_id = {} \
                    AND {name_filter} \
                    AND {candidate_filter}",
+                placeholder(1),
                 role_table = self.role_table,
                 join_table = self.join_table,
                 name_filter = name_filter,
                 candidate_filter = candidate_filter,
             );
 
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<ResourceKeyRow> = match names.len() {
-                0 => unreachable!(),
-                1 => q.bind::<Text, _>(names[0].as_str()).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).bind::<Text, _>(names[2].as_str()).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).bind::<Text, _>(names[2].as_str()).bind::<Text, _>(names[3].as_str()).load(conn).map_err(Error::Diesel)?,
-                _ => panic!("in_list: too many names (max 4)"),
+            // Collect all bind values in order: holder, candidate pairs, names
+            let mut all_values: Vec<&str> = Vec::new();
+            all_values.push(holder.as_str());
+            for c in candidates {
+                all_values.push(c.resource_type.as_str());
+                all_values.push(c.resource_id.as_str());
+            }
+            for n in names {
+                all_values.push(n.as_str());
+            }
+
+            let rows: Vec<ResourceKeyRow> = match all_values.len() {
+                1 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .bind::<Text, _>(all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .bind::<Text, _>(all_values[9])
+                    .bind::<Text, _>(all_values[10])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                12 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .bind::<Text, _>(all_values[9])
+                    .bind::<Text, _>(all_values[10])
+                    .bind::<Text, _>(all_values[11])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                13 => diesel::sql_query(&sql)
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .bind::<Text, _>(all_values[9])
+                    .bind::<Text, _>(all_values[10])
+                    .bind::<Text, _>(all_values[11])
+                    .bind::<Text, _>(all_values[12])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("in_list: too many bind values (max 13)"),
             };
             async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
         }
@@ -899,6 +1065,7 @@ mod mysql_impl {
     use super::*;
     use diesel::mysql::MysqlConnection;
 
+    // MySQL implementation
     fn find_or_create_by_triple(
         conn: &mut MysqlConnection,
         role_table: &str,
@@ -971,7 +1138,7 @@ mod mysql_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => {
@@ -1031,7 +1198,7 @@ mod mysql_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => {
@@ -1088,7 +1255,7 @@ mod mysql_impl {
                 queries,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             // Collect all bind values in order, then match on query count for typed binds
             let mut all_values: Vec<String> = Vec::new();
             all_values.push(holder.as_str().to_owned());
@@ -1543,6 +1710,7 @@ mod mysql_impl {
         type Conn = MysqlConnection;
         type Error = Error;
 
+        // MySQL-specific implementation
         fn resources_find(
             &self,
             conn: &mut Self::Conn,
@@ -1558,16 +1726,17 @@ mod mysql_impl {
             // 1. Instance-scoped roles: direct query on roles table
             let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
+            let name_ph = placeholder(type_placeholders.len() + 1);
 
             let sql = format!(
                 "SELECT DISTINCT resource_type, resource_id \
                  FROM {role_table} \
                  WHERE {type_filter} \
-                   AND name = ? \
+                   AND name = {name_ph} \
                    AND resource_id != ''",
-                placeholder(type_placeholders.len() + 1),
                 role_table = self.role_table,
                 type_filter = type_filter,
+                name_ph = name_ph,
             );
 
             let q = diesel::sql_query(sql);
@@ -1657,6 +1826,7 @@ mod sqlite_impl {
     use super::*;
     use diesel::sqlite::SqliteConnection;
 
+    // SQLite implementation
     fn find_or_create_by_triple(
         conn: &mut SqliteConnection,
         role_table: &str,
@@ -1729,7 +1899,7 @@ mod sqlite_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => {
@@ -1789,7 +1959,7 @@ mod sqlite_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => {
@@ -1846,7 +2016,7 @@ mod sqlite_impl {
                 queries,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause);
+            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
             // Collect all bind values in order, then match on query count for typed binds
             let mut all_values: Vec<String> = Vec::new();
             all_values.push(holder.as_str().to_owned());
@@ -2316,16 +2486,17 @@ mod sqlite_impl {
             // 1. Instance-scoped roles: direct query on roles table
             let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
+            let name_ph = placeholder(type_placeholders.len() + 1);
 
             let sql = format!(
                 "SELECT DISTINCT resource_type, resource_id \
                  FROM {role_table} \
                  WHERE {type_filter} \
-                   AND name = ? \
+                   AND name = {name_ph} \
                    AND resource_id != ''",
-                placeholder(type_placeholders.len() + 1),
                 role_table = self.role_table,
                 type_filter = type_filter,
+                name_ph = name_ph,
             );
 
             let q = diesel::sql_query(sql);

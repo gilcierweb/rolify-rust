@@ -15,7 +15,9 @@ use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
 /// scope columns. The `to_record()` method translates the physical
 /// `''` sentinel back to semantic `Option` via `sentinel::from_storage`.
 #[derive(Debug, Clone, QueryableByName)]
-#[diesel(table_name = roles)]
+#[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
+#[cfg_attr(feature = "sqlite", diesel(check_for_backend(diesel::sqlite::Sqlite)))]
 pub(crate) struct RoleRow {
     #[diesel(sql_type = Text)]
     pub name: String,
@@ -44,23 +46,19 @@ impl RoleRow {
 
 /// Single-column row for `SELECT id FROM roles ...` (re-SELECT after INSERT).
 #[derive(Debug, Clone, QueryableByName)]
-#[diesel(table_name = roles)]
+#[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
+#[cfg_attr(feature = "sqlite", diesel(check_for_backend(diesel::sqlite::Sqlite)))]
 pub struct IdRow {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub id: i64,
 }
 
-/// Single-column row for `SELECT COUNT(*) ...` queries.
-#[derive(Debug, Clone, QueryableByName)]
-#[diesel(table_name = roles)]
-pub struct CountRow {
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    pub count: i64,
-}
-
 /// Row for `holders_where` / `all_holders` — holder ids from the join.
 #[derive(Debug, Clone, QueryableByName)]
-#[diesel(table_name = users_roles)]
+#[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
+#[cfg_attr(feature = "sqlite", diesel(check_for_backend(diesel::sqlite::Sqlite)))]
 pub(crate) struct HolderIdRow {
     #[diesel(sql_type = Text)]
     pub user_id: String,
@@ -68,7 +66,9 @@ pub(crate) struct HolderIdRow {
 
 /// Row for `resources_find` / `in_list` / `roles_matching` — resource keys from the catalog.
 #[derive(Debug, Clone, QueryableByName)]
-#[diesel(table_name = roles)]
+#[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
+#[cfg_attr(feature = "sqlite", diesel(check_for_backend(diesel::sqlite::Sqlite)))]
 pub(crate) struct ResourceKeyRow {
     #[diesel(sql_type = Text)]
     pub name: String,
