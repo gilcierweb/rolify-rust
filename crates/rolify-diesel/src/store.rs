@@ -143,8 +143,12 @@ impl DieselStore {
 impl Sealed for DieselStore {}
 
 // === Backend-specific impls ===
+//
+// The sync impls compile only when the `sync` mode feature is on (D-08
+// engines are mode-agnostic); the async rider lives in cfg-gated
+// sibling modules that reuse the same sql/rows/sentinel templates.
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", feature = "sync"))]
 mod pg_impl {
     use super::*;
     use diesel::pg::PgConnection;
@@ -1607,7 +1611,7 @@ mod pg_impl {
     }
 }
 
-#[cfg(feature = "mysql")]
+#[cfg(all(feature = "mysql", feature = "sync"))]
 mod mysql_impl {
     use super::*;
     use diesel::mysql::MysqlConnection;
@@ -3062,7 +3066,7 @@ mod mysql_impl {
     }
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(all(feature = "sqlite", feature = "sync"))]
 mod sqlite_impl {
     use super::*;
     use diesel::sqlite::SqliteConnection;

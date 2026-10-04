@@ -4,21 +4,45 @@
 //!
 //! ## Feature matrix
 //!
-//! | Mode | Cargo feature | Backend | Notes |
+//! | Mode | Cargo features | Backend | Notes |
 //! |---|---|---|---|
-//! | sync | `sync` | *(required)* | Forwards `rolify-core/is_sync` |
-//! | sync + Postgres | `postgres` | `diesel::pg::Pg` | Implies `sync`; pulls `diesel_migrations` |
-//! | sync + MySQL | `mysql` | `diesel::mysql::Mysql` | Implies `sync`; pulls `diesel_migrations` |
-//! | sync + SQLite | `sqlite` | `diesel::sqlite::Sqlite` | Implies `sync`; pulls `diesel_migrations` + bundled `libsqlite3-sys` |
-//! | async | *(Phase 4)* | `diesel-async` | Not in this crate — separate `async` feature lands in Phase 4 |
+//! | sync (default) | `sync` | engine feature required | On by default (just-works posture, D-08); forwards `rolify-core/is_sync` via `is_sync` |
+//! | sync + Postgres | `sync,postgres` | `diesel::pg::PgConnection` | Pulls `diesel_migrations` |
+//! | sync + MySQL | `sync,mysql` | `diesel::mysql::MysqlConnection` | Pulls `diesel_migrations` |
+//! | sync + SQLite | `sync,sqlite` | `diesel::sqlite::SqliteConnection` | Pulls `diesel_migrations` + bundled `libsqlite3-sys` |
+//! | async | `async` | engine feature required | Opt-in: `default-features = false` (D-08); pulls `diesel-async` 0.9 |
+//! | async + Postgres | `async,postgres` | `diesel_async::AsyncPgConnection` | Same `DieselStore` type, same SQL templates, `diesel_async::RunQueryDsl` execution |
+//! | async + bb8 pool | `async,bb8` | - | Mirrors diesel-async's own `bb8` feature (D-09); the canonical gate pool |
+//! | async + deadpool pool | `async,deadpool` | - | Mirrors diesel-async's own `deadpool` feature (D-09); compile-check + smoke only (D-09) |
 //!
-//! **Mutual exclusion:** exactly one of `postgres`, `mysql`, `sqlite` may be
-//! enabled per build. The `compile_error!` guards below enforce this.
+//! **Mutual exclusion:** `sync` and `async` are mutually exclusive (feature
+//! unification would put the core sync flag and diesel-async in one graph;
+//! Phase 1 D-05, Phase 4 D-08). Exactly one of `postgres`, `mysql`,
+//! `sqlite` may be enabled per build. Engine features are mode-agnostic
+//! (D-08): an engine feature without either mode fails to compile with a
+//! guarded message, so `default-features = false, features = ["async",
+//! "postgres"]` is expressible. The `compile_error!` guards below enforce
+//! all of this.
 //!
-//! **Default features = empty:** `cargo check -p rolify-diesel` (no features)
-//! compiles an inert stub that does not disturb the workspace dual-mode gates
-//! (both `cargo test --workspace` and `cargo test --workspace --features
-//! rolify-core/is_sync` must stay green per conventions item 4).
+//! **MSRV floor (D-10):** `rust-version = "1.86"` in BOTH modes (diesel-async
+//! 0.9 declares 1.84, effectively 1.86 via diesel ~2.3.9); CI checks the
+//! async leg with `cargo +1.86 check -p rolify-diesel --no-default-features
+//! --features async,bb8,postgres`.
+//!
+//! **Workspace gate note (Pitfall 11):** with `default = ["sync"]`, every
+//! bare workspace build unifies `rolify-core/is_sync` ON for the whole
+//! graph, so the bare `cargo test --workspace` exercises the sync mode
+//! only (async-only members do not compile under a unified sync graph;
+//! see `rolify-core`'s mode-matrix warning). The dual-mode convention
+//! therefore splits: the sync truth comes from the per-package legs
+//! (`cargo test -p rolify-diesel --no-default-features --features
+//! sync,<engine>[,suite]`), and the async-mode workspace gate is
+//! `cargo test --workspace --exclude rolify-diesel` plus per-package
+//! async feature legs (04-09 bakes this into CI).
+//!
+//! **Default features = `["sync"]`:** `cargo check -p rolify-diesel` (no
+//! features) compiles the sync stub (inert without an engine) and never
+//! pulls diesel-async into a consumer graph by default.
 //!
 //! ## Parity
 //!
@@ -75,11 +99,19 @@
 //! raw connections, and caller-owned transactions all work uniformly
 //! (SC-5).
 
-// Dual-mode note: this crate is sync-only in Phase 3.
-// The `sync` feature forwards `rolify-core/is_sync`.
-// Async support via `diesel-async` arrives in Phase 4 as the `async` feature.
+// Dual-mode note (D-08): the `sync` feature (default) forwards
+// `rolify-core/is_sync` through `is_sync`; the `async` feature (opt-in,
+// `default-features = false`) rides diesel-async over the SAME DieselStore
+// type and the SAME SQL templates (Phase 3 D-06 mirrored execution).
 
-// Mutual exclusion guards: exactly one backend must be enabled.
+// Mode mutual exclusion (Phase 1 D-05, Phase 4 D-08): feature unification
+// must never put the core sync flag and diesel-async in one graph.
+#[cfg(all(feature = "sync", feature = "async"))]
+compile_error!(
+    "features `sync` and `async` are mutually exclusive: feature unification would put `rolify-core/is_sync` and `diesel-async` in one build graph (Phase 1 D-05, Phase 4 D-08)"
+);
+
+// Engine mutual exclusion: exactly one backend must be enabled.
 #[cfg(all(feature = "postgres", feature = "mysql"))]
 compile_error!("features `postgres` and `mysql` are mutually exclusive");
 #[cfg(all(feature = "postgres", feature = "sqlite"))]
@@ -87,13 +119,14 @@ compile_error!("features `postgres` and `sqlite` are mutually exclusive");
 #[cfg(all(feature = "mysql", feature = "sqlite"))]
 compile_error!("features `mysql` and `sqlite` are mutually exclusive");
 
-// Backend features require the mode feature `sync` (which forwards rolify-core/is_sync).
-#[cfg(all(feature = "postgres", not(feature = "sync")))]
-compile_error!("feature `postgres` requires feature `sync`");
-#[cfg(all(feature = "mysql", not(feature = "sync")))]
-compile_error!("feature `mysql` requires feature `sync`");
-#[cfg(all(feature = "sqlite", not(feature = "sync")))]
-compile_error!("feature `sqlite` requires feature `sync`");
+// Mode-agnostic engine guards (D-08): an engine feature requires exactly
+// one of the two mode features (`sync` or `async`).
+#[cfg(all(feature = "postgres", not(any(feature = "sync", feature = "async"))))]
+compile_error!("feature `postgres` requires one of the mode features `sync` or `async`");
+#[cfg(all(feature = "mysql", not(any(feature = "sync", feature = "async"))))]
+compile_error!("feature `mysql` requires one of the mode features `sync` or `async`");
+#[cfg(all(feature = "sqlite", not(any(feature = "sync", feature = "async"))))]
+compile_error!("feature `sqlite` requires one of the mode features `sync` or `async`");
 
 // Re-export the migrations constant for the enabled backend.
 // Path is relative to the crate root (where Cargo.toml lives).

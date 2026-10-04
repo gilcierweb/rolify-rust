@@ -9,12 +9,18 @@ license = "MIT"
 rolify-core = { workspace = true }
 diesel = { workspace = true, default-features = false }
 diesel_migrations = { workspace = true, optional = true }
+diesel-async = { workspace = true, optional = true }
+bb8 = { workspace = true, optional = true }
+deadpool = { workspace = true, optional = true }
 thiserror = { workspace = true }
 maybe-async = { workspace = true }
 libsqlite3-sys = { version = ">=0.17.2, <0.39.0", features = ["bundled"], optional = true }
 
 [dev-dependencies]
 diesel = { workspace = true, features = ["r2d2"] }
+# Test-only: AsyncMigrationHarness for the async test harness (A3; dev
+# unification keeps consumer builds free of the migrations feature).
+diesel-async = { workspace = true, features = ["migrations"] }
 maybe-async = { workspace = true }
 rolify-test = { workspace = true, features = ["suite"] }
 testcontainers = "=0.27.3"
@@ -23,13 +29,22 @@ rstest = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true }
 
+# D-08: default sync (the just-works posture), async opt-in. Engine
+# features are mode-agnostic: the weak `diesel-async?/<engine>` edges
+# enable the async engine only when `async` put diesel-async in the
+# graph, so `default-features = false, features = ["async", <engine>]`
+# is expressible. D-09: `bb8`/`deadpool` mirror diesel-async's own
+# feature names, neither on by default.
 [features]
-default = []
+default = ["sync"]
 is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
 sync = ["is_sync"]
-postgres = ["sync", "diesel/postgres", "dep:diesel_migrations"]
-mysql = ["sync", "diesel/mysql", "dep:diesel_migrations"]
-sqlite = ["sync", "diesel/sqlite", "diesel/returning_clauses_for_sqlite_3_35", "dep:diesel_migrations", "dep:libsqlite3-sys"]
+async = ["dep:diesel-async"]
+bb8 = ["diesel-async/bb8", "dep:bb8"]
+deadpool = ["diesel-async/deadpool", "dep:deadpool"]
+postgres = ["diesel/postgres", "diesel-async?/postgres", "dep:diesel_migrations"]
+mysql = ["diesel/mysql", "diesel-async?/mysql", "dep:diesel_migrations"]
+sqlite = ["diesel/sqlite", "diesel-async?/sqlite", "dep:diesel_migrations", "dep:libsqlite3-sys"]
 suite = ["rolify-test/suite"]
 
 [lints]
