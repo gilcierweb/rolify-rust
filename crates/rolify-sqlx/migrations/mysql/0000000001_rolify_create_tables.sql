@@ -13,15 +13,18 @@
 --
 -- D-03: VARCHAR sizes — name(255), resource_type(191), resource_id(191).
 -- RESEARCH Pitfall 8: MySQL string columns declare CHARACTER SET utf8mb4
--- COLLATE utf8mb4_bin for byte-exact role-name and id comparison.
+-- COLLATE utf8mb4_bin for byte-exact role-name and id comparison. The
+-- charset/collate clauses follow the data type (MySQL grammar position);
+-- the server rejects them after NOT NULL/DEFAULT (error 1064, verified
+-- against mysql:8.4).
 -- D-12: roles.id BIGINT AUTO_INCREMENT PRIMARY KEY.
 -- D-13: timestamps NOT NULL DEFAULT CURRENT_TIMESTAMP (updated_at static; roles never UPDATE).
 
 CREATE TABLE roles (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name          VARCHAR(255) NOT NULL CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
-    resource_type VARCHAR(191) NOT NULL DEFAULT '' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
-    resource_id   VARCHAR(191) NOT NULL DEFAULT '' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+    name          VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    resource_type VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+    resource_id   VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '',
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT roles_triple_unique UNIQUE (name, resource_type, resource_id)
@@ -30,7 +33,7 @@ CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
 CREATE INDEX idx_roles_name ON roles (name);
 
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+    user_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     role_id BIGINT NOT NULL,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id),
     CONSTRAINT users_roles_role_id_fk FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
