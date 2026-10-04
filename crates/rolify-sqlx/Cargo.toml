@@ -15,7 +15,6 @@ rolify-test = { workspace = true, features = ["suite"] }
 testcontainers = "=0.27.3"
 testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["postgres", "mysql"] }
 tokio = { workspace = true }
-maybe-async = { workspace = true }
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
 

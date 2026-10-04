@@ -40,7 +40,6 @@
 //! literal-`resource_type` audit, T-04-07) and `in_list` (per-name binds
 //! with caller-side coverage, mirroring `InMemoryStore::in_list`).
 
-use core::future::Future;
 use std::marker::PhantomData;
 
 use rolify_core::catalog::RoleCatalogQuery;

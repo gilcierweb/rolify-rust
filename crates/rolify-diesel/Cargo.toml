@@ -36,7 +36,7 @@ tokio = { workspace = true }
 # is expressible. D-09: `bb8`/`deadpool` mirror diesel-async's own
 # feature names, neither on by default.
 [features]
-default = ["sync"]
+default = []
 is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
 sync = ["is_sync"]
 async = ["dep:diesel-async"]
