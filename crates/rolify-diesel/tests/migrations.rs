@@ -431,20 +431,46 @@ mod mysql_migrations {
 mod sqlite_migrations {
     use diesel::Connection;
     use diesel::RunQueryDsl;
+    use diesel::deserialize::QueryableByName;
     use diesel::sqlite::SqliteConnection;
     use diesel_migrations::MigrationHarness;
     use rolify_diesel::MIGRATIONS;
 
+    // Diesel's SQLite path is untyped: bare `String`/`i64` targets do not
+    // implement `QueryableByName`, so every load goes through a row struct
+    // (the same shape as the Postgres/MySQL modules above).
+    #[derive(QueryableByName)]
+    struct SqliteNameRow {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        name: String,
+    }
+
+    #[derive(QueryableByName)]
+    struct SqliteIdRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        id: i64,
+    }
+
+    #[derive(QueryableByName)]
+    struct SqliteCountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
     #[test]
     fn migrations_apply_and_revert_cleanly_on_sqlite() {
         let mut conn = SqliteConnection::establish(":memory:").expect("sqlite in-memory");
+        // SQLite ships with FKs off; the cascade probe below needs them on.
+        diesel::sql_query("PRAGMA foreign_keys = ON")
+            .execute(&mut conn)
+            .expect("PRAGMA foreign_keys = ON");
 
         // Apply migrations
         conn.run_pending_migrations(MIGRATIONS)
             .expect("migrations apply cleanly on SQLite");
 
         // Verify tables exist by querying sqlite_master
-        let tables: Vec<String> = diesel::sql_query(
+        let tables: Vec<SqliteNameRow> = diesel::sql_query(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('roles', 'users_roles')"
         )
         .load(&mut conn)
@@ -476,14 +502,14 @@ mod sqlite_migrations {
         .execute(&mut conn)
         .expect("user role insert on SQLite");
 
-        let role_ids: Vec<i64> =
+        let role_ids: Vec<SqliteIdRow> =
             diesel::sql_query("SELECT id FROM roles WHERE name IN ('admin', 'user')")
                 .load(&mut conn)
                 .expect("load role ids on SQLite");
         assert_eq!(role_ids.len(), 2);
 
-        let admin_id = role_ids[0];
-        let user_id = role_ids[1];
+        let admin_id = role_ids[0].id;
+        let user_id = role_ids[1].id;
 
         diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
             .bind::<diesel::sql_types::BigInt, _>(admin_id)
@@ -503,13 +529,13 @@ mod sqlite_migrations {
             .bind::<diesel::sql_types::BigInt, _>(user_id)
             .execute(&mut conn)
             .expect("delete role on SQLite");
-        let remaining_links: i64 =
-            diesel::sql_query("SELECT COUNT(*) FROM users_roles WHERE role_id = ?")
+        let remaining_links: SqliteCountRow =
+            diesel::sql_query("SELECT COUNT(*) AS count FROM users_roles WHERE role_id = ?")
                 .bind::<diesel::sql_types::BigInt, _>(user_id)
                 .get_result(&mut conn)
                 .expect("count remaining links on SQLite");
         assert_eq!(
-            remaining_links, 0,
+            remaining_links.count, 0,
             "FK ON DELETE CASCADE sweeps join rows on SQLite"
         );
 
@@ -518,7 +544,7 @@ mod sqlite_migrations {
             .expect("migrations revert cleanly on SQLite");
 
         // Verify tables are gone
-        let tables_after: Vec<String> = diesel::sql_query(
+        let tables_after: Vec<SqliteNameRow> = diesel::sql_query(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('roles', 'users_roles')"
         )
         .load(&mut conn)
@@ -528,7 +554,7 @@ mod sqlite_migrations {
         // Re-apply migrations (idempotency)
         conn.run_pending_migrations(MIGRATIONS)
             .expect("migrations re-apply cleanly on SQLite");
-        let tables_reapply: Vec<String> = diesel::sql_query(
+        let tables_reapply: Vec<SqliteNameRow> = diesel::sql_query(
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('roles', 'users_roles')"
         )
         .load(&mut conn)

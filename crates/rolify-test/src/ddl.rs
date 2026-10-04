@@ -186,8 +186,12 @@ mod tests {
                 "one statement per fixture table"
             );
             for (statement, table) in statements.iter().zip(FIXTURE_TABLES) {
+                // MySQL quotes the reserved `groups` name with backticks;
+                // both the bare and the quoted prefix are accepted.
+                let bare_prefix = format!("CREATE TABLE IF NOT EXISTS {table} (");
+                let quoted_prefix = format!("CREATE TABLE IF NOT EXISTS `{table}` (");
                 assert!(
-                    statement.starts_with(&format!("CREATE TABLE IF NOT EXISTS {table} (")),
+                    statement.starts_with(&bare_prefix) || statement.starts_with(&quoted_prefix),
                     "expected a create for `{table}`, got: {statement}"
                 );
             }

@@ -16,6 +16,7 @@
 #![cfg(all(feature = "sync", any(feature = "postgres", feature = "mysql")))]
 
 use std::sync::{Arc, Barrier};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use diesel::Connection;
@@ -34,6 +35,39 @@ use testcontainers::ImageExt;
 use testcontainers_modules::{mysql, postgres, testcontainers::runners::SyncRunner};
 
 const RACE_ITERATIONS: usize = 3;
+
+/// Process-wide serializer for the race cases sharing one database.
+///
+/// Live diagnosis of the recorded Phase 3 gap 2 (5/6 red in parallel,
+/// 6/6 green with `--test-threads=1`): every race helper truncates the
+/// shared `roles` tables per iteration, so neighboring tests wipe each
+/// other's rows mid-race. The store logic under test (catch-re-read,
+/// catch-and-ignore) is correct; the harness needs mutual exclusion.
+/// Each race helper holds this guard for its whole run. Acquisition
+/// spins on `yield_now`: timing-free, correctness never depends on
+/// timing, only liveness. `std::sync::Mutex` cannot serve here because
+/// its guard is `!Sync` and the parity backend must stay `Sync`.
+static RACE_SERIAL: AtomicBool = AtomicBool::new(false);
+
+/// Held for one race helper's whole run; releases on drop.
+struct RaceGuard {
+    flag: &'static AtomicBool,
+}
+
+impl RaceGuard {
+    fn acquire(flag: &'static AtomicBool) -> Self {
+        while flag.swap(true, Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        Self { flag }
+    }
+}
+
+impl Drop for RaceGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Clone)]
 enum ScopeKind {
@@ -97,17 +131,14 @@ mod pg_concurrency {
     }
 
     fn setup_fixtures(conn: &mut PgConnection) {
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGSERIAL PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
-                name VARCHAR(255) NOT NULL
-            );
-            "#,
-        )
-        .execute(conn)
-        .expect("fixture tables");
+        // D-06: the suite owns the fixture DDL; the race only needs the
+        // holder table, but executing the shared array keeps every leg on
+        // identical fixtures by construction.
+        for statement in rolify_test::ddl::POSTGRES {
+            diesel::sql_query(*statement)
+                .execute(conn)
+                .expect("fixture tables");
+        }
     }
 
     fn reset_roles(conn: &mut PgConnection) {
@@ -134,6 +165,7 @@ mod pg_concurrency {
     }
 
     fn test_find_or_create_race(role_name: &str, scope: ScopeKind) {
+        let _serial = RaceGuard::acquire(&RACE_SERIAL);
         let mut seed_conn = pg_conn();
         reset_roles(&mut seed_conn);
 
@@ -195,6 +227,7 @@ mod pg_concurrency {
     }
 
     fn test_add_race(role_name: &str, scope: ScopeKind) {
+        let _serial = RaceGuard::acquire(&RACE_SERIAL);
         let mut seed_conn = pg_conn();
         reset_roles(&mut seed_conn);
 
@@ -359,17 +392,13 @@ mod mysql_concurrency {
     }
 
     fn setup_fixtures(conn: &mut MysqlConnection) {
-        diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            "#,
-        )
-        .execute(conn)
-        .expect("fixture tables");
+        // D-06: the suite owns the fixture DDL (backticked `groups` for
+        // the MySQL 8.4 reserved word); executed statement by statement.
+        for statement in rolify_test::ddl::MYSQL {
+            diesel::sql_query(*statement)
+                .execute(conn)
+                .expect("fixture tables");
+        }
     }
 
     fn reset_roles(conn: &mut MysqlConnection) {
@@ -399,6 +428,7 @@ mod mysql_concurrency {
     }
 
     fn test_find_or_create_race(role_name: &str, scope: ScopeKind) {
+        let _serial = RaceGuard::acquire(&RACE_SERIAL);
         let mut seed_conn = mysql_conn();
         reset_roles(&mut seed_conn);
 
@@ -460,6 +490,7 @@ mod mysql_concurrency {
     }
 
     fn test_add_race(role_name: &str, scope: ScopeKind) {
+        let _serial = RaceGuard::acquire(&RACE_SERIAL);
         let mut seed_conn = mysql_conn();
         reset_roles(&mut seed_conn);
 

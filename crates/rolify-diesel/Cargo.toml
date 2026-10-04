@@ -15,15 +15,18 @@ libsqlite3-sys = { version = ">=0.17.2, <0.39.0", features = ["bundled"], option
 
 [dev-dependencies]
 diesel = { workspace = true, features = ["r2d2"] }
+maybe-async = { workspace = true }
 rolify-test = { workspace = true, features = ["suite"] }
 testcontainers = "=0.27.3"
 testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["postgres", "mysql", "blocking"] }
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 default = []
-sync = ["rolify-core/is_sync"]
+is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
+sync = ["is_sync"]
 postgres = ["sync", "diesel/postgres", "dep:diesel_migrations"]
 mysql = ["sync", "diesel/mysql", "dep:diesel_migrations"]
 sqlite = ["sync", "diesel/sqlite", "diesel/returning_clauses_for_sqlite_3_35", "dep:diesel_migrations", "dep:libsqlite3-sys"]

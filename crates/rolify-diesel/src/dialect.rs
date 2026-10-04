@@ -27,10 +27,14 @@ pub fn placeholder(index: usize) -> String {
 }
 
 /// Return the positional placeholder for MySQL/SQLite (always `?`).
+///
+/// Returns an owned `String` like the Postgres variant so every call site
+/// shares one shape (the split return type broke the `mysql`/`sqlite`
+/// builds: `.map(placeholder).collect::<Vec<String>>()` rejects `&str`).
 #[cfg(any(feature = "mysql", feature = "sqlite"))]
 #[must_use]
-pub fn placeholder(_index: usize) -> &'static str {
-    "?"
+pub fn placeholder(_index: usize) -> String {
+    "?".to_owned()
 }
 
 /// Quote an identifier (table or column name) for the currently compiled backend.

@@ -28,7 +28,6 @@ use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
 use rolify_core::store::RoleStore;
 use rolify_diesel::{DieselStore, MIGRATIONS, rows::CountRow};
 
-use diesel::connection::SimpleConnection;
 use rolify_diesel::rows::IdRow;
 use testcontainers::ImageExt;
 use testcontainers_modules::{mysql, postgres, testcontainers::runners::SyncRunner};
@@ -77,49 +76,14 @@ mod pg_executor {
     }
 
     fn setup_fixtures(conn: &mut PgConnection) {
-        let sql = r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGSERIAL PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS customers (
-                id BIGSERIAL PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'Customer',
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS forums (
-                id BIGSERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS groups (
-                id BIGSERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS teams (
-                team_code VARCHAR(191) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS organizations (
-                id BIGSERIAL PRIMARY KEY,
-                type VARCHAR(191) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS rights (
-                id BIGSERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS moderators_rights (
-                moderator_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (moderator_id, right_id)
-            );
-            CREATE TABLE IF NOT EXISTS admin_rights (
-                admin_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (admin_id, right_id)
-            );
-            "#;
-        conn.batch_execute(sql).expect("fixture tables");
+        // D-06: the suite owns the fixture DDL; this leg executes the
+        // shared Postgres array statement by statement (the backticked
+        // form is what MySQL 8.4 requires for the `groups` table).
+        for statement in rolify_test::ddl::POSTGRES {
+            diesel::sql_query(*statement)
+                .execute(conn)
+                .expect("fixture tables");
+        }
     }
 
     fn reset_roles(conn: &mut PgConnection) {
@@ -403,49 +367,14 @@ mod mysql_executor {
     }
 
     fn setup_fixtures(conn: &mut MysqlConnection) {
-        let sql = r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS customers (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'Customer',
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS forums (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS groups (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS teams (
-                team_code VARCHAR(191) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS organizations (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                type VARCHAR(191) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS rights (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS moderators_rights (
-                moderator_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (moderator_id, right_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS admin_rights (
-                admin_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (admin_id, right_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            "#;
-        conn.batch_execute(sql).expect("fixture tables");
+        // D-06: the suite owns the fixture DDL; this leg executes the
+        // shared MySQL array statement by statement. The array quotes the
+        // reserved `groups` name with backticks (MySQL 8.4 syntax).
+        for statement in rolify_test::ddl::MYSQL {
+            diesel::sql_query(*statement)
+                .execute(conn)
+                .expect("fixture tables");
+        }
     }
 
     fn reset_roles(conn: &mut MysqlConnection) {

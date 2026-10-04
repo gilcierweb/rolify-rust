@@ -54,6 +54,20 @@ pub struct IdRow {
     pub id: i64,
 }
 
+/// Single-column row for `SELECT COUNT(*) AS count ...` probes.
+///
+/// Mirrors [`IdRow`]: the same derive plus per-engine backend check plus
+/// the single `BigInt` column. `COUNT(*)` reports `int8` on Postgres, an
+/// integer on MySQL/SQLite; `BigInt` decodes all three.
+#[derive(Debug, Clone, QueryableByName)]
+#[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
+#[cfg_attr(feature = "sqlite", diesel(check_for_backend(diesel::sqlite::Sqlite)))]
+pub struct CountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub count: i64,
+}
+
 /// Row for `holders_where` / `all_holders` — holder ids from the join.
 #[derive(Debug, Clone, QueryableByName)]
 #[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
