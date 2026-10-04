@@ -3,14 +3,14 @@
 //! Unlike the diesel reference adapter (whose engines are mutually
 //! exclusive features, so its switches compile-time `cfg`), sqlx engine
 //! features are ADDITIVE (D-11/D-13): one build may enable Postgres,
-//! MySQL, and SQLite at once. The engine is therefore a runtime property
+//! `MySQL`, and `SQLite` at once. The engine is therefore a runtime property
 //! of the `DB` type parameter, and both helpers switch on
-//! [`Database::NAME`] ("PostgreSQL" / "MySQL" / "SQLite", per the
+//! [`Database::NAME`] (`"PostgreSQL"` / `"MySQL"` / `"SQLite"`, per the
 //! backend crates' own consts).
 //!
 //! The query TEXT must carry the engine's native syntax: sqlx writes `?`
 //! by trait default and only the Postgres backend overrides it with `$N`
-//! (`PgArguments::format_placeholder`), so hand-written SQL aimed at a
+//! ([`PgArguments::format_placeholder`]), so hand-written SQL aimed at a
 //! prepared statement must already carry `$N` for Postgres and `?` for
 //! MySQL/SQLite.
 
@@ -18,11 +18,11 @@ use sqlx::database::Database;
 
 /// Return the positional placeholder for `DB` at the 1-based `index`.
 ///
-/// - PostgreSQL: `$1`, `$2`, ...
-/// - MySQL / SQLite: `?` (anonymous positional)
+/// - `PostgreSQL`: `$1`, `$2`, ...
+/// - `MySQL` / `SQLite`: `?` (anonymous positional)
 ///
 /// Every placeholder OCCURRENCE in a template consumes exactly one bind.
-/// Postgres allows reusing `$N` across occurrences, but MySQL and SQLite
+/// Postgres allows reusing `$N` across occurrences, but `MySQL` and `SQLite`
 /// positional `?` marks cannot share a bind, so the adapter's uniform
 /// discipline is one bind per occurrence on every engine: the same SQL
 /// text then works on all three with one ordered bind list.
@@ -41,8 +41,8 @@ pub fn placeholder<DB: Database>(index: usize) -> String {
 
 /// Quote an identifier (table or column name) for `DB`.
 ///
-/// - PostgreSQL / SQLite: double quotes (`"identifier"`)
-/// - MySQL: backticks (`` `identifier` ``)
+/// - `PostgreSQL` / `SQLite`: double quotes (`"identifier"`)
+/// - `MySQL`: backticks (`` `identifier` ``)
 ///
 /// The input must have already passed the D-08 allow-list validation
 /// (`RolifyConfigBuilder::validate_identifier`,

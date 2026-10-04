@@ -174,6 +174,32 @@ pub async fn reset_roles_pg(pool: &PgPool) {
         .expect("truncate roles on Postgres");
 }
 
+/// Truncate the suite fixture tables and restart their identity
+/// sequences (Postgres arm of the diesel support's `reset_fixtures`; no
+/// CASCADE needed because no foreign key points at a fixture table).
+/// The resource-side acceptance cases share one container database, so
+/// every case starts from a clean fixture slate.
+#[cfg(feature = "postgres")]
+pub async fn reset_fixtures_pg(pool: &PgPool) {
+    sqlx::query(
+        "TRUNCATE TABLE users, customers, forums, groups, teams, organizations, rights, moderators_rights, admin_rights RESTART IDENTITY",
+    )
+    .execute(pool)
+    .await
+    .expect("truncate fixtures on Postgres");
+}
+
+/// Process-wide serializer for test cases sharing one container
+/// database: the async counterpart of the diesel support's
+/// `SuiteGuard`. Every resource-side acceptance case truncates the
+/// shared tables, so concurrent cases on neighboring test threads must
+/// not interleave; the guard is held for a whole case body.
+#[cfg(feature = "postgres")]
+pub async fn suite_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    static SUITE_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    SUITE_MUTEX.lock().await
+}
+
 /// Reset role state for test isolation.
 ///
 /// MySQL forbids `TRUNCATE` on a table referenced by a foreign key
@@ -440,6 +466,37 @@ pub async fn insert_resource_sqlite(
         .fetch_one(&mut *conn)
         .await
         .expect("last insert rowid on SQLite");
+    ResourceKey::new(type_name, row.get::<i64, _>(0).to_string())
+}
+
+/// Insert a `teams` row keyed by its string `team_code` primary key (the
+/// gem's non-integer PK fixture, `spec/support/schema.rb`). Static
+/// statement: no interpolation, plain binds for both values.
+#[cfg(feature = "postgres")]
+pub async fn insert_team_pg(conn: &mut sqlx::PgConnection, team_code: &str, name: &str) {
+    sqlx::query("INSERT INTO teams (team_code, name) VALUES ($1, $2)")
+        .bind(team_code)
+        .bind(name)
+        .execute(conn)
+        .await
+        .expect("insert team on Postgres");
+}
+
+/// Insert an STI `organizations` row of the given type
+/// (`"Organization"`, `"Company"`) and return its resource key with the
+/// stringified generated id. Static statement (the `type` column name
+/// is quoted per Postgres rules); the STI type travels as a bind.
+#[cfg(feature = "postgres")]
+pub async fn insert_organization_pg(
+    conn: &mut sqlx::PgConnection,
+    type_name: &str,
+) -> ResourceKey {
+    let row =
+        sqlx::query("INSERT INTO organizations (\"type\") VALUES ($1) RETURNING id")
+            .bind(type_name)
+            .fetch_one(conn)
+            .await
+            .expect("insert organization on Postgres");
     ResourceKey::new(type_name, row.get::<i64, _>(0).to_string())
 }
 

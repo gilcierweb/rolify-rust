@@ -11,7 +11,7 @@
 //!   never interpolated raw.
 //! - Placeholders emit through `dialect::placeholder::<DB>` and switch on
 //!   `DB::NAME` at runtime (engines are additive, D-13): `$N` for
-//!   PostgreSQL, `?` for MySQL/SQLite.
+//!   `PostgreSQL`, `?` for MySQL/SQLite.
 //! - ONE BIND PER OCCURRENCE. Postgres can reuse `$N` across occurrences
 //!   but MySQL/SQLite `?` marks cannot share a bind, so every placeholder
 //!   occurrence in a template consumes exactly one entry of the ordered
@@ -220,7 +220,7 @@ pub(crate) fn select_roles_of<DB: Database>(role_table: &str, join_table: &str) 
 /// triple: the `find_or_create_by` SELECT-first leg and the re-SELECT
 /// after INSERT. Returns at most one row (the UNIQUE triple).
 ///
-/// Bind order: 1=name, 2=resource_type, 3=resource_id.
+/// Bind order: `` 1=name ``, `` 2=resource_type ``, `` 3=resource_id ``.
 #[must_use]
 pub(crate) fn select_role_by_triple<DB: Database>(role_table: &str) -> String {
     format!(
@@ -233,11 +233,11 @@ pub(crate) fn select_role_by_triple<DB: Database>(role_table: &str) -> String {
     )
 }
 
-/// INSERT a new role row (name, resource_type, resource_id). The caller
+/// INSERT a new role row (name, `resource_type`, `resource_id`). The caller
 /// re-SELECTs by triple afterwards to load the generated id (portable:
-/// MySQL has no RETURNING).
+/// `MySQL` has no RETURNING).
 ///
-/// Bind order: 1=name, 2=resource_type, 3=resource_id.
+/// Bind order: `1=name`, `2=resource_type`, `3=resource_id`.
 #[must_use]
 pub(crate) fn insert_role<DB: Database>(role_table: &str) -> String {
     format!(
@@ -251,7 +251,7 @@ pub(crate) fn insert_role<DB: Database>(role_table: &str) -> String {
 
 /// SELECT a role row id by triple (link building and the orphan sweep).
 ///
-/// Bind order: 1=name, 2=resource_type, 3=resource_id.
+/// Bind order: `` 1=name ``, `` 2=resource_type ``, `` 3=resource_id ``.
 #[must_use]
 pub(crate) fn select_role_id_by_triple<DB: Database>(role_table: &str) -> String {
     format!(
@@ -266,7 +266,7 @@ pub(crate) fn select_role_id_by_triple<DB: Database>(role_table: &str) -> String
 /// INSERT a link (holder -> role) into the join table
 /// (`relation.roles << role`, `role_adapter.rb:52-54`).
 ///
-/// Bind order: 1=user_id (text), 2=role_id (i64).
+/// Bind order: `` 1=user_id (text) ``, `` 2=role_id (i64) ``.
 #[must_use]
 pub(crate) fn insert_link<DB: Database>(join_table: &str) -> String {
     format!(
@@ -368,11 +368,11 @@ pub(crate) fn select_affected_roles<DB: Database>(
 }
 
 /// SELECT whether any link still references a role row: the orphan-sweep
-/// decision. sqlx replacement for the diesel store's rows_affected read
+/// decision. sqlx replacement for the diesel store's `rows_affected` read
 /// on the orphan DELETE (unreachable on generic `DB::QueryResult`,
 /// Pitfall 5): the sweep decides BEFORE deleting.
 ///
-/// Bind order: 1=role id (i64).
+/// Bind order: `1=role id (i64)`.
 #[must_use]
 pub(crate) fn select_link_exists_for_role<DB: Database>(join_table: &str) -> String {
     format!(
@@ -403,7 +403,7 @@ pub(crate) fn delete_orphan_role<DB: Database>(role_table: &str, join_table: &st
 /// (`resource_type`, `resource_id`): the count-by-selection leg of
 /// `remove_roles_for_scope` (Pitfall 5).
 ///
-/// Bind order: 1=resource_type, 2=resource_id.
+/// Bind order: `` 1=resource_type ``, `` 2=resource_id ``.
 #[must_use]
 pub(crate) fn select_role_ids_by_scope<DB: Database>(role_table: &str) -> String {
     format!(

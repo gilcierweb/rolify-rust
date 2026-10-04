@@ -381,10 +381,10 @@ where
 /// Portable unique-violation detection (T-04-05):
 /// `DatabaseError::code()` is the engine's SQLSTATE-like code. Recorded
 /// from the 04-01 migration probes on real engines: Postgres reports
-/// `23505`, MySQL reports `23000` (the SQLSTATE through `code()`; the
-/// native `1062` exists only on `MySqlDatabaseError::number()` and is
+/// `` 23505 ``, `MySQL` reports `` 23000 `` (the SQLSTATE through `code()`; the
+/// native `` 1062 `` exists only on `MySqlDatabaseError::number()` and is
 /// caught here as well for drivers that surface it through `code()`),
-/// and SQLite reports the extended result code `2067`
+/// and `SQLite` reports the extended result code `` 2067 ``
 /// (`SQLITE_CONSTRAINT_UNIQUE`).
 fn is_unique_violation(error: &sqlx::Error) -> bool {
     match error {
@@ -876,10 +876,10 @@ where
                 (String::new(), next_index)
             };
             let sql_text = base_sql
-                .replace("{{type_filter}}", &type_filter)
-                .replace("{{name_filter}}", &name_filter)
-                .replace("{{scope_filter}}", &scope_filter)
-                .replace("{{holder_filter}}", &holder_filter);
+                .replace("{type_filter}", &type_filter)
+                .replace("{name_filter}", &name_filter)
+                .replace("{scope_filter}", &scope_filter)
+                .replace("{holder_filter}", &holder_filter);
 
             let mut binds: Vec<BindValue> = query
                 .types
