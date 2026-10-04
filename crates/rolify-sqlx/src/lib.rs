@@ -33,10 +33,44 @@
 //!
 //! - [`error`]: `Error` enum wrapping `sqlx::Error` + `RolifyError`.
 //! - [`sentinel`]: `None` ↔ `''` translation at the adapter boundary only.
+//! - `MIGRATIONS_POSTGRES` / `MIGRATIONS_MYSQL` / `MIGRATIONS_SQLITE`:
+//!   per-engine `sqlx::migrate::Migrator` statics built from the vendored
+//!   migration trees (D-01/D-02). Consumers invoke `.run(&pool)` themselves;
+//!   the crate never migrates automatically.
 //!
 //! The store, SQL templates, dialect, and row types land in later plans of
-//! this phase; the `MIGRATIONS_<ENGINE>` exports ship with the vendored
-//! migration trees (D-01/D-02).
+//! this phase.
+
+// Vendored migration exports (D-01/D-04/D-05): flat sqlx layout, byte-identical
+// to the canonical `rolify-diesel` trees; `tests/drift_guard.rs` enforces the
+// identity on every `cargo test` run (D-03).
+
+/// Postgres migrations vendored byte-identically from the canonical
+/// `rolify-diesel` tree.
+///
+/// Consumers invoke `MIGRATIONS_POSTGRES.run(&pool).await` themselves; this
+/// crate never migrates automatically (D-02, mirroring rolify-diesel's
+/// Phase 3 D-11).
+#[cfg(feature = "postgres")]
+pub static MIGRATIONS_POSTGRES: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+
+/// `MySQL` migrations vendored byte-identically from the canonical
+/// `rolify-diesel` tree.
+///
+/// Consumers invoke `MIGRATIONS_MYSQL.run(&pool).await` themselves; this
+/// crate never migrates automatically (D-02, mirroring rolify-diesel's
+/// Phase 3 D-11).
+#[cfg(feature = "mysql")]
+pub static MIGRATIONS_MYSQL: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql");
+
+/// `SQLite` migrations vendored byte-identically from the canonical
+/// `rolify-diesel` tree.
+///
+/// Consumers invoke `MIGRATIONS_SQLITE.run(&pool).await` themselves; this
+/// crate never migrates automatically (D-02, mirroring rolify-diesel's
+/// Phase 3 D-11).
+#[cfg(feature = "sqlite")]
+pub static MIGRATIONS_SQLITE: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 pub mod error;
 pub mod sentinel;

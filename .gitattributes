@@ -1,0 +1,4 @@
+# sqlx migration checksums are line-ending-sensitive (04-RESEARCH Pitfall 10):
+# pin *.sql to LF so Migrator checksums and the drift-guard's byte-identity
+# assertions stay reproducible across checkouts (including CRLF-native ones).
+*.sql text eol=lf
