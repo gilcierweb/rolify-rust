@@ -174,15 +174,24 @@ pub async fn reset_roles_pg(pool: &PgPool) {
         .expect("truncate roles on Postgres");
 }
 
-/// Reset role state (truncate roles + users_roles) for test isolation.
+/// Reset role state for test isolation.
 ///
-/// Mirrors the diesel support shape: plain TRUNCATE on MySQL.
+/// MySQL forbids `TRUNCATE` on a table referenced by a foreign key
+/// (`users_roles.role_id` references `roles.id`, error 1701), so the reset
+/// is the FK-safe `DELETE` pair, child links before parent rows (the
+/// generated ids are stringified holder/role keys, never asserted, so no
+/// `AUTO_INCREMENT` reset is needed). Does NOT touch consumer fixture
+/// tables.
 #[cfg(feature = "mysql")]
 pub async fn reset_roles_mysql(pool: &MySqlPool) {
-    sqlx::query("TRUNCATE TABLE users_roles, roles")
+    sqlx::query("DELETE FROM users_roles")
         .execute(pool)
         .await
-        .expect("truncate roles on MySQL");
+        .expect("delete users_roles on MySQL");
+    sqlx::query("DELETE FROM roles")
+        .execute(pool)
+        .await
+        .expect("delete roles on MySQL");
 }
 
 /// Reset role state (delete roles + users_roles rows) for test isolation.
@@ -335,14 +344,16 @@ pub async fn insert_holder_mysql(
     sqlx::query(sqlx::AssertSqlSafe(sql_text.as_str()))
         .bind(holder_type)
         .bind(name)
-        .execute(conn)
+        .execute(&mut *conn)
         .await
         .expect("insert holder on MySQL");
     let row = sqlx::query("SELECT LAST_INSERT_ID()")
-        .fetch_one(conn)
+        .fetch_one(&mut *conn)
         .await
         .expect("last insert id on MySQL");
-    ResourceId::from(row.get::<i64, _>(0))
+    // `LAST_INSERT_ID()` reports `BIGINT UNSIGNED`: decode as `u64`
+    // (the `i64` decode rejects unsigned columns on this driver).
+    ResourceId::from(row.get::<u64, _>(0))
 }
 
 /// Insert a fixture holder row on SQLite (last_insert_rowid on the same
@@ -358,11 +369,11 @@ pub async fn insert_holder_sqlite(
     sqlx::query(sqlx::AssertSqlSafe(sql_text.as_str()))
         .bind(holder_type)
         .bind(name)
-        .execute(conn)
+        .execute(&mut *conn)
         .await
         .expect("insert holder on SQLite");
     let row = sqlx::query("SELECT last_insert_rowid()")
-        .fetch_one(conn)
+        .fetch_one(&mut *conn)
         .await
         .expect("last insert rowid on SQLite");
     ResourceId::from(row.get::<i64, _>(0))
@@ -400,14 +411,15 @@ pub async fn insert_resource_mysql(
     let sql_text = format!("INSERT INTO {table} (name) VALUES (?)");
     sqlx::query(sqlx::AssertSqlSafe(sql_text.as_str()))
         .bind(name)
-        .execute(conn)
+        .execute(&mut *conn)
         .await
         .expect("insert resource on MySQL");
     let row = sqlx::query("SELECT LAST_INSERT_ID()")
-        .fetch_one(conn)
+        .fetch_one(&mut *conn)
         .await
         .expect("last insert id on MySQL");
-    ResourceKey::new(type_name, row.get::<i64, _>(0).to_string())
+    // `LAST_INSERT_ID()` reports `BIGINT UNSIGNED`: decode as `u64`.
+    ResourceKey::new(type_name, row.get::<u64, _>(0).to_string())
 }
 
 /// Insert a fixture resource row on SQLite (last_insert_rowid).
@@ -421,11 +433,11 @@ pub async fn insert_resource_sqlite(
     let sql_text = format!("INSERT INTO {table} (name) VALUES (?)");
     sqlx::query(sqlx::AssertSqlSafe(sql_text.as_str()))
         .bind(name)
-        .execute(conn)
+        .execute(&mut *conn)
         .await
         .expect("insert resource on SQLite");
     let row = sqlx::query("SELECT last_insert_rowid()")
-        .fetch_one(conn)
+        .fetch_one(&mut *conn)
         .await
         .expect("last insert rowid on SQLite");
     ResourceKey::new(type_name, row.get::<i64, _>(0).to_string())
@@ -509,4 +521,67 @@ where
     fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn) {
         (&mut self.store, &mut self.conn)
     }
+}
+
+// ============================================================
+// File-backed SQLite (the sqlite tracer's shared database)
+// ============================================================
+
+/// Connect to a file-backed SQLite database (creating it when missing)
+/// with FK enforcement on every connection.
+///
+/// Rationale: each `:memory:` connection owns a private database, so a
+/// mirror tracer with two holders on two connections plus a shared
+/// migration run needs a shared file. The path lives under
+/// `std::env::temp_dir()` (honoring `TMPDIR`); the caller owns cleanup.
+#[cfg(feature = "sqlite")]
+pub async fn sqlite_file_conn(path: &std::path::Path) -> sqlx::SqliteConnection {
+    let connect_options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .foreign_keys(true);
+    sqlx::SqliteConnection::connect_with(&connect_options)
+        .await
+        .expect("SQLite file connection")
+}
+
+/// Apply the vendored SQLite migrations on a single connection (the
+/// file-backed tracer's shared database; `Migrator::run` accepts a
+/// reborrowed connection through the per-backend `Acquire` impl).
+#[cfg(feature = "sqlite")]
+pub async fn apply_migrations_sqlite_conn(conn: &mut sqlx::SqliteConnection) {
+    rolify_sqlx::MIGRATIONS_SQLITE
+        .run(&mut *conn)
+        .await
+        .expect("SQLite migrations apply cleanly");
+}
+
+/// Create the suite fixture tables on a single SQLite connection
+/// (the D-06 `rolify_test::ddl::SQLITE` arrays, same statements as the
+/// pool helper).
+#[cfg(feature = "sqlite")]
+pub async fn setup_fixtures_sqlite_conn(conn: &mut sqlx::SqliteConnection) {
+    for statement in rolify_test::ddl::SQLITE {
+        sqlx::query(*statement)
+            .execute(&mut *conn)
+            .await
+            .unwrap_or_else(|error| panic!("fixture DDL failed on SQLite: {error}\n{statement}"));
+    }
+}
+
+/// Reset role state on a single SQLite connection (the DELETE pair from
+/// the pool helper, plus the best-effort `sqlite_sequence` sweep).
+#[cfg(feature = "sqlite")]
+pub async fn reset_roles_sqlite_conn(conn: &mut sqlx::SqliteConnection) {
+    sqlx::query("DELETE FROM users_roles")
+        .execute(&mut *conn)
+        .await
+        .expect("delete users_roles on SQLite");
+    sqlx::query("DELETE FROM roles")
+        .execute(&mut *conn)
+        .await
+        .expect("delete roles on SQLite");
+    let _ = sqlx::query("DELETE FROM sqlite_sequence WHERE name IN ('roles')")
+        .execute(&mut *conn)
+        .await;
 }

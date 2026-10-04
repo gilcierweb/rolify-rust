@@ -88,7 +88,7 @@ pub const MYSQL: &[&str] = &[
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;",
-    "CREATE TABLE IF NOT EXISTS groups (
+    "CREATE TABLE IF NOT EXISTS `groups` (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;",
