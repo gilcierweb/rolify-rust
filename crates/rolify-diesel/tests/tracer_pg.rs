@@ -15,11 +15,17 @@
 
 #![cfg(all(feature = "sync", feature = "postgres"))]
 
+mod support;
+
 use diesel::Connection;
+use diesel::RunQueryDsl;
+use diesel_migrations::MigrationHarness;
 use rolify_core::config::RolifyConfig;
+use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
-use rolify_core::store::RemovalTarget;
+use rolify_core::store::RoleStore;
+use rolify_diesel::rows::CountRow;
 use rolify_diesel::{DieselStore, MIGRATIONS};
 
 use crate::support::{pg_conn, pg_container, reset_roles, setup_fixtures};
@@ -30,6 +36,8 @@ fn tracer_grant_check_revoke_lifecycle() {
     let _container = pg_container(); // ensure started
     let mut conn = pg_conn();
 
+    // Serialized with the other tests sharing this database.
+    let _serial = crate::support::SuiteGuard::acquire();
     // 2. Apply migrations
     conn.run_pending_migrations(MIGRATIONS)
         .expect("migrations apply");
@@ -302,11 +310,11 @@ fn tracer_grant_check_revoke_lifecycle() {
     );
 
     // Verify only ONE role row exists for (admin, '', '')
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count admin rows");
     assert_eq!(
-        count, 1,
+        count_row.count, 1,
         "exactly one global admin role row (no duplicates)"
     );
 
@@ -320,11 +328,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("add admin third time");
     assert!(!added_third);
 
-    let link_count: i64 = diesel::sql_query("SELECT COUNT(*) FROM users_roles WHERE user_id = $1 AND role_id = (SELECT id FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = '')")
+    let link_count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM users_roles WHERE user_id = $1 AND role_id = (SELECT id FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = '')")
         .bind::<diesel::sql_types::Text, _>(user_id.as_str())
         .get_result(&mut conn)
         .expect("count links");
-    assert_eq!(link_count, 1, "exactly one link for admin (no duplicates)");
+    assert_eq!(link_count_row.count, 1, "exactly one link for admin (no duplicates)");
 
     // ============================================================
     // REMOVE PHASE: transactional with orphan sweep (PITFALL 2 / SC-3)
@@ -349,10 +357,10 @@ fn tracer_grant_check_revoke_lifecycle() {
     assert_eq!(outcome.removed_roles[0].name.as_str(), "moderator");
 
     // Verify role row is gone
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'moderator' AND resource_type = 'Forum' AND resource_id = '42'")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'moderator' AND resource_type = 'Forum' AND resource_id = '42'")
         .get_result(&mut conn)
         .expect("count moderator rows");
-    assert_eq!(count, 0, "moderator role row deleted by orphan sweep");
+    assert_eq!(count_row.count, 0, "moderator role row deleted by orphan sweep");
 
     // Remove class role (TypeSweep) — class role has no other holders, so it should be deleted
     let outcome = store
@@ -437,10 +445,10 @@ fn tracer_grant_check_revoke_lifecycle() {
     );
 
     // Verify role row still exists
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'editor' AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'editor' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count editor rows");
-    assert_eq!(count, 1, "editor role row survives");
+    assert_eq!(count_row.count, 1, "editor role row survives");
 
     // Remove from user2 — now role row should be deleted
     let outcome = store
@@ -497,11 +505,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("find_or_create_by admin");
     store.add(&mut conn, &user, &admin_low).expect("add admin");
 
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name IN ('Admin', 'admin') AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name IN ('Admin', 'admin') AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count admin rows");
     assert_eq!(
-        count, 2,
+        count_row.count, 2,
         "byte-exact: 'Admin' and 'admin' are two distinct rows"
     );
 
@@ -517,6 +525,8 @@ fn tracer_concurrent_find_or_create_by_race() {
     use std::sync::Arc;
     use std::thread;
 
+    // Serialized with the other tests sharing this database.
+    let _serial = crate::support::SuiteGuard::acquire();
     let _container = pg_container();
     let config = RolifyConfig::builder().build().unwrap();
 
@@ -560,11 +570,11 @@ fn tracer_concurrent_find_or_create_by_race() {
 
     // Verify exactly ONE role row exists
     let mut conn = pg_conn();
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'racer' AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'racer' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count racer rows");
     assert_eq!(
-        count, 1,
+        count_row.count, 1,
         "concurrent find_or_create_by created exactly one row"
     );
 }

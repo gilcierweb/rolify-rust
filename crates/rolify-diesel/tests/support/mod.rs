@@ -10,7 +10,7 @@
 //! - Multi-pair fixture setup (mirrors `rolify/spec/support/schema.rb`)
 
 use std::sync::{Arc, OnceLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use diesel::Connection;
 use diesel::RunQueryDsl;
@@ -18,36 +18,82 @@ use diesel::connection::InstrumentationEvent;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel_migrations::MigrationHarness;
 use rolify_core::role::ResourceId;
-use rolify_diesel::{DieselStore, MIGRATIONS};
+use rolify_diesel::rows::IdRow;
+use rolify_diesel::MIGRATIONS;
 
 #[cfg(feature = "postgres")]
 use diesel::pg::PgConnection;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use testcontainers::runners::SyncRunner;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use testcontainers::ImageExt;
 #[cfg(feature = "postgres")]
-use testcontainers_modules::{postgres, testcontainers::runners::SyncRunner};
+use testcontainers_modules::postgres;
 
 #[cfg(feature = "mysql")]
 use diesel::mysql::MysqlConnection;
 #[cfg(feature = "mysql")]
-use testcontainers_modules::{mysql, testcontainers::runners::SyncRunner};
+use testcontainers_modules::mysql;
 
 #[cfg(feature = "sqlite")]
 use diesel::sqlite::SqliteConnection;
-use testcontainers_modules::{mysql, testcontainers::runners::SyncRunner};
 
+// Per-engine connection type for the monomorphic helpers below.
+// Diesel 2.3 only executes `sql_query` against concrete backends
+// (generic `C: Connection` fails the specialization bounds), so every
+// helper takes `&mut Conn` instead of a generic connection.
+#[cfg(feature = "postgres")]
+type Conn = diesel::pg::PgConnection;
+#[cfg(feature = "mysql")]
+type Conn = diesel::mysql::MysqlConnection;
 #[cfg(feature = "sqlite")]
-use diesel::sqlite::SqliteConnection;
+type Conn = diesel::sqlite::SqliteConnection;
+
+/// Process-wide serializer for tests sharing one database.
+///
+/// Every backend build truncates the shared `roles` tables, so two
+/// suite cases running on neighboring threads wipe each other's rows
+/// (the recorded Phase 3 gap 2 mechanism, proven on the race helpers
+/// in `concurrency.rs`). Each `DieselBackend` holds this guard for its
+/// whole lifetime. Acquisition spins on `yield_now`: timing-free,
+/// correctness never depends on timing, only liveness.
+/// `std::sync::Mutex` cannot serve here because its guard is `!Sync`
+/// and the backend must stay `Sync` for the `TestBackend` bound.
+static SUITE_SERIAL: AtomicBool = AtomicBool::new(false);
+
+/// Held for one backend's whole lifetime; releases on drop.
+pub struct SuiteGuard {
+    flag: &'static AtomicBool,
+}
+
+impl SuiteGuard {
+    /// Acquire the process-wide suite lock (spins until free).
+    #[must_use]
+    pub fn acquire() -> Self {
+        while SUITE_SERIAL.swap(true, Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        Self { flag: &SUITE_SERIAL }
+    }
+}
+
+impl Drop for SuiteGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
 
 /// Shared Postgres container per test binary (SyncRunner).
 #[cfg(feature = "postgres")]
-static PG_CONTAINER: OnceLock<testcontainers::Container<SyncRunner, postgres::Postgres>> = OnceLock::new();
+static PG_CONTAINER: OnceLock<testcontainers::Container<postgres::Postgres>> = OnceLock::new();
 
 /// Shared MySQL container per test binary (SyncRunner).
 #[cfg(feature = "mysql")]
-static MYSQL_CONTAINER: OnceLock<testcontainers::Container<SyncRunner, mysql::Mysql>> = OnceLock::new();
+static MYSQL_CONTAINER: OnceLock<testcontainers::Container<mysql::Mysql>> = OnceLock::new();
 
 /// Get or start the shared Postgres container.
 #[cfg(feature = "postgres")]
-pub fn pg_container() -> &'static testcontainers::Container<SyncRunner, postgres::Postgres> {
+pub fn pg_container() -> &'static testcontainers::Container<postgres::Postgres> {
     PG_CONTAINER.get_or_init(|| {
         postgres::Postgres::default()
             .with_tag("17")
@@ -58,7 +104,7 @@ pub fn pg_container() -> &'static testcontainers::Container<SyncRunner, postgres
 
 /// Get or start the shared MySQL container.
 #[cfg(feature = "mysql")]
-pub fn mysql_container() -> &'static testcontainers::Container<SyncRunner, mysql::Mysql> {
+pub fn mysql_container() -> &'static testcontainers::Container<mysql::Mysql> {
     MYSQL_CONTAINER.get_or_init(|| {
         mysql::Mysql::default()
             .with_tag("8.4")
@@ -98,9 +144,10 @@ pub fn sqlite_conn() -> SqliteConnection {
 }
 
 /// Run the embedded migrations on a connection.
-pub fn run_migrations<C>(conn: &mut C)
+pub fn run_migrations<Conn, Backend>(conn: &mut Conn)
 where
-    C: MigrationHarness<diesel::backend::Backend> + Connection,
+    Conn: MigrationHarness<Backend>,
+    Backend: diesel::backend::Backend,
 {
     conn.run_pending_migrations(MIGRATIONS)
         .expect("embedded migrations apply cleanly");
@@ -110,10 +157,7 @@ where
 ///
 /// Uses TRUNCATE ... CASCADE on Postgres/MySQL, DELETE on SQLite.
 /// Does NOT touch fixture tables (users, customers, forums, etc.).
-pub fn reset_roles<C>(conn: &mut C)
-where
-    C: Connection,
-{
+pub fn reset_roles(conn: &mut Conn) {
     #[cfg(feature = "postgres")]
     {
         diesel::sql_query("TRUNCATE TABLE users_roles, roles RESTART IDENTITY CASCADE")
@@ -122,9 +166,16 @@ where
     }
     #[cfg(feature = "mysql")]
     {
-        diesel::sql_query("TRUNCATE TABLE users_roles, roles")
+        // MySQL forbids TRUNCATE on a table referenced by a foreign key
+        // (error 1701: users_roles.role_id references roles.id), so the
+        // reset is the FK-safe DELETE pair, child links before parent
+        // rows (the landed rolify-sqlx helper documents the same rule).
+        diesel::sql_query("DELETE FROM users_roles")
             .execute(conn)
-            .expect("truncate roles");
+            .expect("delete users_roles");
+        diesel::sql_query("DELETE FROM roles")
+            .execute(conn)
+            .expect("delete roles");
     }
     #[cfg(feature = "sqlite")]
     {
@@ -143,6 +194,12 @@ where
 
 /// Setup fixture tables mirroring `rolify/spec/support/schema.rb`.
 ///
+/// D-06: the statement text lives in the shared suite
+/// (`rolify_test::ddl`); this helper only executes the array for the
+/// compiled engine, one `sql_query` execution per statement with the
+/// same error message as the inlined blocks it replaces. Function name
+/// and signature are unchanged, so every call site keeps working.
+///
 /// Creates:
 /// - `users` (id BIGSERIAL/INTEGER PK, rolify_type VARCHAR, name VARCHAR)
 /// - `customers` (id BIGSERIAL/INTEGER PK, rolify_type VARCHAR, name VARCHAR)
@@ -156,167 +213,91 @@ where
 ///
 /// These are the consumer tables the suite expects. The store's
 /// `holder_table` for the default pair is `users`.
-pub fn setup_fixtures<C>(conn: &mut C)
-where
-    C: Connection,
-{
+pub fn setup_fixtures(conn: &mut Conn) {
+    #[cfg(feature = "postgres")]
+    for statement in rolify_test::ddl::POSTGRES {
+        diesel::sql_query(*statement)
+            .execute(conn)
+            .expect("fixture tables");
+    }
+    #[cfg(feature = "mysql")]
+    for statement in rolify_test::ddl::MYSQL {
+        diesel::sql_query(*statement)
+            .execute(conn)
+            .expect("fixture tables");
+    }
+    #[cfg(feature = "sqlite")]
+    for statement in rolify_test::ddl::SQLITE {
+        diesel::sql_query(*statement)
+            .execute(conn)
+            .expect("fixture tables");
+    }
+}
+
+/// Reset consumer fixture tables for test isolation.
+///
+/// TRUNCATEs (Postgres/MySQL) or DELETEs (SQLite) the nine fixture
+/// tables `setup_fixtures` creates. Role state is NOT touched (use
+/// `reset_roles` for that). Fixture tables carry no foreign keys, so
+/// no CASCADE is needed. Identity sequences restart where the engine
+/// allows it, so the first inserted rows deterministically take the
+/// canonical fixture ids again. Tests asserting over fixture-table
+/// contents (class expansion, holder universes) call this for
+/// hermetic per-test universes; role/link-scoped tests do not need it.
+pub fn reset_fixtures(conn: &mut Conn) {
     #[cfg(feature = "postgres")]
     {
         diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGSERIAL PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS customers (
-                id BIGSERIAL PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'Customer',
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS forums (
-                id BIGSERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS groups (
-                id BIGSERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS teams (
-                team_code VARCHAR(191) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS organizations (
-                id BIGSERIAL PRIMARY KEY,
-                type VARCHAR(191) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS rights (
-                id BIGSERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS moderators_rights (
-                moderator_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (moderator_id, right_id)
-            );
-            CREATE TABLE IF NOT EXISTS admin_rights (
-                admin_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (admin_id, right_id)
-            );
-            "#
+            "TRUNCATE TABLE users, customers, forums, groups, teams, organizations, rights, moderators_rights, admin_rights RESTART IDENTITY",
         )
         .execute(conn)
-        .expect("fixture tables");
+        .expect("truncate fixtures");
     }
     #[cfg(feature = "mysql")]
     {
+        // No foreign key points at a fixture table, so TRUNCATE is
+        // safe here (unlike the roles reset above) and restarts the
+        // AUTO_INCREMENT counters.
         diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS customers (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                rolify_type VARCHAR(191) NOT NULL DEFAULT 'Customer',
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS forums (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS groups (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS teams (
-                team_code VARCHAR(191) PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS organizations (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                type VARCHAR(191) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS rights (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS moderators_rights (
-                moderator_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (moderator_id, right_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            CREATE TABLE IF NOT EXISTS admin_rights (
-                admin_id VARCHAR(191) NOT NULL,
-                right_id BIGINT NOT NULL,
-                PRIMARY KEY (admin_id, right_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            "#
+            "TRUNCATE TABLE users, customers, forums, groups, teams, organizations, rights, moderators_rights, admin_rights",
         )
         .execute(conn)
-        .expect("fixture tables");
+        .expect("truncate fixtures");
     }
     #[cfg(feature = "sqlite")]
     {
+        for table in [
+            "users",
+            "customers",
+            "forums",
+            "groups",
+            "teams",
+            "organizations",
+            "rights",
+            "moderators_rights",
+            "admin_rights",
+        ] {
+            diesel::sql_query(format!("DELETE FROM {table}"))
+                .execute(conn)
+                .unwrap_or_else(|error| panic!("delete fixtures from {table}: {error}"));
+        }
+        // Restart the rowid aliases so reinserted rows take the
+        // canonical ids again (best effort: only AUTOINCREMENT tables
+        // track here).
         diesel::sql_query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rolify_type TEXT NOT NULL DEFAULT 'User',
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS customers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rolify_type TEXT NOT NULL DEFAULT 'Customer',
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS forums (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS groups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS teams (
-                team_code TEXT PRIMARY KEY,
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS organizations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS rights (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS moderators_rights (
-                moderator_id TEXT NOT NULL,
-                right_id INTEGER NOT NULL,
-                PRIMARY KEY (moderator_id, right_id)
-            );
-            CREATE TABLE IF NOT EXISTS admin_rights (
-                admin_id TEXT NOT NULL,
-                right_id INTEGER NOT NULL,
-                PRIMARY KEY (admin_id, right_id)
-            );
-            "#
+            "DELETE FROM sqlite_sequence WHERE name IN ('users', 'customers', 'forums', 'groups', 'organizations', 'rights')",
         )
         .execute(conn)
-        .expect("fixture tables");
+        .ok();
     }
 }
 
 /// Insert a fixture holder (user/customer/admin/etc.) and return its ID.
-pub fn insert_holder<C>(conn: &mut C, table: &str, holder_type: &str, name: &str) -> ResourceId
-where
-    C: Connection,
-{
+pub fn insert_holder(conn: &mut Conn, table: &str, holder_type: &str, name: &str) -> ResourceId {
     #[cfg(feature = "postgres")]
     {
-        let id: i64 = diesel::sql_query(&format!(
+        // Use RETURNING id in the INSERT (works for integer PK tables like forums, groups, etc.)
+        let row: IdRow = diesel::sql_query(&format!(
             "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
             table
         ))
@@ -324,7 +305,7 @@ where
         .bind::<diesel::sql_types::Text, _>(name)
         .get_result(conn)
         .expect("insert holder");
-        ResourceId::from(id)
+        ResourceId::from(row.id)
     }
     #[cfg(feature = "mysql")]
     {
@@ -336,11 +317,11 @@ where
         .bind::<diesel::sql_types::Text, _>(name)
         .execute(conn)
         .expect("insert holder");
-        // MySQL: get last insert id
-        let id: i64 = diesel::sql_query("SELECT LAST_INSERT_ID()")
+        // MySQL: get last insert id (aliased for by-name decoding)
+        let row: IdRow = diesel::sql_query("SELECT LAST_INSERT_ID() AS id")
             .get_result(conn)
             .expect("last insert id");
-        ResourceId::from(id)
+        ResourceId::from(row.id)
     }
     #[cfg(feature = "sqlite")]
     {
@@ -352,29 +333,31 @@ where
         .bind::<diesel::sql_types::Text, _>(name)
         .execute(conn)
         .expect("insert holder");
-        let id: i64 = diesel::sql_query("SELECT last_insert_rowid()")
+        // SQLite is untyped: decode through a row struct, never a bare primitive.
+        let row: IdRow = diesel::sql_query("SELECT last_insert_rowid() AS id")
             .get_result(conn)
             .expect("last insert rowid");
-        ResourceId::from(id)
+        ResourceId::from(row.id)
     }
 }
 
 /// Insert a fixture resource (forum/group/team) and return its key.
-pub fn insert_resource<C>(conn: &mut C, table: &str, name: &str) -> rolify_core::store::ResourceKey
-where
-    C: Connection,
-{
+pub fn insert_resource(
+    conn: &mut Conn,
+    table: &str,
+    name: &str,
+) -> rolify_core::store::ResourceKey {
     #[cfg(feature = "postgres")]
     {
         // Use RETURNING id in the INSERT (works for integer PK tables like forums, groups, etc.)
-        let id: i64 = diesel::sql_query(&format!(
+        let row: IdRow = diesel::sql_query(&format!(
             "INSERT INTO {} (name) VALUES ($1) RETURNING id",
             table
         ))
         .bind::<diesel::sql_types::Text, _>(name)
         .get_result(conn)
         .expect("insert resource");
-        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), id.to_string())
+        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), row.id.to_string())
     }
     #[cfg(feature = "mysql")]
     {
@@ -385,10 +368,10 @@ where
         .bind::<diesel::sql_types::Text, _>(name)
         .execute(conn)
         .expect("insert resource");
-        let id: i64 = diesel::sql_query("SELECT LAST_INSERT_ID()")
+        let row: IdRow = diesel::sql_query("SELECT LAST_INSERT_ID() AS id")
             .get_result(conn)
             .expect("last insert id");
-        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), id.to_string())
+        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), row.id.to_string())
     }
     #[cfg(feature = "sqlite")]
     {
@@ -399,17 +382,23 @@ where
         .bind::<diesel::sql_types::Text, _>(name)
         .execute(conn)
         .expect("insert resource");
-        let id: i64 = diesel::sql_query("SELECT last_insert_rowid()")
+        // SQLite is untyped: decode through a row struct, never a bare primitive.
+        let row: IdRow = diesel::sql_query("SELECT last_insert_rowid() AS id")
             .get_result(conn)
             .expect("last insert rowid");
-        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), id.to_string())
+        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), row.id.to_string())
     }
 }
 
 /// Query counting instrumentation for TEST-05.
 ///
-/// Installs a counter on a raw connection that counts `InstrumentationEvent::StartQuery` events.
-/// Transaction control events (Begin/Commit/Rollback) are NOT counted.
+/// Installs a counter on a raw connection that counts every
+/// `InstrumentationEvent::StartQuery` event the connection emits.
+/// That includes transaction control statements (BEGIN/COMMIT reach
+/// the hook as queries on diesel 2.3): the counter measures executed
+/// statements, and the query-guard cases pin statement counts on
+/// paths without transaction plumbing (cached predicates at zero,
+/// single round-trip `where_any` at one).
 pub fn install_query_counter<C>(conn: &mut C) -> Arc<AtomicUsize>
 where
     C: Connection,
@@ -452,178 +441,120 @@ pub fn test_config() -> rolify_core::config::RolifyConfig {
 /// DieselBackend — TestBackend implementation for rolify-diesel
 /// ============================================================
 ///
-/// Implements the full D-13 fixture matrix with query counting
-/// instrumentation for TEST-05. One backend per holder/role-table pair.
+/// The database-backed `TestBackend` the ported parity suite binds to
+/// (`parity_suite!` over `DieselBackend`, one line per engine file).
+/// One backend owns one engine (store plus its live connection, D-06)
+/// over the shared container database; every suite operation flows
+/// through that engine connection, so the installed query counter sees
+/// every query.
+///
+/// Two structural facts shape this module:
+/// - Diesel connections are `Send` but not `Sync`, while `RolifyUser`
+///   (and through it `TestBackend`) requires `Sync`. The engine lives
+///   behind a `Mutex`; every method reaches it through `get_mut`
+///   (exclusive `&mut self` access, never blocking), which is `Sync`
+///   exactly when the connection is `Send`.
+/// - Fixture rows carry the suite's canonical ids (holders 1-4,
+///   forums 1-3, groups 1-2, teams "1"-"2", organization/company 1,
+///   per `rolify-test/src/fixtures.rs`): seeded once with explicit ids
+///   plus conflict-ignore, so every backend in the binary converges on
+///   the identical rows the `InMemoryBackend` owns by construction.
 #[cfg(feature = "suite")]
 pub mod diesel_backend {
-    use std::sync::{Arc, OnceLock};
+    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use diesel::Connection;
-    use diesel::connection::{Connection as _, InstrumentationEvent};
+    use diesel::RunQueryDsl;
     use diesel_migrations::MigrationHarness;
-    use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
     use rolify_core::config::RolifyConfig;
     use rolify_core::manager::Rolify;
-    use rolify_core::query::{ResourceFilter, RoleQuery};
-    use rolify_core::resource::{ResourceKey, ResourceRef};
+    use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName, RoleRecord};
-    use rolify_core::store::{RemovalOutcome, ResourceStore, RoleStore, Sealed, ScopeColumn, RemovalTarget};
+    use rolify_core::store::{ResourceKey, RoleStore, Sealed};
     use rolify_core::user::RolifyUser;
 
-    use rolify_test::fixtures::{DefaultUser, FixtureResource, FixtureUser as TestFixtureUser};
+    use rolify_test::fixtures::{DefaultUser, FixtureResource, UserClass, fixture_holders};
 
     use crate::support::*;
+    use rolify_diesel::rows::CountRow;
     use rolify_diesel::{DieselStore, MIGRATIONS};
 
     // Re-export types needed by the trait
     type Store = DieselStore;
     type Error = rolify_diesel::Error;
 
-    // Per-engine connection type.
-    #[cfg(feature = "postgres")]
-    type Conn = diesel::pg::PgConnection;
-    #[cfg(feature = "mysql")]
-    type Conn = diesel::mysql::MysqlConnection;
-    #[cfg(feature = "sqlite")]
-    type Conn = diesel::sqlite::SqliteConnection;
+    // The per-engine connection type (`Conn`) comes from the parent
+    // module: every helper is monomorphic over the compiled engine.
 
-    /// Holder fixture definition.
-    #[derive(Clone, Debug)]
-    struct HolderFixture {
-        login: &'static str,
-        table: &'static str,
-        holder_type: &'static str,
-        name: &'static str,
+    /// The suite subject: a holder identity over the single engine.
+    ///
+    /// `RolifyUser` requires `Sync`; the engine cell is `Sync` through
+    /// the `Mutex` (see the module docs). All access is through
+    /// `engine_mut` on `&mut self`, so the mutex never blocks.
+    pub struct DieselSubject {
+        login: String,
+        holder: ResourceId,
+        engine_cell: Mutex<Rolify<DieselStore>>,
+        config: RolifyConfig,
     }
 
-    /// Resource fixture definition.
-    #[derive(Clone, Debug)]
-    struct ResourceFixture {
-        which: FixtureResource,
-        table: &'static str,
-        type_name: &'static str,
-        pk_column: &'static str,
+    impl DieselSubject {
+        fn engine_mut(&mut self) -> &mut Rolify<DieselStore> {
+            self.engine_cell
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl RolifyUser for DieselSubject {
+        type Store = DieselStore;
+
+        fn store(&mut self) -> &mut Self::Store {
+            self.engine_mut().store_with_conn().0
+        }
+
+        fn rolify_config(&self) -> &RolifyConfig {
+            &self.config
+        }
+
+        fn rolify_id(&self) -> ResourceId {
+            self.holder.clone()
+        }
+
+        fn rolify_type() -> &'static str {
+            DefaultUser::rolify_type()
+        }
+
+        fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn) {
+            self.engine_mut().store_with_conn()
+        }
     }
 
     /// The Diesel backend for the parity suite.
     pub struct DieselBackend {
-        // The main subject user (default: "admin")
-        subject: TestFixtureUser<DefaultUser, DieselStore>,
-        // All registered holders
+        // Process-wide suite lock, held for the backend's whole lifetime.
+        serial: SuiteGuard,
+        // The seated subject (default: "admin").
+        subject: DieselSubject,
+        // All registered holders (canonical fixture ids).
         holders: Vec<(&'static str, ResourceId)>,
-        // All registered resources
+        // All registered resources (canonical fixture keys).
         resources: Vec<(FixtureResource, ResourceKey)>,
-        // Query counter (shared across connection wrappers)
+        // Query counter installed on the engine connection (TEST-05).
         query_counter: Arc<AtomicUsize>,
-        // Connection factory
-        conn_factory: Box<dyn Fn() -> Conn + Send + Sync + 'static>,
     }
 
     impl Sealed for DieselBackend {}
 
     impl DieselBackend {
-        /// Build a fresh backend with the full D-13 fixture set.
-        pub async fn build() -> Result<Self, Error> {
-            let config = test_config();
-            let mut conn = Self::make_conn();
-
-            // Run migrations
-            conn.run_pending_migrations(MIGRATIONS).expect("migrations apply");
-
-            // Setup fixture tables
-            setup_fixtures(&mut conn);
-
-            // Install query counter
-            let query_counter = install_query_counter(&mut conn);
-
-            // Create store
-            let mut store = DieselStore::new(&config);
-
-            // Register holder tables for all pairs (D-07: one store per pair)
-            // Default pair: users / roles / users_roles
-            store = store.for_holder_table("users");
-            // Register additional pairs for the suite
-            store = store.for_holder_table("customers");
-            store = store.for_holder_table("admins"); // for Admin::Moderator
-
-            // Register resource tables for class-scope expansion (resources_find)
-            store = store.register_resource_table("Forum", "forums", "id");
-            store = store.register_resource_table("Group", "groups", "id");
-            store = store.register_resource_table("Team", "teams", "team_code");
-            store = store.register_resource_table("Organization", "organizations", "id");
-            store = store.register_resource_table("Company", "organizations", "id"); // STI
-            store = store.register_resource_table("Right", "rights", "id");
-
-            // Create the engine
-            let engine = Rolify::new(store, (), config);
-
-            // Register holders (the full fixture `users` table + other pairs)
-            let holder_fixtures = [
-                HolderFixture { login: "admin", table: "users", holder_type: "User", name: "Admin User" },
-                HolderFixture { login: "moderator", table: "users", holder_type: "User", name: "Moderator User" },
-                HolderFixture { login: "god", table: "users", holder_type: "User", name: "God User" },
-                HolderFixture { login: "zombie", table: "users", holder_type: "User", name: "Zombie User" },
-                // Customer pair
-                HolderFixture { login: "customer1", table: "customers", holder_type: "Customer", name: "Customer One" },
-                HolderFixture { login: "customer2", table: "customers", holder_type: "Customer", name: "Customer Two" },
-                // Admin::Moderator pair
-                HolderFixture { login: "admin_mod", table: "admins", holder_type: "Admin::Moderator", name: "Admin Moderator" },
-            ];
-
-            let mut holders = Vec::new();
-            for fixture in &holder_fixtures {
-                let id = insert_holder(&mut conn, fixture.table, fixture.holder_type, fixture.name);
-                holders.push((fixture.login, id.clone()));
-                // Register with store for all_holders / holders_where
-                engine.store().register_holder(fixture.holder_type, id);
-            }
-
-            // Register resources (the full fixture resources)
-            let resource_fixtures = [
-                ResourceFixture { which: FixtureResource::ForumFirst, table: "forums", type_name: "Forum", pk_column: "id" },
-                ResourceFixture { which: FixtureResource::ForumSecond, table: "forums", type_name: "Forum", pk_column: "id" },
-                ResourceFixture { which: FixtureResource::ForumLast, table: "forums", type_name: "Forum", pk_column: "id" },
-                ResourceFixture { which: FixtureResource::GroupFirst, table: "groups", type_name: "Group", pk_column: "id" },
-                ResourceFixture { which: FixtureResource::GroupLast, table: "groups", type_name: "Group", pk_column: "id" },
-                ResourceFixture { which: FixtureResource::TeamFirst, table: "teams", type_name: "Team", pk_column: "team_code" },
-                ResourceFixture { which: FixtureResource::TeamLast, table: "teams", type_name: "Team", pk_column: "team_code" },
-                ResourceFixture { which: FixtureResource::Organization, table: "organizations", type_name: "Organization", pk_column: "id" },
-                ResourceFixture { which: FixtureResource::Company, table: "organizations", type_name: "Company", pk_column: "id" },
-            ];
-
-            let mut resources = Vec::new();
-            for fixture in &resource_fixtures {
-                let key = insert_resource(&mut conn, fixture.table, fixture.which.to_string().replace("_", " ").replace("first", "First").replace("second", "Second").replace("last", "Last"));
-                // The key's resource_type is the singular (forum, group, team, organization)
-                // We need to map it to the type_name for the registry
-                let mapped_key = ResourceKey::new(fixture.type_name, key.resource_id);
-                resources.push((fixture.which, mapped_key));
-                engine.store().register_resource(mapped_key);
-            }
-
-            // Create subject (default to "admin" user)
-            let admin_id = holders.iter().find(|(login, _)| *login == "admin").map(|(_, id)| id.clone()).expect("admin holder");
-            let subject = TestFixtureUser::new("admin", admin_id, engine);
-
-            // Build connection factory for new connections
-            let conn_factory = Box::new(Self::make_conn);
-
-            Ok(Self {
-                subject,
-                holders,
-                resources,
-                query_counter,
-                conn_factory,
-            })
-        }
-
         #[cfg(feature = "postgres")]
         fn make_conn() -> Conn {
             let container = pg_container();
             let host_port = container.get_host_port_ipv4(5432).expect("Postgres port");
             let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
-            PgConnection::establish(&url).expect("Postgres connection")
+            diesel::pg::PgConnection::establish(&url).expect("Postgres connection")
         }
 
         #[cfg(feature = "mysql")]
@@ -631,34 +562,115 @@ pub mod diesel_backend {
             let container = mysql_container();
             let host_port = container.get_host_port_ipv4(3306).expect("MySQL port");
             let url = format!("mysql://root@127.0.0.1:{host_port}/test");
-            MysqlConnection::establish(&url).expect("MySQL connection")
+            diesel::mysql::MysqlConnection::establish(&url).expect("MySQL connection")
         }
 
         #[cfg(feature = "sqlite")]
         fn make_conn() -> Conn {
-            let mut conn = SqliteConnection::establish(":memory:").expect("SQLite in-memory");
-            diesel::sql_query("PRAGMA foreign_keys = ON").execute(&mut conn).expect("PRAGMA foreign_keys = ON");
+            let mut conn = diesel::sqlite::SqliteConnection::establish(":memory:")
+                .expect("SQLite in-memory");
+            diesel::sql_query("PRAGMA foreign_keys = ON")
+                .execute(&mut conn)
+                .expect("PRAGMA foreign_keys = ON");
             conn
         }
 
-        fn make_counted_conn(&self) -> (Conn, Arc<AtomicUsize>) {
-            let mut conn = (self.conn_factory)();
-            let counter = Arc::new(AtomicUsize::new(0));
-            let counting = Arc::clone(&counter);
-            conn.set_instrumentation(Box::new(move |event: InstrumentationEvent<'_>| {
-                if matches!(event, InstrumentationEvent::StartQuery { .. }) {
-                    counting.fetch_add(1, Ordering::Relaxed);
-                }
-            }));
-            (conn, counter)
+        /// Seed the canonical fixture rows with explicit ids.
+        ///
+        /// The suite's fixture identities are fixed (`fixtures.rs`):
+        /// holders 1-4, forums 1-3, groups 1-2, teams "1"-"2",
+        /// organization 1. Explicit ids plus conflict-ignore make every
+        /// backend in the binary converge on the identical rows (tables
+        /// persist across backends on server engines). The suite never
+        /// auto-inserts fixture rows, so the sequences stay consistent.
+        #[cfg(feature = "postgres")]
+        fn seed_canonical_rows(conn: &mut Conn) {
+            for statement in [
+                "INSERT INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie') ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3') ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2') ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2') ON CONFLICT (team_code) DO NOTHING",
+                "INSERT INTO organizations (id, type) VALUES (1, 'Organization') ON CONFLICT (id) DO NOTHING",
+            ] {
+                diesel::sql_query(statement)
+                    .execute(conn)
+                    .expect("seed canonical fixture row");
+            }
+        }
+
+        /// Seed the canonical fixture rows with explicit ids (MySQL:
+        /// `INSERT IGNORE` skips the duplicate key on repeat builds).
+        #[cfg(feature = "mysql")]
+        fn seed_canonical_rows(conn: &mut Conn) {
+            for statement in [
+                "INSERT IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
+                "INSERT IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
+                "INSERT IGNORE INTO `groups` (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')",
+                "INSERT IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
+                "INSERT IGNORE INTO organizations (id, type) VALUES (1, 'Organization')",
+            ] {
+                diesel::sql_query(statement)
+                    .execute(conn)
+                    .expect("seed canonical fixture row");
+            }
+        }
+
+        /// Seed the canonical fixture rows with explicit ids (SQLite:
+        /// `INSERT OR IGNORE` skips the duplicate key on repeat builds).
+        #[cfg(feature = "sqlite")]
+        fn seed_canonical_rows(conn: &mut Conn) {
+            for statement in [
+                "INSERT OR IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
+                "INSERT OR IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
+                "INSERT OR IGNORE INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')",
+                "INSERT OR IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
+                "INSERT OR IGNORE INTO organizations (id, type) VALUES (1, 'Organization')",
+            ] {
+                diesel::sql_query(statement)
+                    .execute(conn)
+                    .expect("seed canonical fixture row");
+            }
+        }
+
+        /// The canonical resource keys (identity with the seeded rows).
+        fn canonical_resources() -> Vec<(FixtureResource, ResourceKey)> {
+            vec![
+                (
+                    FixtureResource::ForumFirst,
+                    ResourceKey::new("Forum", "1"),
+                ),
+                (
+                    FixtureResource::ForumSecond,
+                    ResourceKey::new("Forum", "2"),
+                ),
+                (FixtureResource::ForumLast, ResourceKey::new("Forum", "3")),
+                (
+                    FixtureResource::GroupFirst,
+                    ResourceKey::new("Group", "1"),
+                ),
+                (FixtureResource::GroupLast, ResourceKey::new("Group", "2")),
+                (FixtureResource::TeamFirst, ResourceKey::new("Team", "1")),
+                (FixtureResource::TeamLast, ResourceKey::new("Team", "2")),
+                (
+                    FixtureResource::Organization,
+                    ResourceKey::new("Organization", "1"),
+                ),
+                (FixtureResource::Company, ResourceKey::new("Company", "1")),
+            ]
         }
 
         fn holder_id(&self, login: &str) -> Option<ResourceId> {
-            self.holders.iter().find(|(l, _)| *l == login).map(|(_, id)| id.clone())
+            self.holders
+                .iter()
+                .find(|(known, _)| *known == login)
+                .map(|(_, holder)| holder.clone())
         }
 
         fn resource_key(&self, which: FixtureResource) -> Option<ResourceKey> {
-            self.resources.iter().find(|(w, _)| *w == which).map(|(_, k)| k.clone())
+            self.resources
+                .iter()
+                .find(|(known, _)| *known == which)
+                .map(|(_, key)| key.clone())
         }
     }
 
@@ -669,19 +681,66 @@ pub mod diesel_backend {
     #[maybe_async::maybe_async(AFIT)]
     impl rolify_test::backend::TestBackend for DieselBackend {
         type Store = DieselStore;
-        type Subject = TestFixtureUser<DefaultUser, DieselStore>;
+        type Subject = DieselSubject;
         type Error = Error;
 
-        async fn build() -> Result<Self, Self::Error>
+        fn build() -> impl Future<Output = Result<Self, Self::Error>> + Send
         where
             Self: Sized,
         {
-            Self::build().await
+            async move {
+                // Serialize backends sharing one database (see SuiteGuard).
+                let serial = SuiteGuard::acquire();
+                let config = test_config();
+                let mut conn = Self::make_conn();
+
+                conn.run_pending_migrations(MIGRATIONS)
+                    .expect("migrations apply");
+                setup_fixtures(&mut conn);
+                Self::seed_canonical_rows(&mut conn);
+
+                // The counter lives on the engine connection, so every
+                // suite operation through the subject or the engine counts.
+                let query_counter = install_query_counter(&mut conn);
+
+                let store = DieselStore::new(&config)
+                    .for_holder_table("users")
+                    .register_resource_table("Forum", "forums", "id")
+                    .register_resource_table("Group", "groups", "id")
+                    .register_resource_table("Team", "teams", "team_code")
+                    .register_resource_table("Organization", "organizations", "id")
+                    .register_resource_table("Company", "organizations", "id")
+                    .register_resource_table("Right", "rights", "id");
+                let engine = Rolify::new(store, conn, config.clone());
+
+                let holders = fixture_holders();
+                let admin_holder = holders
+                    .iter()
+                    .find(|(login, _)| *login == "admin")
+                    .map(|(_, holder)| holder.clone())
+                    .expect("the admin fixture login is always seated");
+                let subject = DieselSubject {
+                    login: "admin".to_owned(),
+                    holder: admin_holder,
+                    engine_cell: Mutex::new(engine),
+                    config,
+                };
+                let resources = Self::canonical_resources();
+
+                Ok(Self {
+                    serial,
+                    subject,
+                    holders,
+                    resources,
+                    query_counter,
+                })
+            }
         }
 
         fn subject(&mut self, login: &str) -> &mut Self::Subject {
             let holder = self.holder_id(login).expect("unknown fixture login");
-            self.subject.seat_as(login, holder);
+            self.subject.login = login.to_owned();
+            self.subject.holder = holder;
             &mut self.subject
         }
 
@@ -693,40 +752,68 @@ pub mod diesel_backend {
             self.resource_key(which).expect("unknown fixture resource")
         }
 
-        async fn reset_roles(&mut self) -> Result<(), Self::Error> {
-            // Need a fresh connection for reset
-            let mut conn = (self.conn_factory)();
-            reset_roles(&mut conn);
-            // Also clear the in-memory store
-            rolify_core::user::RolifyUser::store(&mut self.subject).clear();
-            Ok(())
+        fn reset_roles(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let (_, conn) = self.subject.store_with_conn();
+            async move {
+                reset_roles(conn);
+                Ok(())
+            }
         }
 
-        async fn create_role_row(&mut self, record: RoleRecord) -> Result<(), Self::Error> {
-            let (mut conn, _counter) = self.make_counted_conn();
-            rolify_core::user::RolifyUser::store(&mut self.subject).insert(record);
-            Ok(())
+        fn create_role_row(
+            &mut self,
+            record: RoleRecord,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            // Own the scope data before the future: the write scope
+            // borrows it, and both move into the future together.
+            let scope_owned = (record.resource_type.clone(), record.resource_id.clone());
+            let name = record.name.clone();
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let scope = match (&scope_owned.0, &scope_owned.1) {
+                    (None, None) => ResourceRef::Global,
+                    (Some(type_name), None) => ResourceRef::Class(type_name),
+                    (Some(type_name), Some(resource_id)) => {
+                        ResourceRef::Instance(type_name, resource_id)
+                    }
+                    (None, Some(_)) => panic!(
+                        "a role row with an id but no type is not constructible through the public constructors"
+                    ),
+                };
+                store.find_or_create_by(&mut *conn, &name, scope).await?;
+                Ok(())
+            }
         }
 
-        async fn grant_to(&mut self, login: &str, name: &RoleName, scope: ResourceRef<'_>) -> Result<(), Self::Error> {
+        fn grant_to(
+            &mut self,
+            login: &str,
+            name: &RoleName,
+            scope: ResourceRef<'_>,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
             let holder = self.holder_id(login).expect("unknown fixture login");
-            let (mut conn, _counter) = self.make_counted_conn();
-            let role = rolify_core::user::RolifyUser::store(&mut self.subject)
-                .find_or_create_by(&mut conn, name, scope)
-                .await?;
-            rolify_core::user::RolifyUser::store(&mut self.subject)
-                .add(&mut conn, &holder, &role)
-                .await?;
-            Ok(())
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let role = store.find_or_create_by(&mut *conn, name, scope).await?;
+                store.add(&mut *conn, &holder, &role).await?;
+                Ok(())
+            }
         }
 
-        async fn role_row_count(&mut self) -> Result<usize, Self::Error> {
-            let count = rolify_core::user::RolifyUser::store(&mut self.subject).rows().len();
-            Ok(count)
+        fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let (store, conn) = self.subject.store_with_conn();
+            let table = store.role_table().to_owned();
+            async move {
+                let row: CountRow =
+                    diesel::sql_query(format!("SELECT COUNT(*) AS count FROM {table}"))
+                        .get_result(&mut *conn)
+                        .await?;
+                Ok(usize::try_from(row.count).expect("role row count is never negative"))
+            }
         }
 
         fn engine(&mut self) -> &mut Rolify<Self::Store> {
-            self.subject.engine()
+            self.subject.engine_mut()
         }
 
         fn reset_query_count(&mut self) {
@@ -739,18 +826,25 @@ pub mod diesel_backend {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use diesel::deserialize::QueryableByName;
+
+    #[derive(QueryableByName)]
+    struct ForeignKeysRow {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        foreign_keys: i32,
+    }
 
     #[cfg(feature = "sqlite")]
     #[test]
     fn sqlite_conn_enables_fk() {
         let mut conn = sqlite_conn();
-        // Verify FK pragma is on
-        let fk: i64 = diesel::sql_query("PRAGMA foreign_keys")
+        // Verify FK pragma is on (SQLite is untyped: decode via a row struct)
+        let row: ForeignKeysRow = diesel::sql_query("PRAGMA foreign_keys")
             .get_result(&mut conn)
             .expect("pragma");
-        assert_eq!(fk, 1);
+        assert_eq!(row.foreign_keys, 1);
     }
 }

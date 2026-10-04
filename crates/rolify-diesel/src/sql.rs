@@ -20,7 +20,7 @@
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 mod backend_sql {
-    use crate::dialect::{placeholder, quote_identifier};
+    use crate::dialect::{cast_to_text, placeholder, quote_identifier};
     use crate::rows::{IdRow, ResourceKeyRow, RoleRow};
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::role::{ResourceId, RoleName};
@@ -441,13 +441,18 @@ mod backend_sql {
         name_placeholder: &str,
     ) -> String {
         format!(
-            "SELECT DISTINCT '{}' AS resource_type, res.{} AS resource_id \
+            "SELECT DISTINCT role_row.name AS name, '{}' AS resource_type, {} AS resource_id \
          FROM {} AS role_row \
          INNER JOIN {} AS res \
            ON role_row.resource_type = '{}' \
           AND role_row.resource_id = '' \
           AND role_row.name = {}",
-            resource_type, pk_column, role_table, resource_table, resource_type, name_placeholder,
+            resource_type,
+            cast_to_text(&format!("res.{pk_column}")),
+            role_table,
+            resource_table,
+            resource_type,
+            name_placeholder,
         )
     }
 
@@ -518,11 +523,15 @@ mod backend_sql {
         has_holder: bool,
     ) -> String {
         let holder_join = if has_holder {
+            // The join key is stringified in the link table while the
+            // holder primary key is an integer: cast for the comparison
+            // (and the `Text` decode) on every backend.
             format!(
                 "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-             INNER JOIN {holder_table} AS holder ON holder.id = link.user_id",
+             INNER JOIN {holder_table} AS holder ON {holder_id} = link.user_id",
                 join_table = join_table,
-                holder_table = holder_table.unwrap_or("")
+                holder_table = holder_table.unwrap_or(""),
+                holder_id = cast_to_text("holder.id"),
             )
         } else {
             String::new()
@@ -606,13 +615,15 @@ mod backend_sql {
     #[must_use]
     pub fn roles_matching_holder_filter(_holder_id: &ResourceId, index: usize) -> (String, usize) {
         let ph = placeholder(index);
-        (format!("AND holder.id = {}", ph), index + 1)
+        // Holder primary keys are integers; the bind carries the
+        // stringified id (see `cast_to_text`).
+        (format!("AND {} = {}", cast_to_text("holder.id"), ph), index + 1)
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::dialect::{placeholder, quote_identifier};
+    use crate::dialect::{cast_to_text, placeholder, quote_identifier};
         use rolify_core::query::{ResourceFilter, RoleQuery};
         use rolify_core::role::{ResourceId, RoleName};
 
@@ -631,9 +642,10 @@ mod backend_sql {
                 2,
             );
             // Global: 1 disjunct with 3 binds (name, rt='', rid='')
-            assert!(sql.contains("resource_type = $2"));
-            assert!(sql.contains("resource_id = $3"));
-            assert_eq!(next, 4);
+            // The roles table is aliased `role_row` by the SELECT caller.
+            assert!(sql.contains("resource_type = $3"));
+            assert!(sql.contains("resource_id = $4"));
+            assert_eq!(next, 5);
         }
 
         #[test]
@@ -652,7 +664,7 @@ mod backend_sql {
             );
             // Class: global disjunct (3 binds) + class disjunct (2 more: type, rid='')
             assert!(sql.contains("OR"));
-            assert_eq!(next, 6);
+            assert_eq!(next, 7);
         }
 
         #[test]
@@ -671,7 +683,7 @@ mod backend_sql {
             );
             // Instance: 3 disjuncts = 3 + 2 + 2 = 7 binds after holder
             assert!(sql.matches("OR").count() == 2);
-            assert_eq!(next, 8);
+            assert_eq!(next, 9);
         }
 
         #[test]
@@ -688,8 +700,8 @@ mod backend_sql {
                 },
                 2,
             );
-            // Any: name-only, 1 bind
-            assert_eq!(sql, "(\"roles\".name = $2)");
+            // Any: name-only, 1 bind (the roles table is aliased `role_row`)
+            assert_eq!(sql, "(role_row.name = $2)");
             assert_eq!(next, 3);
         }
 

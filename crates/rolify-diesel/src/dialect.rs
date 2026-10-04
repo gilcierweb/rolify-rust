@@ -58,6 +58,26 @@ pub fn quote_identifier(name: &str) -> String {
     format!("`{name}`")
 }
 
+/// Wrap an integer-key column so it decodes as text.
+///
+/// The holder and resource primary keys are integers on most tables
+/// while the SPI carries stringified ids; every projection of such a
+/// key casts here so the `Text` by-name decoding never sees a binary
+/// integer (which decodes as garbage instead of erroring).
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+#[must_use]
+pub fn cast_to_text(column: &str) -> String {
+    format!("CAST({column} AS TEXT)")
+}
+
+/// Wrap an integer-key column so it decodes as text on MySQL
+/// (`CAST AS CHAR`: MySQL rejects `TEXT` as a cast target).
+#[cfg(feature = "mysql")]
+#[must_use]
+pub fn cast_to_text(column: &str) -> String {
+    format!("CAST({column} AS CHAR)")
+}
+
 /// Fallback placeholder when no backend feature is enabled (inert stub).
 /// Returns a generic placeholder that won't be used since SQL generation
 /// is only called when a backend feature is active.

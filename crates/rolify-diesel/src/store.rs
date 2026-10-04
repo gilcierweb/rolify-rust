@@ -650,7 +650,84 @@ mod pg_impl {
                     .bind::<Text, _>(&all_values[19])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => panic!("where_any: too many bind values (max 20)"),
+                // The ported suite batches up to four queries (l.68:
+                // Instance + Global + Instance + Class = 23 binds).
+                21 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                22 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .bind::<Text, _>(&all_values[21])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                23 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .bind::<Text, _>(&all_values[21])
+                    .bind::<Text, _>(&all_values[22])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("where_any: too many bind values (max 23)"),
             };
             async move {
                 let mut seen = Vec::new();
@@ -866,24 +943,30 @@ mod pg_impl {
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
             let holder_id = holder.as_str();
-            let (rt_cond, rid_cond) = match column {
-                ScopeColumn::ResourceType => ("role_row.resource_type != ''", ""),
-                ScopeColumn::ResourceId => ("", "AND role_row.resource_id != ''"),
+            // One complete condition per column: interpolating an empty
+            // half would emit `AND  AND` (a syntax error the `is_ok`
+            // below would swallow into a wrong `false`).
+            let scope_cond = match column {
+                ScopeColumn::ResourceType => "role_row.resource_type != ''",
+                ScopeColumn::ResourceId => "role_row.resource_id != ''",
             };
             let sql = format!(
                 "SELECT 1 AS dummy FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = {holder_ph} AND {rt_cond} {rid_cond} LIMIT 1",
+                 WHERE link.user_id = {holder_ph} AND {scope_cond} LIMIT 1",
                 role_table = self.role_table,
                 join_table = self.join_table,
-                rt_cond = rt_cond,
-                rid_cond = rid_cond,
+                scope_cond = scope_cond,
                 holder_ph = placeholder(1),
             );
             #[derive(diesel::deserialize::QueryableByName)]
+            #[allow(dead_code)]
             struct ExistsRow {
+                // Named exactly like the `AS dummy` projection: by-name
+                // decoding matches on it (an underscore prefix broke the
+                // match and made `exists` always false).
                 #[diesel(sql_type = diesel::sql_types::Integer)]
-                _dummy: i32,
+                dummy: i32,
             }
             let q = diesel::sql_query(sql).bind::<Text, _>(holder_id);
             let found = q.get_result::<ExistsRow>(conn).is_ok();
@@ -945,9 +1028,9 @@ mod pg_impl {
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT holder.id AS user_id \
+                "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
                  FROM {holder_table} AS holder \
-                 INNER JOIN {join_table} AS link ON link.user_id = holder.id \
+                 INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS TEXT) \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                  WHERE {type_filter} AND {where_clause}",
                 holder_table = holder_table,
@@ -957,29 +1040,161 @@ mod pg_impl {
                 where_clause = where_clause,
             );
 
+            // Binds are positional: the holder types first (placeholders
+            // $1..$N), then the ladder values continuing the same
+            // sequence. Ladder shapes mirror `where_` / `where_strict`.
+            // Values collect owned (the `where_any` precedent): the bind
+            // chain is type-level, so the count match below issues the
+            // exact static chain per total.
+            let mut all_values: Vec<String> = Vec::new();
+            for holder_type in holder_types {
+                all_values.push((*holder_type).to_owned());
+            }
+            let name = query.name.as_str();
+            if strict {
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            } else {
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            }
             let q = diesel::sql_query(sql);
-            let rows: Vec<HolderIdRow> = match holder_types.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            let rows: Vec<HolderIdRow> = match all_values.len() {
                 2 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 3 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
-                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 4 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
-                    .bind::<Text, _>(holder_types[2])
-                    .bind::<Text, _>(holder_types[3])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 _ => panic!("holders_where: too many holder types (max 4)"),
@@ -1007,7 +1222,7 @@ mod pg_impl {
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT id AS user_id FROM {holder_table} WHERE {type_filter}",
+                "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
                 holder_table = holder_table,
                 type_filter = type_filter,
             );
@@ -1080,10 +1295,10 @@ mod pg_impl {
             };
 
             let sql = base_sql
-                .replace("{{type_filter}}", &type_filter)
-                .replace("{{name_filter}}", &name_filter)
-                .replace("{{scope_filter}}", &scope_filter)
-                .replace("{{holder_filter}}", &holder_filter);
+                .replace("{type_filter}", &type_filter)
+                .replace("{name_filter}", &name_filter)
+                .replace("{scope_filter}", &scope_filter)
+                .replace("{holder_filter}", &holder_filter);
 
             let mut type_vals: Vec<&str> = query.types.iter().map(|s| *s).collect();
             if let Some(name) = query.name {
@@ -1198,7 +1413,7 @@ mod pg_impl {
             let name_ph = placeholder(type_placeholders.len() + 1);
 
             let sql = format!(
-                "SELECT DISTINCT resource_type, resource_id \
+                "SELECT DISTINCT name AS name, resource_type, resource_id \
                  FROM {role_table} \
                  WHERE {type_filter} \
                    AND name = {name_ph} \
@@ -1274,54 +1489,36 @@ mod pg_impl {
                 return async { Ok(Vec::new()) };
             }
 
-            // Build candidate pairs using bind parameters to avoid SQL injection
-            let mut candidate_conditions = Vec::new();
-            let mut bind_idx = 2; // 1 is holder_id
-            for _ in candidates {
-                candidate_conditions.push(format!(
-                    "(role_row.resource_type = {} AND role_row.resource_id = {})",
-                    placeholder(bind_idx),
-                    placeholder(bind_idx + 1)
-                ));
-                bind_idx += 2;
-            }
-            let candidate_filter = candidate_conditions.join(" OR ");
-
-            let name_placeholders: Vec<String> = (bind_idx..bind_idx + names.len())
-                .map(placeholder)
-                .collect();
+            // The holder's rows for the requested names; coverage is
+            // decided below in Rust, mirroring `InMemoryStore::in_list`
+            // exactly: a candidate is covered by a same-id row or by a
+            // scopeless (global/class) row, with no resource-type check.
+            // Candidate keys (not row keys) are returned, so scopeless
+            // covering rows never reach `to_key`.
+            let name_placeholders: Vec<String> =
+                (2..2 + names.len()).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT role_row.resource_type, role_row.resource_id \
+                "SELECT DISTINCT role_row.name AS name, role_row.resource_type, role_row.resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
                  WHERE link.user_id = {} \
-                   AND {name_filter} \
-                   AND {candidate_filter}",
+                   AND {name_filter}",
                 placeholder(1),
                 role_table = self.role_table,
                 join_table = self.join_table,
                 name_filter = name_filter,
-                candidate_filter = candidate_filter,
             );
 
-            // Collect all bind values in order: holder, candidate pairs, names
+            // Collect bind values in order: holder, then names.
             let mut all_values: Vec<&str> = Vec::new();
             all_values.push(holder.as_str());
-            for c in candidates {
-                all_values.push(c.resource_type.as_str());
-                all_values.push(c.resource_id.as_str());
-            }
-            for n in names {
-                all_values.push(n.as_str());
+            for name in names {
+                all_values.push(name.as_str());
             }
 
-            let rows: Vec<ResourceKeyRow> = match all_values.len() {
-                1 => diesel::sql_query(&sql)
-                    .bind::<Text, _>(all_values[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            let rows: Vec<RoleRow> = match all_values.len() {
                 2 => diesel::sql_query(&sql)
                     .bind::<Text, _>(all_values[0])
                     .bind::<Text, _>(all_values[1])
@@ -1390,67 +1587,21 @@ mod pg_impl {
                     .bind::<Text, _>(all_values[8])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                10 => diesel::sql_query(&sql)
-                    .bind::<Text, _>(all_values[0])
-                    .bind::<Text, _>(all_values[1])
-                    .bind::<Text, _>(all_values[2])
-                    .bind::<Text, _>(all_values[3])
-                    .bind::<Text, _>(all_values[4])
-                    .bind::<Text, _>(all_values[5])
-                    .bind::<Text, _>(all_values[6])
-                    .bind::<Text, _>(all_values[7])
-                    .bind::<Text, _>(all_values[8])
-                    .bind::<Text, _>(all_values[9])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                11 => diesel::sql_query(&sql)
-                    .bind::<Text, _>(all_values[0])
-                    .bind::<Text, _>(all_values[1])
-                    .bind::<Text, _>(all_values[2])
-                    .bind::<Text, _>(all_values[3])
-                    .bind::<Text, _>(all_values[4])
-                    .bind::<Text, _>(all_values[5])
-                    .bind::<Text, _>(all_values[6])
-                    .bind::<Text, _>(all_values[7])
-                    .bind::<Text, _>(all_values[8])
-                    .bind::<Text, _>(all_values[9])
-                    .bind::<Text, _>(all_values[10])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                12 => diesel::sql_query(&sql)
-                    .bind::<Text, _>(all_values[0])
-                    .bind::<Text, _>(all_values[1])
-                    .bind::<Text, _>(all_values[2])
-                    .bind::<Text, _>(all_values[3])
-                    .bind::<Text, _>(all_values[4])
-                    .bind::<Text, _>(all_values[5])
-                    .bind::<Text, _>(all_values[6])
-                    .bind::<Text, _>(all_values[7])
-                    .bind::<Text, _>(all_values[8])
-                    .bind::<Text, _>(all_values[9])
-                    .bind::<Text, _>(all_values[10])
-                    .bind::<Text, _>(all_values[11])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                13 => diesel::sql_query(&sql)
-                    .bind::<Text, _>(all_values[0])
-                    .bind::<Text, _>(all_values[1])
-                    .bind::<Text, _>(all_values[2])
-                    .bind::<Text, _>(all_values[3])
-                    .bind::<Text, _>(all_values[4])
-                    .bind::<Text, _>(all_values[5])
-                    .bind::<Text, _>(all_values[6])
-                    .bind::<Text, _>(all_values[7])
-                    .bind::<Text, _>(all_values[8])
-                    .bind::<Text, _>(all_values[9])
-                    .bind::<Text, _>(all_values[10])
-                    .bind::<Text, _>(all_values[11])
-                    .bind::<Text, _>(all_values[12])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("in_list: too many bind values (max 13)"),
+                _ => panic!("in_list: too many names (max 8)"),
             };
-            async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
+            let records: Vec<RoleRecord> = rows.iter().map(RoleRow::to_record).collect();
+            let mut covered: Vec<ResourceKey> = Vec::new();
+            for key in candidates {
+                let matches = records.iter().any(|row| {
+                    names.contains(&row.name)
+                        && (row.resource_id.is_none()
+                            || row.resource_id.as_ref() == Some(&key.resource_id))
+                });
+                if matches && !covered.contains(key) {
+                    covered.push(key.clone());
+                }
+            }
+            async move { Ok(covered) }
         }
     }
 }
@@ -1959,7 +2110,84 @@ mod mysql_impl {
                     .bind::<Text, _>(&all_values[19])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => panic!("where_any: too many bind values (max 20)"),
+                // The ported suite batches up to four queries (l.68:
+                // Instance + Global + Instance + Class = 23 binds).
+                21 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                22 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .bind::<Text, _>(&all_values[21])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                23 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .bind::<Text, _>(&all_values[21])
+                    .bind::<Text, _>(&all_values[22])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("where_any: too many bind values (max 23)"),
             };
             async move {
                 let mut seen = Vec::new();
@@ -2252,9 +2480,9 @@ mod mysql_impl {
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT holder.id AS user_id \
+                "SELECT DISTINCT CAST(holder.id AS CHAR) AS user_id \
                  FROM {holder_table} AS holder \
-                 INNER JOIN {join_table} AS link ON link.user_id = holder.id \
+                 INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS CHAR) \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                  WHERE {type_filter} AND {where_clause}",
                 holder_table = holder_table,
@@ -2264,29 +2492,161 @@ mod mysql_impl {
                 where_clause = where_clause,
             );
 
+            // Binds are positional: the holder types first (placeholders
+            // $1..$N), then the ladder values continuing the same
+            // sequence. Ladder shapes mirror `where_` / `where_strict`.
+            // Values collect owned (the `where_any` precedent): the bind
+            // chain is type-level, so the count match below issues the
+            // exact static chain per total.
+            let mut all_values: Vec<String> = Vec::new();
+            for holder_type in holder_types {
+                all_values.push((*holder_type).to_owned());
+            }
+            let name = query.name.as_str();
+            if strict {
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            } else {
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            }
             let q = diesel::sql_query(sql);
-            let rows: Vec<HolderIdRow> = match holder_types.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            let rows: Vec<HolderIdRow> = match all_values.len() {
                 2 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 3 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
-                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 4 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
-                    .bind::<Text, _>(holder_types[2])
-                    .bind::<Text, _>(holder_types[3])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 _ => panic!("holders_where: too many holder types (max 4)"),
@@ -2314,7 +2674,7 @@ mod mysql_impl {
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT id AS user_id FROM {holder_table} WHERE {type_filter}",
+                "SELECT CAST(id AS CHAR) AS user_id FROM {holder_table} WHERE {type_filter}",
                 holder_table = holder_table,
                 type_filter = type_filter,
             );
@@ -2387,10 +2747,10 @@ mod mysql_impl {
             };
 
             let sql = base_sql
-                .replace("{{type_filter}}", &type_filter)
-                .replace("{{name_filter}}", &name_filter)
-                .replace("{{scope_filter}}", &scope_filter)
-                .replace("{{holder_filter}}", &holder_filter);
+                .replace("{type_filter}", &type_filter)
+                .replace("{name_filter}", &name_filter)
+                .replace("{scope_filter}", &scope_filter)
+                .replace("{holder_filter}", &holder_filter);
 
             let mut type_vals: Vec<&str> = query.types.iter().map(|s| *s).collect();
             if let Some(name) = query.name {
@@ -2504,7 +2864,7 @@ mod mysql_impl {
             let name_ph = placeholder(type_placeholders.len() + 1);
 
             let sql = format!(
-                "SELECT DISTINCT resource_type, resource_id \
+                "SELECT DISTINCT name AS name, resource_type, resource_id \
                  FROM {role_table} \
                  WHERE {type_filter} \
                    AND name = {name_ph} \
@@ -2582,59 +2942,118 @@ mod mysql_impl {
                 return async { Ok(Vec::new()) };
             }
 
-            let candidate_pairs: Vec<String> = candidates
-                .iter()
-                .map(|c| format!("('{}', '{}')", c.resource_type, c.resource_id.as_str()))
-                .collect();
-            let candidate_filter = format!(
-                "(role_row.resource_type, role_row.resource_id) IN ({})",
-                candidate_pairs.join(", ")
-            );
-
-            let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
+            // The holder's rows for the requested names; coverage is
+            // decided below in Rust, mirroring `InMemoryStore::in_list`
+            // exactly: a candidate is covered by a same-id row or by a
+            // scopeless (global/class) row, with no resource-type check.
+            // Candidate keys (not row keys) are returned, so scopeless
+            // covering rows never reach `to_key`.
+            let name_placeholders: Vec<String> =
+                (2..2 + names.len()).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
-
             let sql = format!(
-                "SELECT DISTINCT role_row.resource_type, role_row.resource_id \
+                "SELECT DISTINCT role_row.name AS name, role_row.resource_type, role_row.resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
                  WHERE link.user_id = ? \
-                   AND {name_filter} \
-                   AND {candidate_filter}",
+                   AND {name_filter}",
                 role_table = self.role_table,
                 join_table = self.join_table,
                 name_filter = name_filter,
-                candidate_filter = candidate_filter,
             );
 
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<ResourceKeyRow> = match names.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            let mut all_values: Vec<&str> = Vec::new();
+            all_values.push(holder.as_str());
+            for name in names {
+                all_values.push(name.as_str());
+            }
+
+            let q = diesel::sql_query(sql);
+            let rows: Vec<RoleRow> = match all_values.len() {
                 2 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .bind::<Text, _>(names[1].as_str())
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 3 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .bind::<Text, _>(names[1].as_str())
-                    .bind::<Text, _>(names[2].as_str())
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 4 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .bind::<Text, _>(names[1].as_str())
-                    .bind::<Text, _>(names[2].as_str())
-                    .bind::<Text, _>(names[3].as_str())
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => panic!("in_list: too many names (max 4)"),
+                5 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("in_list: too many names (max 8)"),
             };
-            async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
+            let records: Vec<RoleRecord> =
+                rows.iter().map(RoleRow::to_record).collect();
+            let mut covered: Vec<ResourceKey> = Vec::new();
+            for key in candidates {
+                let matches = records.iter().any(|row| {
+                    names.contains(&row.name)
+                        && (row.resource_id.is_none()
+                            || row.resource_id.as_ref() == Some(&key.resource_id))
+                });
+                if matches && !covered.contains(key) {
+                    covered.push(key.clone());
+                }
+            }
+            async move { Ok(covered) }
         }
     }
 }
@@ -3143,7 +3562,84 @@ mod sqlite_impl {
                     .bind::<Text, _>(&all_values[19])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => panic!("where_any: too many bind values (max 20)"),
+                // The ported suite batches up to four queries (l.68:
+                // Instance + Global + Instance + Class = 23 binds).
+                21 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                22 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .bind::<Text, _>(&all_values[21])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                23 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .bind::<Text, _>(&all_values[20])
+                    .bind::<Text, _>(&all_values[21])
+                    .bind::<Text, _>(&all_values[22])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("where_any: too many bind values (max 23)"),
             };
             async move {
                 let mut seen = Vec::new();
@@ -3436,9 +3932,9 @@ mod sqlite_impl {
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT holder.id AS user_id \
+                "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
                  FROM {holder_table} AS holder \
-                 INNER JOIN {join_table} AS link ON link.user_id = holder.id \
+                 INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS TEXT) \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                  WHERE {type_filter} AND {where_clause}",
                 holder_table = holder_table,
@@ -3448,29 +3944,161 @@ mod sqlite_impl {
                 where_clause = where_clause,
             );
 
+            // Binds are positional: the holder types first (placeholders
+            // $1..$N), then the ladder values continuing the same
+            // sequence. Ladder shapes mirror `where_` / `where_strict`.
+            // Values collect owned (the `where_any` precedent): the bind
+            // chain is type-level, so the count match below issues the
+            // exact static chain per total.
+            let mut all_values: Vec<String> = Vec::new();
+            for holder_type in holder_types {
+                all_values.push((*holder_type).to_owned());
+            }
+            let name = query.name.as_str();
+            if strict {
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            } else {
+                match &query.filter {
+                    rolify_core::query::ResourceFilter::Global => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Class(type_name) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                        all_values.push(name.to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push("".to_owned());
+                        all_values.push((*type_name).to_owned());
+                        all_values.push(resource_id.as_str().to_owned());
+                    }
+                    rolify_core::query::ResourceFilter::Any => {
+                        all_values.push(name.to_owned());
+                    }
+                }
+            }
             let q = diesel::sql_query(sql);
-            let rows: Vec<HolderIdRow> = match holder_types.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            let rows: Vec<HolderIdRow> = match all_values.len() {
                 2 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 3 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
-                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 4 => q
-                    .bind::<Text, _>(holder_types[0])
-                    .bind::<Text, _>(holder_types[1])
-                    .bind::<Text, _>(holder_types[2])
-                    .bind::<Text, _>(holder_types[3])
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 _ => panic!("holders_where: too many holder types (max 4)"),
@@ -3498,7 +4126,7 @@ mod sqlite_impl {
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT id AS user_id FROM {holder_table} WHERE {type_filter}",
+                "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
                 holder_table = holder_table,
                 type_filter = type_filter,
             );
@@ -3571,10 +4199,10 @@ mod sqlite_impl {
             };
 
             let sql = base_sql
-                .replace("{{type_filter}}", &type_filter)
-                .replace("{{name_filter}}", &name_filter)
-                .replace("{{scope_filter}}", &scope_filter)
-                .replace("{{holder_filter}}", &holder_filter);
+                .replace("{type_filter}", &type_filter)
+                .replace("{name_filter}", &name_filter)
+                .replace("{scope_filter}", &scope_filter)
+                .replace("{holder_filter}", &holder_filter);
 
             let mut type_vals: Vec<&str> = query.types.iter().map(|s| *s).collect();
             if let Some(name) = query.name {
@@ -3687,7 +4315,7 @@ mod sqlite_impl {
             let name_ph = placeholder(type_placeholders.len() + 1);
 
             let sql = format!(
-                "SELECT DISTINCT resource_type, resource_id \
+                "SELECT DISTINCT name AS name, resource_type, resource_id \
                  FROM {role_table} \
                  WHERE {type_filter} \
                    AND name = {name_ph} \
@@ -3765,59 +4393,118 @@ mod sqlite_impl {
                 return async { Ok(Vec::new()) };
             }
 
-            let candidate_pairs: Vec<String> = candidates
-                .iter()
-                .map(|c| format!("('{}', '{}')", c.resource_type, c.resource_id.as_str()))
-                .collect();
-            let candidate_filter = format!(
-                "(role_row.resource_type, role_row.resource_id) IN ({})",
-                candidate_pairs.join(", ")
-            );
-
-            let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
+            // The holder's rows for the requested names; coverage is
+            // decided below in Rust, mirroring `InMemoryStore::in_list`
+            // exactly: a candidate is covered by a same-id row or by a
+            // scopeless (global/class) row, with no resource-type check.
+            // Candidate keys (not row keys) are returned, so scopeless
+            // covering rows never reach `to_key`.
+            let name_placeholders: Vec<String> =
+                (2..2 + names.len()).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
-
             let sql = format!(
-                "SELECT DISTINCT role_row.resource_type, role_row.resource_id \
+                "SELECT DISTINCT role_row.name AS name, role_row.resource_type, role_row.resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
                  WHERE link.user_id = ? \
-                   AND {name_filter} \
-                   AND {candidate_filter}",
+                   AND {name_filter}",
                 role_table = self.role_table,
                 join_table = self.join_table,
                 name_filter = name_filter,
-                candidate_filter = candidate_filter,
             );
 
-            let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
-            let rows: Vec<ResourceKeyRow> = match names.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            let mut all_values: Vec<&str> = Vec::new();
+            all_values.push(holder.as_str());
+            for name in names {
+                all_values.push(name.as_str());
+            }
+
+            let q = diesel::sql_query(sql);
+            let rows: Vec<RoleRow> = match all_values.len() {
                 2 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .bind::<Text, _>(names[1].as_str())
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 3 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .bind::<Text, _>(names[1].as_str())
-                    .bind::<Text, _>(names[2].as_str())
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 4 => q
-                    .bind::<Text, _>(names[0].as_str())
-                    .bind::<Text, _>(names[1].as_str())
-                    .bind::<Text, _>(names[2].as_str())
-                    .bind::<Text, _>(names[3].as_str())
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => panic!("in_list: too many names (max 4)"),
+                5 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(all_values[0])
+                    .bind::<Text, _>(all_values[1])
+                    .bind::<Text, _>(all_values[2])
+                    .bind::<Text, _>(all_values[3])
+                    .bind::<Text, _>(all_values[4])
+                    .bind::<Text, _>(all_values[5])
+                    .bind::<Text, _>(all_values[6])
+                    .bind::<Text, _>(all_values[7])
+                    .bind::<Text, _>(all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("in_list: too many names (max 8)"),
             };
-            async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
+            let records: Vec<RoleRecord> =
+                rows.iter().map(RoleRow::to_record).collect();
+            let mut covered: Vec<ResourceKey> = Vec::new();
+            for key in candidates {
+                let matches = records.iter().any(|row| {
+                    names.contains(&row.name)
+                        && (row.resource_id.is_none()
+                            || row.resource_id.as_ref() == Some(&key.resource_id))
+                });
+                if matches && !covered.contains(key) {
+                    covered.push(key.clone());
+                }
+            }
+            async move { Ok(covered) }
         }
     }
 }

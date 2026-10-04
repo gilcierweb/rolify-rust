@@ -15,8 +15,9 @@
 
 #![cfg(all(feature = "sync", any(feature = "postgres", feature = "mysql")))]
 
+mod support;
+
 use std::sync::{Arc, Barrier};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use diesel::Connection;
@@ -35,39 +36,6 @@ use testcontainers::ImageExt;
 use testcontainers_modules::{mysql, postgres, testcontainers::runners::SyncRunner};
 
 const RACE_ITERATIONS: usize = 3;
-
-/// Process-wide serializer for the race cases sharing one database.
-///
-/// Live diagnosis of the recorded Phase 3 gap 2 (5/6 red in parallel,
-/// 6/6 green with `--test-threads=1`): every race helper truncates the
-/// shared `roles` tables per iteration, so neighboring tests wipe each
-/// other's rows mid-race. The store logic under test (catch-re-read,
-/// catch-and-ignore) is correct; the harness needs mutual exclusion.
-/// Each race helper holds this guard for its whole run. Acquisition
-/// spins on `yield_now`: timing-free, correctness never depends on
-/// timing, only liveness. `std::sync::Mutex` cannot serve here because
-/// its guard is `!Sync` and the parity backend must stay `Sync`.
-static RACE_SERIAL: AtomicBool = AtomicBool::new(false);
-
-/// Held for one race helper's whole run; releases on drop.
-struct RaceGuard {
-    flag: &'static AtomicBool,
-}
-
-impl RaceGuard {
-    fn acquire(flag: &'static AtomicBool) -> Self {
-        while flag.swap(true, Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-        Self { flag }
-    }
-}
-
-impl Drop for RaceGuard {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::Release);
-    }
-}
 
 #[derive(Clone)]
 enum ScopeKind {
@@ -165,7 +133,7 @@ mod pg_concurrency {
     }
 
     fn test_find_or_create_race(role_name: &str, scope: ScopeKind) {
-        let _serial = RaceGuard::acquire(&RACE_SERIAL);
+        let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = pg_conn();
         reset_roles(&mut seed_conn);
 
@@ -227,7 +195,7 @@ mod pg_concurrency {
     }
 
     fn test_add_race(role_name: &str, scope: ScopeKind) {
-        let _serial = RaceGuard::acquire(&RACE_SERIAL);
+        let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = pg_conn();
         reset_roles(&mut seed_conn);
 
@@ -428,7 +396,7 @@ mod mysql_concurrency {
     }
 
     fn test_find_or_create_race(role_name: &str, scope: ScopeKind) {
-        let _serial = RaceGuard::acquire(&RACE_SERIAL);
+        let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = mysql_conn();
         reset_roles(&mut seed_conn);
 
@@ -490,7 +458,7 @@ mod mysql_concurrency {
     }
 
     fn test_add_race(role_name: &str, scope: ScopeKind) {
-        let _serial = RaceGuard::acquire(&RACE_SERIAL);
+        let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = mysql_conn();
         reset_roles(&mut seed_conn);
 
