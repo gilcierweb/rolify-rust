@@ -42,6 +42,8 @@ use rolify_core::store::{
 #[cfg(feature = "suite")]
 pub mod backend;
 #[cfg(feature = "suite")]
+pub mod ddl;
+#[cfg(feature = "suite")]
 pub mod fixtures;
 #[cfg(feature = "suite")]
 pub mod suite;
@@ -473,7 +475,8 @@ impl RoleStore for InMemoryStore {
         let count = matching.len();
 
         // Remove those role rows
-        self.rows.retain(|row| !(row.resource_type == rt && row.resource_id == rid));
+        self.rows
+            .retain(|row| !(row.resource_type == rt && row.resource_id == rid));
 
         // Remove associated links (cascade)
         for role in &matching {
