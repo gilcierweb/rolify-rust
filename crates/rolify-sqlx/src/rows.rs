@@ -211,6 +211,33 @@ fn resource_id_from_storage(value: &str) -> Option<ResourceId> {
     }
 }
 
+/// Single-column row for `SELECT COUNT(*) AS count FROM roles` (role row count).
+#[derive(Debug, Clone)]
+pub struct CountRow {
+    /// The count value.
+    pub count: i64,
+}
+
+impl CountRow {
+    /// Decode one `count` projection row.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `sqlx::Error` when the column is missing or its stored
+    /// type is incompatible with `i64`.
+    pub fn from_row<DB>(row: &<DB as Database>::Row) -> Result<Self, sqlx::Error>
+    where
+        DB: Database,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as Database>::Row>,
+    {
+        Ok(Self {
+            count: row.try_get("count")?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

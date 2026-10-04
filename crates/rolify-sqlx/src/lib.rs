@@ -82,13 +82,14 @@ pub static MIGRATIONS_SQLITE: sqlx::migrate::Migrator = sqlx::migrate!("migratio
 
 pub mod dialect;
 pub mod error;
+pub mod rows;
 pub mod sentinel;
 
-mod rows;
 mod sql;
 mod store;
 
 pub use dialect::{cast_to_text, placeholder, quote_identifier};
 pub use error::Error;
+pub use rows::CountRow;
 pub use sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
 pub use store::SqlxStore;

@@ -17,6 +17,7 @@ testcontainers-modules = { version = "=0.15.0", default-features = false, featur
 tokio = { workspace = true }
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
+maybe-async = { workspace = true }
 
 [features]
 default = []

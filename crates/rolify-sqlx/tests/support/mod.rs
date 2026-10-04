@@ -642,3 +642,668 @@ pub async fn reset_roles_sqlite_conn(conn: &mut sqlx::SqliteConnection) {
         .execute(&mut *conn)
         .await;
 }
+
+// ============================================================
+// SqlxBackend — TestBackend implementation for rolify-sqlx
+// ============================================================
+//
+// The database-backed `TestBackend` the ported parity suite binds to
+// (`parity_suite!` over `SqlxBackend`, one line per engine file).
+// One backend owns one engine (store plus its live connection, D-06)
+// over the shared container database; every suite operation flows
+// through that engine connection, so the query counter sees every query.
+//
+// The generic backend type (one impl serves all three engines - D-13)
+// mirrors the diesel_backend module structure: fixture structs,
+// async build() flow, the ten members, and the hook members.
+// reset_query_count delegates to the store's accessor, query_count
+// returns Some(store.query_count()).
+#[cfg(feature = "suite")]
+pub mod sqlx_backend {
+    use std::sync::Mutex;
+
+    use rolify_core::config::RolifyConfig;
+    use rolify_core::manager::Rolify;
+    use rolify_core::resource::ResourceRef;
+    use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+    use rolify_core::store::{ResourceKey, RoleStore, Sealed};
+    use rolify_core::user::RolifyUser;
+
+    use rolify_test::fixtures::{DefaultUser, FixtureResource, UserClass, fixture_holders};
+
+    use sqlx::Connection;
+
+    #[cfg(feature = "postgres")]
+    use super::{pg_container, pg_pool, setup_fixtures_pg};
+    #[cfg(feature = "sqlite")]
+    use super::{setup_fixtures_sqlite_conn, sqlite_memory_pool};
+    #[cfg(feature = "mysql")]
+    use super::{mysql_container, mysql_pool, setup_fixtures_mysql};
+    use sqlx::ConnectOptions;
+    use rolify_sqlx::rows::CountRow;
+    use rolify_sqlx::SqlxStore;
+
+    /// Process-wide serializer for tests sharing one database.
+    ///
+    /// Every backend build truncates the shared `roles` tables, so two
+    /// suite cases running on neighboring tasks wipe each other's rows.
+    /// Each `SqlxBackend` holds this guard for its whole lifetime.
+    /// Acquisition spins on `yield_now`: timing-free, correctness never
+    /// depends on timing, only liveness.
+    pub struct SuiteGuard {
+        flag: &'static std::sync::atomic::AtomicBool,
+    }
+
+    impl SuiteGuard {
+        /// Acquire the process-wide suite lock (spins until free).
+        #[must_use]
+        pub fn acquire() -> Self {
+            static SUITE_SERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            while SUITE_SERIAL.swap(true, std::sync::atomic::Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            Self {
+                flag: &SUITE_SERIAL,
+            }
+        }
+    }
+
+    impl Drop for SuiteGuard {
+        fn drop(&mut self) {
+            self.flag.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Default test configuration for the default role/join table pair.
+    pub fn test_config() -> rolify_core::config::RolifyConfig {
+        rolify_core::config::RolifyConfig::builder()
+            .build()
+            .unwrap()
+    }
+
+    // Re-export types needed by the trait
+    type Store<DB> = SqlxStore<DB>;
+    type Error = rolify_sqlx::Error;
+
+    /// The suite subject: a holder identity over the single engine.
+    ///
+    /// `RolifyUser` requires `Sync`; the engine cell is `Sync` through
+    /// the `Mutex`; all access is through `engine_mut` on `&mut self`,
+    /// so the mutex never blocks.
+    pub struct SqlxSubject<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+    {
+        login: String,
+        holder: ResourceId,
+        engine_cell: Mutex<Rolify<SqlxStore<DB>>>,
+        config: RolifyConfig,
+    }
+
+    impl<DB> SqlxSubject<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+    {
+        fn engine_mut(&mut self) -> &mut Rolify<SqlxStore<DB>> {
+            self.engine_cell
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl<DB> RolifyUser for SqlxSubject<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+    {
+        type Store = SqlxStore<DB>;
+
+        fn store(&mut self) -> &mut Self::Store {
+            self.engine_mut().store_with_conn().0
+        }
+
+        fn rolify_config(&self) -> &RolifyConfig {
+            &self.config
+        }
+
+        fn rolify_id(&self) -> ResourceId {
+            self.holder.clone()
+        }
+
+        fn rolify_type() -> &'static str {
+            DefaultUser::rolify_type()
+        }
+
+        fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn) {
+            self.engine_mut().store_with_conn()
+        }
+    }
+
+    /// Trait for engine-specific test operations.
+    /// Implemented per concrete engine to provide the operations that differ
+    /// between Postgres, MySQL, and SQLite.
+    trait SqlxTestEngine<DB>
+    where
+        DB: sqlx::Database,
+    {
+        /// Create a new connection to the test database.
+        fn make_conn() -> impl std::future::Future<Output = <DB as sqlx::Database>::Connection> + Send;
+
+        /// Run the embedded migrations on the connection.
+        fn run_migrations(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+
+        /// Set up the fixture tables on the connection.
+        fn setup_fixtures(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+
+        /// Seed the canonical fixture rows.
+        fn seed_canonical_rows(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+
+        /// Reset the role state on the connection.
+        fn reset_roles(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+
+        /// Get the pool for this engine (for executor tests).
+        #[allow(dead_code)]
+        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<DB>>> + Send;
+    }
+
+    // Postgres implementation
+    #[cfg(feature = "postgres")]
+    impl SqlxTestEngine<sqlx::Postgres> for () {
+        fn make_conn() -> impl std::future::Future<Output = sqlx::PgConnection> + Send {
+            async {
+                let container = pg_container().await;
+                let host_port = container
+                    .get_host_port_ipv4(5432)
+                    .await
+                    .expect("Postgres port");
+                let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+                sqlx::PgConnection::connect(&url).await.expect("Postgres connection")
+            }
+        }
+
+        fn run_migrations(conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                // Use a pool for migrations (pool implements Acquire)
+                let container = pg_container().await;
+                let host_port = container
+                    .get_host_port_ipv4(5432)
+                    .await
+                    .expect("Postgres port");
+                let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+                let pool = sqlx::PgPool::connect(&url).await.expect("Postgres pool for migrations");
+                rolify_sqlx::MIGRATIONS_POSTGRES.run(&pool).await.expect("Postgres migrations apply");
+            }
+        }
+
+        fn setup_fixtures(_conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                // Use a pool for fixtures (setup_fixtures_pg expects a pool)
+                let container = pg_container().await;
+                let host_port = container
+                    .get_host_port_ipv4(5432)
+                    .await
+                    .expect("Postgres port");
+                let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+                let pool = sqlx::PgPool::connect(&url).await.expect("Postgres pool for fixtures");
+                setup_fixtures_pg(&pool).await;
+            }
+        }
+
+        fn seed_canonical_rows(conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                for statement in [
+                    "INSERT INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie') ON CONFLICT (id) DO NOTHING",
+                    "INSERT INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3') ON CONFLICT (id) DO NOTHING",
+                    "INSERT INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2') ON CONFLICT (id) DO NOTHING",
+                    "INSERT INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2') ON CONFLICT (team_code) DO NOTHING",
+                    "INSERT INTO organizations (id, type) VALUES (1, 'Organization') ON CONFLICT (id) DO NOTHING",
+                ] {
+                    sqlx::query(statement)
+                        .execute(&mut *conn)
+                        .await
+                        .expect("seed canonical fixture row");
+                }
+            }
+        }
+
+        fn reset_roles(conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                sqlx::query("TRUNCATE TABLE users_roles, roles RESTART IDENTITY CASCADE")
+                    .execute(&mut *conn)
+                    .await
+                    .expect("truncate roles on Postgres");
+            }
+        }
+
+        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::Postgres>>> + Send {
+            async { Some(pg_pool().await) }
+        }
+    }
+
+    // MySQL implementation
+    #[cfg(feature = "mysql")]
+    impl SqlxTestEngine<sqlx::MySql> for () {
+        fn make_conn() -> impl std::future::Future<Output = sqlx::MySqlConnection> + Send {
+            async {
+                let container = mysql_container().await;
+                let host_port = container
+                    .get_host_port_ipv4(3306)
+                    .await
+                    .expect("MySQL port");
+                let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+                sqlx::MySqlConnection::connect(&url).await.expect("MySQL connection")
+            }
+        }
+
+        fn run_migrations(conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                // Use a pool for migrations (pool implements Acquire)
+                let container = mysql_container().await;
+                let host_port = container
+                    .get_host_port_ipv4(3306)
+                    .await
+                    .expect("MySQL port");
+                let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+                let pool = sqlx::MySqlPool::connect(&url).await.expect("MySQL pool for migrations");
+                rolify_sqlx::MIGRATIONS_MYSQL.run(&pool).await.expect("MySQL migrations apply");
+            }
+        }
+
+        fn setup_fixtures(_conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                // Use a pool for fixtures (setup_fixtures_mysql expects a pool)
+                let container = mysql_container().await;
+                let host_port = container
+                    .get_host_port_ipv4(3306)
+                    .await
+                    .expect("MySQL port");
+                let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+                let pool = sqlx::MySqlPool::connect(&url).await.expect("MySQL pool for fixtures");
+                setup_fixtures_mysql(&pool).await;
+            }
+        }
+
+        fn seed_canonical_rows(conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                for statement in [
+                    "INSERT IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
+                    "INSERT IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
+                    "INSERT IGNORE INTO `groups` (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')",
+                    "INSERT IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
+                    "INSERT IGNORE INTO organizations (id, type) VALUES (1, 'Organization')",
+                ] {
+                    sqlx::query(statement)
+                        .execute(&mut *conn)
+                        .await
+                        .expect("seed canonical fixture row");
+                }
+            }
+        }
+
+        fn reset_roles(conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                sqlx::query("DELETE FROM users_roles")
+                    .execute(&mut *conn)
+                    .await
+                    .expect("delete users_roles on MySQL");
+                sqlx::query("DELETE FROM roles")
+                    .execute(&mut *conn)
+                    .await
+                    .expect("delete roles on MySQL");
+            }
+        }
+
+        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::MySql>>> + Send {
+            async { Some(mysql_pool().await) }
+        }
+    }
+
+    // SQLite implementation
+    #[cfg(feature = "sqlite")]
+    impl SqlxTestEngine<sqlx::Sqlite> for () {
+        fn make_conn() -> impl std::future::Future<Output = sqlx::SqliteConnection> + Send {
+            async {
+                // Use a file-backed SQLite database in the current working directory (writable)
+                let cwd = std::env::current_dir().expect("current directory");
+                let db_path = cwd.join(format!("rolify_test_{}.db", std::process::id()));
+                let connect_options = sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true)
+                    .foreign_keys(true);
+                // First, create a pool to run migrations (pool implements Acquire)
+                let pool = sqlx::SqlitePool::connect_with(connect_options.clone())
+                    .await
+                    .expect("SQLite pool for migrations");
+                // Run migrations on the pool
+                rolify_sqlx::MIGRATIONS_SQLITE.run(&pool).await.expect("SQLite migrations apply");
+                // Now create a direct connection to the same file (migrations already applied)
+                sqlx::SqliteConnection::connect(connect_options.to_url_lossy().as_str())
+                    .await
+                    .expect("SQLite file connection")
+            }
+        }
+
+        fn run_migrations(_conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+            async { /* Migrations already run in make_conn */ }
+        }
+
+        fn setup_fixtures(conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+            async { setup_fixtures_sqlite_conn(conn).await; }
+        }
+
+        fn seed_canonical_rows(conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                for statement in [
+                    "INSERT OR IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
+                    "INSERT OR IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
+                    "INSERT OR IGNORE INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')",
+                    "INSERT OR IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
+                    "INSERT OR IGNORE INTO organizations (id, type) VALUES (1, 'Organization')",
+                ] {
+                    sqlx::query(statement)
+                        .execute(&mut *conn)
+                        .await
+                        .expect("seed canonical fixture row");
+                }
+            }
+        }
+
+        fn reset_roles(conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                sqlx::query("DELETE FROM users_roles")
+                    .execute(&mut *conn)
+                    .await
+                    .expect("delete users_roles on SQLite");
+                sqlx::query("DELETE FROM roles")
+                    .execute(&mut *conn)
+                    .await
+                    .expect("delete roles on SQLite");
+                let _ = sqlx::query("DELETE FROM sqlite_sequence WHERE name IN ('roles')")
+                    .execute(&mut *conn)
+                    .await;
+            }
+        }
+
+        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::Sqlite>>> + Send {
+            async { Some(sqlite_memory_pool().await) }
+        }
+    }
+
+    /// The Sqlx backend for the parity suite.
+    pub struct SqlxBackend<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        (): SqlxTestEngine<DB>,
+    {
+        // Process-wide suite lock, held for the backend's whole lifetime.
+        serial: SuiteGuard,
+        // The seated subject (default: "admin").
+        subject: SqlxSubject<DB>,
+        // All registered holders (canonical fixture ids).
+        holders: Vec<(&'static str, ResourceId)>,
+        // All registered resources (canonical fixture keys).
+        resources: Vec<(FixtureResource, ResourceKey)>,
+    }
+
+    impl<DB> Sealed for SqlxBackend<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        (): SqlxTestEngine<DB>,
+    {}
+
+    impl<DB> SqlxBackend<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        (): SqlxTestEngine<DB>,
+    {
+        /// The canonical resource keys (identity with the seeded rows).
+        fn canonical_resources() -> Vec<(FixtureResource, ResourceKey)> {
+            vec![
+                (FixtureResource::ForumFirst, ResourceKey::new("Forum", "1")),
+                (FixtureResource::ForumSecond, ResourceKey::new("Forum", "2")),
+                (FixtureResource::ForumLast, ResourceKey::new("Forum", "3")),
+                (FixtureResource::GroupFirst, ResourceKey::new("Group", "1")),
+                (FixtureResource::GroupLast, ResourceKey::new("Group", "2")),
+                (FixtureResource::TeamFirst, ResourceKey::new("Team", "1")),
+                (FixtureResource::TeamLast, ResourceKey::new("Team", "2")),
+                (
+                    FixtureResource::Organization,
+                    ResourceKey::new("Organization", "1"),
+                ),
+                (FixtureResource::Company, ResourceKey::new("Company", "1")),
+            ]
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holders
+                .iter()
+                .find(|(known, _)| *known == login)
+                .map(|(_, holder)| holder.clone())
+        }
+
+        fn resource_key(&self, which: FixtureResource) -> Option<ResourceKey> {
+            self.resources
+                .iter()
+                .find(|(known, _)| *known == which)
+                .map(|(_, key)| key.clone())
+        }
+    }
+
+    // ============================================================
+    // TestBackend implementation
+    // ============================================================
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl<DB> rolify_test::backend::TestBackend for SqlxBackend<DB>
+    where
+        DB: sqlx::Database,
+        <DB as sqlx::Database>::Arguments: sqlx::IntoArguments<DB>,
+        for<'c> &'c mut <DB as sqlx::Database>::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
+        (): SqlxTestEngine<DB>,
+    {
+        type Store = SqlxStore<DB>;
+        type Subject = SqlxSubject<DB>;
+        type Error = Error;
+
+        fn build() -> impl Future<Output = Result<Self, Self::Error>> + Send
+        where
+            Self: Sized,
+        {
+            async move {
+                // Serialize backends sharing one database (see SuiteGuard).
+                let serial = SuiteGuard::acquire();
+                let config = test_config();
+                let mut conn = <() as SqlxTestEngine<DB>>::make_conn().await;
+
+                // Run migrations
+                <() as SqlxTestEngine<DB>>::run_migrations(&mut conn).await;
+
+                // Setup fixtures from shared suite (D-06)
+                <() as SqlxTestEngine<DB>>::setup_fixtures(&mut conn).await;
+
+                // Seed canonical fixture rows
+                <() as SqlxTestEngine<DB>>::seed_canonical_rows(&mut conn).await;
+
+                let store = SqlxStore::new(&config)
+                    .for_holder_table("users")
+                    .register_resource_table("Forum", "forums", "id")
+                    .register_resource_table("Group", "groups", "id")
+                    .register_resource_table("Team", "teams", "team_code")
+                    .register_resource_table("Organization", "organizations", "id")
+                    .register_resource_table("Company", "organizations", "id")
+                    .register_resource_table("Right", "rights", "id");
+                let engine = Rolify::new(store, conn, config.clone());
+
+                let holders = fixture_holders();
+                let admin_holder = holders
+                    .iter()
+                    .find(|(login, _)| *login == "admin")
+                    .map(|(_, holder)| holder.clone())
+                    .expect("the admin fixture login is always seated");
+                let subject = SqlxSubject {
+                    login: "admin".to_owned(),
+                    holder: admin_holder,
+                    engine_cell: Mutex::new(engine),
+                    config,
+                };
+                let resources = Self::canonical_resources();
+
+                Ok(Self {
+                    serial,
+                    subject,
+                    holders,
+                    resources,
+                })
+            }
+        }
+
+        fn subject(&mut self, login: &str) -> &mut Self::Subject {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            self.subject.login = login.to_owned();
+            self.subject.holder = holder;
+            &mut self.subject
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holder_id(login)
+        }
+
+        fn resource(&self, which: FixtureResource) -> ResourceKey {
+            self.resource_key(which).expect("unknown fixture resource")
+        }
+
+        fn reset_roles(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let (_, conn) = self.subject.store_with_conn();
+            async move {
+                <() as SqlxTestEngine<DB>>::reset_roles(conn).await;
+                Ok(())
+            }
+        }
+
+        fn create_role_row(
+            &mut self,
+            record: RoleRecord,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let scope_owned = (record.resource_type.clone(), record.resource_id.clone());
+            let name = record.name.clone();
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let scope = match (&scope_owned.0, &scope_owned.1) {
+                    (None, None) => ResourceRef::Global,
+                    (Some(type_name), None) => ResourceRef::Class(type_name),
+                    (Some(type_name), Some(resource_id)) => {
+                        ResourceRef::Instance(type_name, resource_id)
+                    }
+                    (None, Some(_)) => panic!(
+                        "a role row with an id but no type is not constructible through the public constructors"
+                    ),
+                };
+                store.find_or_create_by(&mut *conn, &name, scope).await?;
+                Ok(())
+            }
+        }
+
+        fn grant_to(
+            &mut self,
+            login: &str,
+            name: &RoleName,
+            scope: ResourceRef<'_>,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let role = store.find_or_create_by(&mut *conn, name, scope).await?;
+                store.add(&mut *conn, &holder, &role).await?;
+                Ok(())
+            }
+        }
+
+        fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let (store, conn) = self.subject.store_with_conn();
+            let table = store.role_table().to_owned();
+            async move {
+                let sql_text = format!("SELECT COUNT(*) AS count FROM {table}");
+                let row = sqlx::query(sqlx::AssertSqlSafe(sql_text.as_str()))
+                    .fetch_one(&mut *conn)
+                    .await?;
+                let count_row = CountRow::from_row::<DB>(&row)?;
+                Ok(usize::try_from(count_row.count).expect("role row count is never negative"))
+            }
+        }
+
+        fn engine(&mut self) -> &mut Rolify<Self::Store> {
+            self.subject.engine_mut()
+        }
+
+        fn reset_query_count(&mut self) {
+            self.subject.store().reset_query_count();
+        }
+
+        fn query_count(&self) -> Option<usize> {
+            // Access the store through the Mutex to get the query count
+            // without requiring &mut self (query_count on store takes &self)
+            Some(self.subject.engine_cell.lock().unwrap().store_with_conn().0.query_count())
+        }
+    }
+}
