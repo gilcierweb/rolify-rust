@@ -899,6 +899,7 @@ mod pg_impl {
                                 crate::sql::delete_orphan_role(&role_table, &join_table);
                             let deleted = diesel::sql_query(sweep_sql)
                                 .bind::<BigInt, _>(role_id)
+                                .bind::<BigInt, _>(role_id)
                                 .execute(conn)
                                 .map_err(Error::Diesel)?;
                             if deleted > 0 {
@@ -2359,6 +2360,7 @@ mod mysql_impl {
                                 crate::sql::delete_orphan_role(&role_table, &join_table);
                             let deleted = diesel::sql_query(sweep_sql)
                                 .bind::<BigInt, _>(role_id)
+                                .bind::<BigInt, _>(role_id)
                                 .execute(conn)
                                 .map_err(Error::Diesel)?;
                             if deleted > 0 {
@@ -2403,18 +2405,20 @@ mod mysql_impl {
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
             let holder_id = holder.as_str();
-            let (rt_cond, rid_cond) = match column {
-                ScopeColumn::ResourceType => ("role_row.resource_type != ''", ""),
-                ScopeColumn::ResourceId => ("", "AND role_row.resource_id != ''"),
+            // One complete condition per column: interpolating an empty
+            // half would emit `AND  AND` (a syntax error the `is_ok`
+            // below would swallow into a wrong `false`).
+            let scope_cond = match column {
+                ScopeColumn::ResourceType => "role_row.resource_type != ''",
+                ScopeColumn::ResourceId => "role_row.resource_id != ''",
             };
             let sql = format!(
                 "SELECT 1 AS dummy FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = ? AND {rt_cond} {rid_cond} LIMIT 1",
+                 WHERE link.user_id = ? AND {scope_cond} LIMIT 1",
                 role_table = self.role_table,
                 join_table = self.join_table,
-                rt_cond = rt_cond,
-                rid_cond = rid_cond,
+                scope_cond = scope_cond,
             );
             #[derive(diesel::deserialize::QueryableByName)]
             struct ExistsRow {
@@ -3811,6 +3815,7 @@ mod sqlite_impl {
                                 crate::sql::delete_orphan_role(&role_table, &join_table);
                             let deleted = diesel::sql_query(sweep_sql)
                                 .bind::<BigInt, _>(role_id)
+                                .bind::<BigInt, _>(role_id)
                                 .execute(conn)
                                 .map_err(Error::Diesel)?;
                             if deleted > 0 {
@@ -3855,18 +3860,20 @@ mod sqlite_impl {
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
             let holder_id = holder.as_str();
-            let (rt_cond, rid_cond) = match column {
-                ScopeColumn::ResourceType => ("role_row.resource_type != ''", ""),
-                ScopeColumn::ResourceId => ("", "AND role_row.resource_id != ''"),
+            // One complete condition per column: interpolating an empty
+            // half would emit `AND  AND` (a syntax error the `is_ok`
+            // below would swallow into a wrong `false`).
+            let scope_cond = match column {
+                ScopeColumn::ResourceType => "role_row.resource_type != ''",
+                ScopeColumn::ResourceId => "role_row.resource_id != ''",
             };
             let sql = format!(
                 "SELECT 1 AS dummy FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = ? AND {rt_cond} {rid_cond} LIMIT 1",
+                 WHERE link.user_id = ? AND {scope_cond} LIMIT 1",
                 role_table = self.role_table,
                 join_table = self.join_table,
-                rt_cond = rt_cond,
-                rid_cond = rid_cond,
+                scope_cond = scope_cond,
             );
             #[derive(diesel::deserialize::QueryableByName)]
             struct ExistsRow {

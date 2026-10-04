@@ -5,11 +5,17 @@
 
 #![cfg(all(feature = "sync", feature = "sqlite"))]
 
+mod support;
+
 use diesel::Connection;
+use diesel::RunQueryDsl;
+use diesel_migrations::MigrationHarness;
 use rolify_core::config::RolifyConfig;
+use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
-use rolify_core::store::RemovalTarget;
+use rolify_core::store::RoleStore;
+use rolify_diesel::rows::CountRow;
 use rolify_diesel::{DieselStore, MIGRATIONS};
 
 use crate::support::{reset_roles, setup_fixtures, sqlite_conn};
@@ -220,10 +226,10 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("find_or_create_by global admin again");
     assert_eq!(admin_global, admin_global_2);
 
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count admin rows");
-    assert_eq!(count, 1);
+    assert_eq!(count_row.count, 1);
 
     // IDEMPOTENCE: add
     let added_third = store
@@ -231,11 +237,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("add admin third time");
     assert!(!added_third);
 
-    let link_count: i64 = diesel::sql_query("SELECT COUNT(*) FROM users_roles WHERE user_id = ? AND role_id = (SELECT id FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = '')")
+    let link_count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM users_roles WHERE user_id = ? AND role_id = (SELECT id FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = '')")
         .bind::<diesel::sql_types::Text, _>(user_id.as_str())
         .get_result(&mut conn)
         .expect("count links");
-    assert_eq!(link_count, 1);
+    assert_eq!(link_count_row.count, 1);
 
     // REMOVE: transactional with orphan sweep
     let outcome = store
@@ -251,10 +257,10 @@ fn tracer_grant_check_revoke_lifecycle() {
     assert_eq!(outcome.removed_roles.len(), 1);
     assert_eq!(outcome.removed_roles[0].name.as_str(), "moderator");
 
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'moderator' AND resource_type = 'Forum' AND resource_id = '42'")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'moderator' AND resource_type = 'Forum' AND resource_id = '42'")
         .get_result(&mut conn)
         .expect("count moderator rows");
-    assert_eq!(count, 0);
+    assert_eq!(count_row.count, 0);
 
     let outcome = store
         .remove(
@@ -318,10 +324,10 @@ fn tracer_grant_check_revoke_lifecycle() {
     assert_eq!(outcome.removed_links, 1);
     assert_eq!(outcome.removed_roles.len(), 0);
 
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'editor' AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'editor' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count editor rows");
-    assert_eq!(count, 1);
+    assert_eq!(count_row.count, 1);
 
     let outcome = store
         .remove(
@@ -367,11 +373,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("find_or_create_by admin");
     store.add(&mut conn, &user, &admin_low).expect("add admin");
 
-    let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name IN ('Admin', 'admin') AND resource_type = '' AND resource_id = ''")
+    let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name IN ('Admin', 'admin') AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count admin rows");
     assert_eq!(
-        count, 2,
+        count_row.count, 2,
         "byte-exact: 'Admin' and 'admin' are two distinct rows"
     );
 

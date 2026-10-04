@@ -282,8 +282,8 @@ pub fn reset_fixtures(conn: &mut Conn) {
                 .unwrap_or_else(|error| panic!("delete fixtures from {table}: {error}"));
         }
         // Restart the rowid aliases so reinserted rows take the
-        // canonical ids again (best effort: only AUTOINCREMENT tables
-        // track here).
+        // canonical ids again (best effort: only tables declared with
+        // the auto-increment keyword track here).
         diesel::sql_query(
             "DELETE FROM sqlite_sequence WHERE name IN ('users', 'customers', 'forums', 'groups', 'organizations', 'rights')",
         )

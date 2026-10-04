@@ -10,7 +10,6 @@
 
 #![cfg(all(feature = "sync", feature = "sqlite", feature = "suite"))]
 
-use rolify_test::backend::InMemoryBackend;
-use rolify_test::fixtures::DefaultUser;
+mod support;
 
 rolify_test::parity_suite!(parity_sqlite, crate::support::diesel_backend::DieselBackend);

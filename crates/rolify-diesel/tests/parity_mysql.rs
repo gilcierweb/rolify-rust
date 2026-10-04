@@ -12,7 +12,6 @@
 
 #![cfg(all(feature = "sync", feature = "mysql", feature = "suite"))]
 
-use rolify_test::backend::InMemoryBackend;
-use rolify_test::fixtures::DefaultUser;
+mod support;
 
 rolify_test::parity_suite!(parity_mysql, crate::support::diesel_backend::DieselBackend);

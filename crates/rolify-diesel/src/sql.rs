@@ -49,6 +49,11 @@ mod backend_sql {
         query: &RoleQuery<'_>,
         start_index: usize,
     ) -> (String, usize) {
+        // The role name is factored ONCE per ladder: every value
+        // occurrence needs its own positional placeholder on `?`
+        // backends (a reused `$N` works on Postgres only, since `?`
+        // binds fill occurrences in order). The factored shape is
+        // equivalent by distributivity: name AND (scope1 OR scope2).
         let name_ph = placeholder(start_index);
         let mut idx = start_index + 1;
 
@@ -58,23 +63,25 @@ mod backend_sql {
             return (sql, idx);
         }
 
-        // Global disjunct (always present for non-Any): name + both sentinel
+        // Global scope pair (always present for non-Any): both sentinel
         // gem: resource == nil -> global disjunct only (build_query:108-109)
         let rt_ph = placeholder(idx);
         let rid_ph = placeholder(idx + 1);
         idx += 2;
 
-        let global_disjunct = format!(
-            "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
-            name_ph = name_ph,
+        let global_pair = format!(
+            "(role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
             rt_ph = rt_ph,
             rid_ph = rid_ph
         );
 
         match &query.filter {
             ResourceFilter::Global => {
-                // Only the global disjunct
-                (format!("({global_disjunct})"), idx)
+                // Only the global pair
+                (
+                    format!("(role_row.name = {name_ph} AND {global_pair})"),
+                    idx,
+                )
             }
             ResourceFilter::Class(_type_name) => {
                 // Global OR (type + sentinel id) — gem: build_query:112-113
@@ -83,13 +90,14 @@ mod backend_sql {
                 let class_rid_ph = placeholder(idx);
                 idx += 1;
 
-                let class_disjunct = format!(
-                    "(role_row.name = {name_ph} AND role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
-                    name_ph = name_ph,
+                let class_pair = format!(
+                    "(role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
                     class_rt_ph = class_rt_ph,
                     class_rid_ph = class_rid_ph
                 );
-                let sql = format!("({global_disjunct} OR {class_disjunct})");
+                let sql = format!(
+                    "(role_row.name = {name_ph} AND ({global_pair} OR {class_pair}))"
+                );
                 (sql, idx)
             }
             ResourceFilter::Instance(_type_name, _resource_id) => {
@@ -99,9 +107,8 @@ mod backend_sql {
                 let class_rid_ph = placeholder(idx);
                 idx += 1;
 
-                let class_disjunct = format!(
-                    "(role_row.name = {name_ph} AND role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
-                    name_ph = name_ph,
+                let class_pair = format!(
+                    "(role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
                     class_rt_ph = class_rt_ph,
                     class_rid_ph = class_rid_ph
                 );
@@ -111,18 +118,19 @@ mod backend_sql {
                 let inst_rid_ph = placeholder(idx);
                 idx += 1;
 
-                let inst_disjunct = format!(
-                    "(role_row.name = {name_ph} AND role_row.resource_type = {inst_rt_ph} AND role_row.resource_id = {inst_rid_ph})",
-                    name_ph = name_ph,
+                let inst_pair = format!(
+                    "(role_row.resource_type = {inst_rt_ph} AND role_row.resource_id = {inst_rid_ph})",
                     inst_rt_ph = inst_rt_ph,
                     inst_rid_ph = inst_rid_ph
                 );
-                let sql = format!("({global_disjunct} OR {class_disjunct} OR {inst_disjunct})");
+                let sql = format!(
+                    "(role_row.name = {name_ph} AND ({global_pair} OR {class_pair} OR {inst_pair}))"
+                );
                 (sql, idx)
             }
             ResourceFilter::Any => {
                 // Handled above — unreachable but kept for exhaustiveness
-                (format!("({global_disjunct})"), idx)
+                (format!("(role_row.name = {name_ph} AND {global_pair})"), idx)
             }
         }
     }
@@ -244,8 +252,11 @@ mod backend_sql {
         format!(
             "SELECT name, resource_type, resource_id \
          FROM {role_table} \
-         WHERE name = $1 AND resource_type = $2 AND resource_id = $3",
-            role_table = role_table
+         WHERE name = {ph1} AND resource_type = {ph2} AND resource_id = {ph3}",
+            role_table = role_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
+            ph3 = placeholder(3),
         )
     }
 
@@ -258,8 +269,11 @@ mod backend_sql {
     #[must_use]
     pub fn insert_role(role_table: &str) -> String {
         format!(
-            "INSERT INTO {role_table} (name, resource_type, resource_id) VALUES ($1, $2, $3)",
-            role_table = role_table
+            "INSERT INTO {role_table} (name, resource_type, resource_id) VALUES ({ph1}, {ph2}, {ph3})",
+            role_table = role_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
+            ph3 = placeholder(3),
         )
     }
 
@@ -269,8 +283,11 @@ mod backend_sql {
     #[must_use]
     pub fn select_role_id_by_triple(role_table: &str) -> String {
         format!(
-            "SELECT id FROM {role_table} WHERE name = $1 AND resource_type = $2 AND resource_id = $3",
-            role_table = role_table
+            "SELECT id FROM {role_table} WHERE name = {ph1} AND resource_type = {ph2} AND resource_id = {ph3}",
+            role_table = role_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
+            ph3 = placeholder(3),
         )
     }
 
@@ -280,8 +297,10 @@ mod backend_sql {
     #[must_use]
     pub fn insert_link(join_table: &str) -> String {
         format!(
-            "INSERT INTO {join_table} (user_id, role_id) VALUES ($1, $2)",
-            join_table = join_table
+            "INSERT INTO {join_table} (user_id, role_id) VALUES ({ph1}, {ph2})",
+            join_table = join_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
         )
     }
 
@@ -307,28 +326,37 @@ mod backend_sql {
             rolify_core::kernel::RemovalTarget::NameOnly => {
                 format!(
                     "DELETE FROM {join_table} \
-                 WHERE user_id = $1 \
-                   AND role_id IN (SELECT id FROM {role_table} WHERE name = $2)",
+                 WHERE user_id = {ph1} \
+                   AND role_id IN (SELECT id FROM {role_table} WHERE name = {ph2})",
                     join_table = join_table,
-                    role_table = role_table
+                    role_table = role_table,
+                    ph1 = placeholder(1),
+                    ph2 = placeholder(2),
                 )
             }
             rolify_core::kernel::RemovalTarget::TypeSweep(_type_name) => {
                 format!(
                     "DELETE FROM {join_table} \
-                 WHERE user_id = $1 \
-                   AND role_id IN (SELECT id FROM {role_table} WHERE name = $2 AND resource_type = $3)",
+                 WHERE user_id = {ph1} \
+                   AND role_id IN (SELECT id FROM {role_table} WHERE name = {ph2} AND resource_type = {ph3})",
                     join_table = join_table,
-                    role_table = role_table
+                    role_table = role_table,
+                    ph1 = placeholder(1),
+                    ph2 = placeholder(2),
+                    ph3 = placeholder(3),
                 )
             }
             rolify_core::kernel::RemovalTarget::Exact(_type_name, _resource_id) => {
                 format!(
                     "DELETE FROM {join_table} \
-                 WHERE user_id = $1 \
-                   AND role_id IN (SELECT id FROM {role_table} WHERE name = $2 AND resource_type = $3 AND resource_id = $4)",
+                 WHERE user_id = {ph1} \
+                   AND role_id IN (SELECT id FROM {role_table} WHERE name = {ph2} AND resource_type = {ph3} AND resource_id = {ph4})",
                     join_table = join_table,
-                    role_table = role_table
+                    role_table = role_table,
+                    ph1 = placeholder(1),
+                    ph2 = placeholder(2),
+                    ph3 = placeholder(3),
+                    ph4 = placeholder(4),
                 )
             }
         }
@@ -353,9 +381,11 @@ mod backend_sql {
                     "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = $1 AND role_row.name = $2",
+                 WHERE link.user_id = {ph1} AND role_row.name = {ph2}",
                     role_table = role_table,
-                    join_table = join_table
+                    join_table = join_table,
+                    ph1 = placeholder(1),
+                    ph2 = placeholder(2),
                 )
             }
             rolify_core::kernel::RemovalTarget::TypeSweep(_) => {
@@ -363,9 +393,12 @@ mod backend_sql {
                     "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = $1 AND role_row.name = $2 AND role_row.resource_type = $3",
+                 WHERE link.user_id = {ph1} AND role_row.name = {ph2} AND role_row.resource_type = {ph3}",
                     role_table = role_table,
-                    join_table = join_table
+                    join_table = join_table,
+                    ph1 = placeholder(1),
+                    ph2 = placeholder(2),
+                    ph3 = placeholder(3),
                 )
             }
             rolify_core::kernel::RemovalTarget::Exact(_, _) => {
@@ -373,9 +406,13 @@ mod backend_sql {
                     "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
                  INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-                 WHERE link.user_id = $1 AND role_row.name = $2 AND role_row.resource_type = $3 AND role_row.resource_id = $4",
+                 WHERE link.user_id = {ph1} AND role_row.name = {ph2} AND role_row.resource_type = {ph3} AND role_row.resource_id = {ph4}",
                     role_table = role_table,
-                    join_table = join_table
+                    join_table = join_table,
+                    ph1 = placeholder(1),
+                    ph2 = placeholder(2),
+                    ph3 = placeholder(3),
+                    ph4 = placeholder(4),
                 )
             }
         }
@@ -389,12 +426,17 @@ mod backend_sql {
     /// Bind order: 1=role_id.
     #[must_use]
     pub fn delete_orphan_role(role_table: &str, join_table: &str) -> String {
+        // Two placeholders (not one reused): `?` backends fill
+        // occurrences positionally, so a shared `$1` would leave the
+        // second occurrence unbound and the sweep would always fire.
         format!(
             "DELETE FROM {role_table} \
-         WHERE id = $1 \
-           AND NOT EXISTS (SELECT 1 FROM {join_table} WHERE role_id = $1)",
+         WHERE id = {ph1} \
+           AND NOT EXISTS (SELECT 1 FROM {join_table} WHERE role_id = {ph2})",
             role_table = role_table,
-            join_table = join_table
+            join_table = join_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
         )
     }
 
@@ -413,8 +455,10 @@ mod backend_sql {
     #[must_use]
     pub fn delete_roles_by_scope(role_table: &str) -> String {
         format!(
-            "DELETE FROM {role_table} WHERE resource_type = $1 AND resource_id = $2",
-            role_table = role_table
+            "DELETE FROM {role_table} WHERE resource_type = {ph1} AND resource_id = {ph2}",
+            role_table = role_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
         )
     }
 
@@ -462,8 +506,11 @@ mod backend_sql {
     #[must_use]
     pub fn select_role_exists_by_triple(role_table: &str) -> String {
         format!(
-            "SELECT 1 FROM {role_table} WHERE name = $1 AND resource_type = $2 AND resource_id = $3 LIMIT 1",
-            role_table = role_table
+            "SELECT 1 FROM {role_table} WHERE name = {ph1} AND resource_type = {ph2} AND resource_id = {ph3} LIMIT 1",
+            role_table = role_table,
+            ph1 = placeholder(1),
+            ph2 = placeholder(2),
+            ph3 = placeholder(3),
         )
     }
 
@@ -634,7 +681,7 @@ mod backend_sql {
             let (sql, next) = build_ladder_where(
                 &role_table,
                 &join_table,
-                "$1",
+                &placeholder(1),
                 &RoleQuery {
                     name: &RoleName::from("admin"),
                     filter: ResourceFilter::Global,
@@ -643,8 +690,9 @@ mod backend_sql {
             );
             // Global: 1 disjunct with 3 binds (name, rt='', rid='')
             // The roles table is aliased `role_row` by the SELECT caller.
-            assert!(sql.contains("resource_type = $3"));
-            assert!(sql.contains("resource_id = $4"));
+            // Placeholders render per compiled backend ($N / ?).
+            assert!(sql.contains(&format!("resource_type = {}", placeholder(3))));
+            assert!(sql.contains(&format!("resource_id = {}", placeholder(4))));
             assert_eq!(next, 5);
         }
 
@@ -655,7 +703,7 @@ mod backend_sql {
             let (sql, next) = build_ladder_where(
                 &role_table,
                 &join_table,
-                "$1",
+                &placeholder(1),
                 &RoleQuery {
                     name: &RoleName::from("manager"),
                     filter: ResourceFilter::Class("Forum"),
@@ -674,7 +722,7 @@ mod backend_sql {
             let (sql, next) = build_ladder_where(
                 &role_table,
                 &join_table,
-                "$1",
+                &placeholder(1),
                 &RoleQuery {
                     name: &RoleName::from("moderator"),
                     filter: ResourceFilter::Instance("Forum", &ResourceId::from("42")),
@@ -693,7 +741,7 @@ mod backend_sql {
             let (sql, next) = build_ladder_where(
                 &role_table,
                 &join_table,
-                "$1",
+                &placeholder(1),
                 &RoleQuery {
                     name: &RoleName::from("admin"),
                     filter: ResourceFilter::Any,
@@ -701,7 +749,7 @@ mod backend_sql {
                 2,
             );
             // Any: name-only, 1 bind (the roles table is aliased `role_row`)
-            assert_eq!(sql, "(role_row.name = $2)");
+            assert_eq!(sql, format!("(role_row.name = {})", placeholder(2)));
             assert_eq!(next, 3);
         }
 
@@ -709,9 +757,9 @@ mod backend_sql {
         fn select_role_by_triple_template() {
             let role_table = quote_identifier("roles");
             let sql = select_role_by_triple(&role_table);
-            assert!(sql.contains("name = $1"));
-            assert!(sql.contains("resource_type = $2"));
-            assert!(sql.contains("resource_id = $3"));
+            assert!(sql.contains(&format!("name = {}", placeholder(1))));
+            assert!(sql.contains(&format!("resource_type = {}", placeholder(2))));
+            assert!(sql.contains(&format!("resource_id = {}", placeholder(3))));
         }
 
         #[test]
@@ -720,7 +768,12 @@ mod backend_sql {
             let sql = insert_link(&join_table);
             assert_eq!(
                 sql,
-                "INSERT INTO \"users_roles\" (user_id, role_id) VALUES ($1, $2)"
+                format!(
+                    "INSERT INTO {} (user_id, role_id) VALUES ({}, {})",
+                    join_table,
+                    placeholder(1),
+                    placeholder(2)
+                )
             );
         }
 
@@ -730,7 +783,7 @@ mod backend_sql {
             let join_table = quote_identifier("users_roles");
             let sql = delete_orphan_role(&role_table, &join_table);
             assert!(sql.contains("NOT EXISTS"));
-            assert!(sql.contains("role_id = $1"));
+            assert!(sql.contains(&format!("id = {}", placeholder(1))));
         }
     }
 } // Close backend_sql module
