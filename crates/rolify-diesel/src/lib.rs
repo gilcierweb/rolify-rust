@@ -6,14 +6,15 @@
 //!
 //! | Mode | Cargo features | Backend | Notes |
 //! |---|---|---|---|
-//! | sync (default) | `sync` | engine feature required | On by default (just-works posture, D-08); forwards `rolify-core/is_sync` via `is_sync` |
+//! | sync (default) | (none, or `sync`) | engine feature required | On by default (just-works posture, D-08); forwards `rolify-core/is_sync` via `is_sync` |
 //! | sync + Postgres | `sync,postgres` | `diesel::pg::PgConnection` | Pulls `diesel_migrations` |
-//! | sync + MySQL | `sync,mysql` | `diesel::mysql::MysqlConnection` | Pulls `diesel_migrations` |
-//! | sync + SQLite | `sync,sqlite` | `diesel::sqlite::SqliteConnection` | Pulls `diesel_migrations` + bundled `libsqlite3-sys` |
+//! | sync + `MySQL` | `sync,mysql` | `diesel::mysql::MysqlConnection` | Pulls `diesel_migrations` |
+//! | sync + `SQLite` | `sync,sqlite` | `diesel::sqlite::SqliteConnection` | Pulls `diesel_migrations` + bundled `libsqlite3-sys` |
 //! | async | `async` | engine feature required | Opt-in: `default-features = false` (D-08); pulls `diesel-async` 0.9 |
 //! | async + Postgres | `async,postgres` | `diesel_async::AsyncPgConnection` | Same `DieselStore` type, same SQL templates, `diesel_async::RunQueryDsl` execution |
 //! | async + bb8 pool | `async,bb8` | - | Mirrors diesel-async's own `bb8` feature (D-09); the canonical gate pool |
 //! | async + deadpool pool | `async,deadpool` | - | Mirrors diesel-async's own `deadpool` feature (D-09); compile-check + smoke only (D-09) |
+//! | async + Postgres + bb8 | `async,bb8,postgres` | `bb8::Pool<AsyncPgConnection>` | Tracer path (this phase): full grant/check/revoke on real Postgres |
 //!
 //! **Mutual exclusion:** `sync` and `async` are mutually exclusive (feature
 //! unification would put the core sync flag and diesel-async in one graph;
@@ -46,7 +47,7 @@
 //!
 //! ## Parity
 //!
-//! Behavioral parity with the gem's ActiveRecord adapter is tracked in the
+//! Behavioral parity with the gem's `ActiveRecord` adapter is tracked in the
 //! project parity matrix (Phase 7). Deliberate divergences locked in this
 //! phase's CONTEXT.md:
 //!

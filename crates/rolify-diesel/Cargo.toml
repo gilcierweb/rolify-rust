@@ -9,7 +9,7 @@ license = "MIT"
 rolify-core = { workspace = true }
 diesel = { workspace = true, default-features = false }
 diesel_migrations = { workspace = true, optional = true }
-diesel-async = { workspace = true, optional = true }
+diesel-async = { workspace = true, default-features = false, optional = true }
 bb8 = { workspace = true, optional = true }
 deadpool = { workspace = true, optional = true }
 thiserror = { workspace = true }
@@ -36,7 +36,7 @@ tokio = { workspace = true }
 # is expressible. D-09: `bb8`/`deadpool` mirror diesel-async's own
 # feature names, neither on by default.
 [features]
-default = []
+default = ["sync"]
 is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
 sync = ["is_sync"]
 async = ["dep:diesel-async"]
