@@ -32,14 +32,18 @@
 //! ## Architecture
 //!
 //! - [`error`]: `Error` enum wrapping `sqlx::Error` + `RolifyError`.
-//! - [`sentinel`]: `None` ↔ `''` translation at the adapter boundary only.
+//! - [`sentinel`]: `None` <-> `''` translation at the adapter boundary only.
 //! - `MIGRATIONS_POSTGRES` / `MIGRATIONS_MYSQL` / `MIGRATIONS_SQLITE`:
 //!   per-engine `sqlx::migrate::Migrator` statics built from the vendored
 //!   migration trees (D-01/D-02). Consumers invoke `.run(&pool)` themselves;
 //!   the crate never migrates automatically.
-//!
-//! The store, SQL templates, dialect, and row types land in later plans of
-//! this phase.
+//! - [`dialect`]: runtime `DB::NAME` switches (placeholder syntax,
+//!   identifier quoting) shared by every engine.
+//! - [`SqlxStore`]: the generic async `RoleStore` (D-13) over
+//!   hand-written SQL with runtime binds (D-12), its statement templates
+//!   in the private `sql` module and its row decoders in the private
+//!   `rows` module. `ResourceStore` lands with the resource-side
+//!   expansion in the next plan of this phase.
 
 // Vendored migration exports (D-01/D-04/D-05): flat sqlx layout, byte-identical
 // to the canonical `rolify-diesel` trees; `tests/drift_guard.rs` enforces the
@@ -72,8 +76,15 @@ pub static MIGRATIONS_MYSQL: sqlx::migrate::Migrator = sqlx::migrate!("migration
 #[cfg(feature = "sqlite")]
 pub static MIGRATIONS_SQLITE: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
+pub mod dialect;
 pub mod error;
 pub mod sentinel;
 
+mod rows;
+mod sql;
+mod store;
+
+pub use dialect::{placeholder, quote_identifier};
 pub use error::Error;
 pub use sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
+pub use store::SqlxStore;

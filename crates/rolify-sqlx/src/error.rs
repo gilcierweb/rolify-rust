@@ -17,7 +17,8 @@ use thiserror::Error;
 /// - `Sqlx`: wraps `sqlx::Error` (query execution, connection, pool, and
 ///   migration errors). The inner error preserves `SQLx`'s full diagnostic
 ///   information, including portable unique-violation detection through
-///   `DatabaseError::code()` (PG `23505` / `MySQL` `1062` / `SQLite` `2067`).
+///   `DatabaseError::code()` (PG `23505` / MySQL `23000` SQLSTATE with the
+///   native `1062` also accepted / SQLite `2067`).
 /// - `Core`: wraps `RolifyError` from `rolify-core` (invalid config,
 ///   callback veto, role not found). This path is taken when config
 ///   validation fails before any SQL is executed.
