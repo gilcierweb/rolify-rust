@@ -118,6 +118,13 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// CONF-05 choreography: `before_add` receives the would-be record and
     /// runs BEFORE any store mutation, so a veto leaves the store
     /// untouched; `after_add` runs only after a successful add.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store error when the `before_add` callback vetoes
+    /// the grant (converted through `From<RolifyError>` before any
+    /// store mutation) or when [`RoleStore::find_or_create_by`] /
+    /// [`RoleStore::add`] fail.
     fn add_role(
         &mut self,
         name: &RoleName,
@@ -219,6 +226,12 @@ pub trait RolifyUser: Send + Sync + 'static {
     ///
     /// CONF-05: `before_remove` vetoes before any mutation; `after_remove`
     /// runs only after a successful remove.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store error when the `before_remove` callback vetoes
+    /// the removal (converted through `From<RolifyError>` before any
+    /// store mutation) or when [`RoleStore::remove`] fails.
     fn remove_role(
         &mut self,
         name: &RoleName,
@@ -271,6 +284,11 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// the strict predicates ONLY when `strict` is configured AND the filter
     /// is Class/Instance (the gem's narrow gate at role.rb:26), via the
     /// pinned [`RolifyUser::rolify_config`] seam.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of [`RoleStore::where_`] /
+    /// [`RoleStore::where_strict`] (whichever the strict gate selects).
     ///
     /// # Example
     ///
@@ -388,6 +406,11 @@ pub trait RolifyUser: Send + Sync + 'static {
 
     /// `has_all_roles?` (*args) (role.rb:56-67) - sequential per-query
     /// checks with early exit on the first miss.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of the per-query
+    /// [`RoleStore::where_`] / [`RoleStore::where_strict`] reads.
     fn has_all_roles(
         &mut self,
         queries: &[RoleQuery<'_>],
@@ -416,6 +439,10 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// gem's persisted path is always non-strict here (no strict branch in
     /// `has_any_role?`), so this is too - parity pinned in
     /// `strict_tests`/parity-matrix notes.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of [`RoleStore::where_any`].
     fn has_any_roles(
         &mut self,
         queries: &[RoleQuery<'_>],
@@ -433,6 +460,11 @@ pub trait RolifyUser: Send + Sync + 'static {
 
     /// `only_has_role?` (role.rb:77-79) - the holder has the asked role AND
     /// exactly one role in total (counts ALL linked roles, not matches).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of [`RolifyUser::has_role`] and
+    /// [`RoleStore::roles_of`].
     fn only_has_role(
         &mut self,
         name: &RoleName,
@@ -450,6 +482,10 @@ pub trait RolifyUser: Send + Sync + 'static {
     }
 
     /// `roles_name` (role.rb:88-90) - all role names linked to this holder.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store errors of [`RoleStore::roles_of`].
     fn roles_name(
         &mut self,
     ) -> impl Future<Output = Result<Vec<RoleName>, <Self::Store as RoleStore>::Error>> + Send {

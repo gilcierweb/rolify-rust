@@ -277,7 +277,7 @@ impl RolifyConfigBuilder {
     /// - Not be empty
     ///
     /// This is the single validation rule for all runtime table names
-    /// (role_table, join_table, and later holder_table). The same rule
+    /// (`role_table`, `join_table`, and later `holder_table`). The same rule
     /// is enforced at `RolifyConfig::build()` and must be reapplied by
     /// adapter constructors for names that bypass config.
     ///
@@ -285,6 +285,12 @@ impl RolifyConfigBuilder {
     ///
     /// Returns `RolifyError::InvalidConfig` with a descriptive reason
     /// if the identifier violates the allow-list.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the first-character `expect` runs only after
+    /// the empty-name check above has already returned, so a first
+    /// character always exists.
     pub fn validate_identifier(name: &str) -> Result<(), RolifyError> {
         if name.is_empty() {
             return Err(RolifyError::InvalidConfig {

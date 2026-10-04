@@ -149,7 +149,7 @@ impl From<u64> for ResourceId {
 /// Physical storage format (D-02): the adapter layer translates `None`
 /// to the sentinel empty string `''` for both columns so that the
 /// `UNIQUE(name, resource_type, resource_id)` constraint deduplicates
-/// identically on Postgres, MySQL, and SQLite. The sentinel constant is
+/// identically on `Postgres`, `MySQL`, and `SQLite`. The sentinel constant is
 /// the single source of truth for this mapping.
 /// The physical format diverges from the gem (which stores NULL); the
 /// parity matrix records this in Phase 7.

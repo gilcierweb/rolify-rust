@@ -115,6 +115,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// Gem `where` (role_adapter.rb:106-121 via `build_query`) - the
     /// non-strict three-disjunct ladder; semantics fixed by
     /// [`crate::kernel::where_`], scoped to `holder`'s role rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend read
+    /// fails.
     fn where_(
         &self,
         conn: &mut Self::Conn,
@@ -124,6 +129,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
 
     /// Gem `where_strict` (role_adapter.rb:11-26) - exact scope, no
     /// overrides; semantics fixed by [`crate::kernel::where_strict`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend read
+    /// fails.
     fn where_strict(
         &self,
         conn: &mut Self::Conn,
@@ -135,6 +145,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// (`build_conditions`, role_adapter.rb:88-104 - `join(' OR ')`): ONE
     /// round-trip for "any of these queries" - the counterpart of
     /// `has_any_role?`'s persisted path, never N sequential checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend read
+    /// fails.
     fn where_any(
         &self,
         conn: &mut Self::Conn,
@@ -145,6 +160,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// Gem `find_or_create_by` (`role_adapter.rb`) - role-row dedupe on the
     /// exact `(name, resource_type, resource_id)` triple (idempotent-add
     /// level 1; the link-guard level 2 lives in [`RoleStore::add`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the row lookup or
+    /// insert fails.
     fn find_or_create_by(
         &mut self,
         conn: &mut Self::Conn,
@@ -155,6 +175,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// Gem `add` (role_adapter.rb:52-54):
     /// `relation.roles << role unless relation.roles.include?(role)` -
     /// line-idempotent link creation (level-2 dedupe).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the link insert
+    /// fails.
     fn add(
         &mut self,
         conn: &mut Self::Conn,
@@ -167,6 +192,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// ([`crate::kernel::removal_match`]); when `remove_role_if_empty` is
     /// set, also delete each role row whose last link just vanished
     /// (`role.destroy if ... limit(1).empty?`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the link deletion
+    /// or the `remove_role_if_empty` sweep fails.
     fn remove(
         &mut self,
         conn: &mut Self::Conn,
@@ -178,6 +208,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
 
     /// Gem `exists?` (role_adapter.rb:72-74):
     /// `relation.where("<column> IS NOT NULL")` over the holder's rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend read
+    /// fails.
     fn exists(
         &self,
         conn: &mut Self::Conn,
@@ -189,6 +224,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// `user.roles` association (the gem reaches it directly; adapters own
     /// the join table, so the surface must expose it). Feeds `roles_name`
     /// / `only_has_role?` (role.rb:77-90).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend join
+    /// read fails.
     fn roles_of(
         &self,
         conn: &mut Self::Conn,
@@ -217,6 +257,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// (D-19, see [`crate::finders`]): the consumer filters its own
     /// table with `IN`. Results are unordered sets (D-04) - each holder
     /// id appears at most once no matter how many rows matched.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend join
+    /// read fails.
     fn holders_where(
         &self,
         conn: &mut Self::Conn,
@@ -233,6 +278,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     ///
     /// Same `holder_types` registry filter (D-03) as
     /// [`RoleStore::holders_where`]; results are unordered (D-04).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend
+    /// holder-table read fails.
     fn all_holders(
         &self,
         conn: &mut Self::Conn,
@@ -256,6 +306,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// * `holder` - when `Some`, only rows LINKED to that holder (the
     ///   join); mirrors the `user.roles` branch at `resource_adapter.rb:7`.
     ///   When `None`, linkage is ignored (the `role_class` branch).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend
+    /// catalog read fails.
     fn roles_matching(
         &self,
         conn: &mut Self::Conn,
@@ -272,6 +327,11 @@ pub trait RoleStore: Sealed + Send + Sync + 'static {
     ///
     /// Mirrors the gem's `dependent: :destroy` behavior on the resource side
     /// (`rolify/spec/rolify/resource_spec.rb:507-510`: `expect { subject.destroy }.to change { Role.count }.by(-2)`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the scoped
+    /// deletion fails.
     fn remove_roles_for_scope(
         &mut self,
         conn: &mut Self::Conn,
@@ -331,6 +391,11 @@ pub trait ResourceStore: Sealed + Send + Sync + 'static {
     /// STI type family (`types` includes descendants, per
     /// `relation_types_for`, base.rb:27-28) that hold `name` at class scope
     /// or at their own instance scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend read
+    /// fails.
     fn resources_find(
         &self,
         conn: &mut Self::Conn,
@@ -341,6 +406,11 @@ pub trait ResourceStore: Sealed + Send + Sync + 'static {
     /// Gem `in` (`resource_adapter.rb` - `in` is a Rust keyword, hence
     /// `in_list`): among `candidates`, the resources where `holder` has any
     /// of `names` at the resource's class scope or instance scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter-defined `Self::Error` when the backend read
+    /// fails.
     fn in_list(
         &self,
         conn: &mut Self::Conn,
