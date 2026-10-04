@@ -38,12 +38,16 @@
 //!   migration trees (D-01/D-02). Consumers invoke `.run(&pool)` themselves;
 //!   the crate never migrates automatically.
 //! - [`dialect`]: runtime `DB::NAME` switches (placeholder syntax,
-//!   identifier quoting) shared by every engine.
-//! - [`SqlxStore`]: the generic async `RoleStore` (D-13) over
-//!   hand-written SQL with runtime binds (D-12), its statement templates
-//!   in the private `sql` module and its row decoders in the private
-//!   `rows` module. `ResourceStore` lands with the resource-side
-//!   expansion in the next plan of this phase.
+//!   identifier quoting, integer-to-text casts) shared by every engine.
+//! - [`SqlxStore`]: the generic async store (D-13) over hand-written SQL
+//!   with runtime binds (D-12), its statement templates in the private
+//!   `sql` module and its row decoders in the private `rows` module. The
+//!   store satisfies the complete sealed SPI union: [`RoleStore`] plus
+//!   [`ResourceStore`] (`resources_find` with the registry-driven class
+//!   expansion and string primary keys, `in_list` with per-id binds).
+//!
+//! [`RoleStore`]: rolify_core::store::RoleStore
+//! [`ResourceStore`]: rolify_core::store::ResourceStore
 
 // Vendored migration exports (D-01/D-04/D-05): flat sqlx layout, byte-identical
 // to the canonical `rolify-diesel` trees; `tests/drift_guard.rs` enforces the
@@ -84,7 +88,7 @@ mod rows;
 mod sql;
 mod store;
 
-pub use dialect::{placeholder, quote_identifier};
+pub use dialect::{cast_to_text, placeholder, quote_identifier};
 pub use error::Error;
 pub use sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
 pub use store::SqlxStore;

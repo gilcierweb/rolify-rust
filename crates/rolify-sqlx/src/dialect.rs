@@ -57,6 +57,23 @@ pub fn quote_identifier<DB: Database>(name: &str) -> String {
     }
 }
 
+/// Wrap an integer-key column so it decodes as text
+/// (`CAST(... AS TEXT)`; `CAST(... AS CHAR)` on `MySQL`, which rejects
+/// `TEXT` as a cast target).
+///
+/// The holder and resource primary keys are integers on most fixture
+/// tables while the SPI carries stringified ids; every projection or
+/// comparison involving such a key casts here so the text-first decode
+/// never sees a binary integer. Mirrors the diesel reference's
+/// per-engine `cast_to_text`, with the engine selected at runtime.
+#[must_use]
+pub fn cast_to_text<DB: Database>(column: &str) -> String {
+    match DB::NAME {
+        "MySQL" => format!("CAST({column} AS CHAR)"),
+        _ => format!("CAST({column} AS TEXT)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "postgres")]
@@ -84,6 +101,11 @@ mod tests {
         fn placeholder_index_zero_panics() {
             let _ = placeholder::<Postgres>(0);
         }
+
+        #[test]
+        fn cast_to_text_uses_text_target() {
+            assert_eq!(cast_to_text::<Postgres>("res.id"), "CAST(res.id AS TEXT)");
+        }
     }
 
     #[cfg(feature = "mysql")]
@@ -101,6 +123,11 @@ mod tests {
         fn quote_identifier_uses_backticks() {
             assert_eq!(quote_identifier::<MySql>("roles"), "`roles`");
             assert_eq!(quote_identifier::<MySql>("users_roles"), "`users_roles`");
+        }
+
+        #[test]
+        fn cast_to_text_uses_char_target() {
+            assert_eq!(cast_to_text::<MySql>("res.id"), "CAST(res.id AS CHAR)");
         }
     }
 

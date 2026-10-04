@@ -35,8 +35,12 @@
 //!   `select_role_ids_by_scope` + `delete_roles_by_ids` so the count
 //!   derives from selection (Pitfall 5) and equals the deleted set inside
 //!   one transaction.
-//! - `select_resources_find_class_expansion` belongs to `ResourceStore`
-//!   and lands with it in the next plan.
+//! - `select_instance_resource_keys` + `select_resources_find_class_expansion`
+//!   (diesel l.1416-1425 inline block and l.465-501): the `resources_find`
+//!   arms - a direct roles-table scan for instance-scoped rows and the
+//!   registry-driven class expansion joining the resource table.
+//! - `select_holder_scope_rows` (diesel's `in_list` inline query): the
+//!   holder's rows narrowed by name; coverage is decided caller-side.
 //! - `select_roles_of` and `select_scoped_exists` are hoisted from the
 //!   diesel store's inline `format!` blocks into named templates so this
 //!   module owns the full statement surface (the 04-06 query counter
@@ -48,7 +52,7 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::store::ScopeColumn;
 use sqlx::database::Database;
 
-use crate::dialect::placeholder;
+use crate::dialect::{cast_to_text, placeholder};
 
 /// The explicit role-row projection shared by every read template.
 const ROLE_PROJECTION: &str = "role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id";
@@ -428,6 +432,109 @@ pub(crate) fn delete_roles_by_ids<DB: Database>(role_table: &str, role_count: us
     )
 }
 
+/// SELECT the instance-scoped keys for `resources_find`: the gem join's
+/// equality arm (`roles.resource_id = relation.pk`,
+/// `resource_adapter.rb:21-23`) reads as a direct roles-table scan
+/// carrying the concrete (non-sentinel) ids of the family types with the
+/// role name. The class arm lives in
+/// [`select_resources_find_class_expansion`]; both decode through the
+/// same `name, resource_type, resource_id` projection.
+///
+/// Bind order: 1..=`type_count` = the family types, then the role name.
+#[must_use]
+pub(crate) fn select_instance_resource_keys<DB: Database>(
+    role_table: &str,
+    type_count: usize,
+) -> String {
+    debug_assert!(
+        type_count > 0,
+        "empty type families return before SQL assembles"
+    );
+    let type_placeholders: Vec<String> = (1..=type_count)
+        .map(|index| placeholder::<DB>(index))
+        .collect();
+    format!(
+        "SELECT DISTINCT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
+         FROM {role_table} AS role_row \
+         WHERE role_row.resource_type IN ({}) \
+           AND role_row.name = {} \
+           AND role_row.resource_id != ''",
+        type_placeholders.join(", "),
+        placeholder::<DB>(type_count + 1),
+    )
+}
+
+/// SELECT the class-scope expansion for `resources_find`: the gem join's
+/// NULL arm (`roles.resource_id IS NULL`, `resource_adapter.rb:21-23`)
+/// reads as a join with the resource's OWN table (resolved through the
+/// store's registry), so one class-scoped role row for `resource_type`
+/// surfaces every persisted resource of that table as a key.
+///
+/// AUDIT (T-04-07): `resource_type` interpolates as a LITERAL both in
+/// the projection and in the join condition. That is safe because the
+/// interpolated value is a resource-table REGISTRY entry that passed
+/// `RolifyConfigBuilder::validate_identifier` at
+/// `SqlxStore::register_resource_table` time (allow-list grammar
+/// `^[A-Za-z_][A-Za-z0-9_]*$`), never consumer input - the diesel
+/// reference carries the same literal interpolation under the same
+/// justification (`rolify-diesel/src/sql.rs:465-501`,
+/// `select_resources_find_class_expansion`). `resource_table` and
+/// `pk_column` arrive from the same validated registry (the table is
+/// already per-engine quoted). The role name travels as a bind, and
+/// resource ids leave the engine through the integer-to-text cast.
+///
+/// Bind order: 1=name.
+#[must_use]
+pub(crate) fn select_resources_find_class_expansion<DB: Database>(
+    role_table: &str,
+    resource_table: &str,
+    pk_column: &str,
+    resource_type: &str,
+) -> String {
+    format!(
+        "SELECT DISTINCT role_row.name AS name, '{resource_type}' AS resource_type, {pk_projection} AS resource_id \
+         FROM {role_table} AS role_row \
+         INNER JOIN {resource_table} AS res \
+           ON role_row.resource_type = '{resource_type}' \
+          AND role_row.resource_id = '' \
+          AND role_row.name = {name_ph}",
+        pk_projection = cast_to_text::<DB>(&format!("res.{pk_column}")),
+        name_ph = placeholder::<DB>(1),
+    )
+}
+
+/// SELECT the holder's rows for the `in_list` name list: the gem's
+/// `user.roles.where(name: role_names)` leg (`resource_adapter.rb:28`).
+/// Coverage is decided caller-side in Rust (mirroring
+/// `InMemoryStore::in_list` exactly: a candidate is covered by a same-id
+/// row or by a scopeless row, with no resource-type check), so this query
+/// only narrows the join by holder and names.
+///
+/// Bind order: 1=holder id, 2..=`name_count` + 1 = the role names.
+#[must_use]
+pub(crate) fn select_holder_scope_rows<DB: Database>(
+    role_table: &str,
+    join_table: &str,
+    name_count: usize,
+) -> String {
+    debug_assert!(
+        name_count > 0,
+        "empty name lists return before SQL assembles"
+    );
+    let name_placeholders: Vec<String> = (2..2 + name_count)
+        .map(|index| placeholder::<DB>(index))
+        .collect();
+    format!(
+        "SELECT DISTINCT {ROLE_PROJECTION} \
+         FROM {role_table} AS role_row \
+         INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
+         WHERE link.user_id = {holder_ph} \
+           AND role_row.name IN ({})",
+        name_placeholders.join(", "),
+        holder_ph = placeholder::<DB>(1),
+    )
+}
+
 /// SELECT whether the holder holds any row with a non-sentinel scope
 /// column: the gem's `exists?`
 /// (`relation.where("<column> IS NOT NULL")`, `role_adapter.rb:72-74`),
@@ -494,8 +601,11 @@ pub(crate) fn select_all_holders(holder_table: &str, type_filter: &str) -> Strin
 ///
 /// The holder join is appended only when `has_holder` (the gem's
 /// `user.roles` branch); `holder_table` must be the quoted name then.
+/// The holder table join key is cast to text (`cast_to_text`): the
+/// fixture holder tables carry integer primary keys while the link
+/// column stores text, and Postgres rejects `integer = text`.
 #[must_use]
-pub(crate) fn select_roles_matching(
+pub(crate) fn select_roles_matching<DB: Database>(
     role_table: &str,
     join_table: &str,
     holder_table: Option<&str>,
@@ -504,7 +614,8 @@ pub(crate) fn select_roles_matching(
     let holder_join = if has_holder {
         format!(
             "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-             INNER JOIN {holder_table} AS holder ON holder.id = link.user_id",
+             INNER JOIN {holder_table} AS holder ON {} = link.user_id",
+            cast_to_text::<DB>("holder.id"),
             holder_table = holder_table.unwrap_or_default(),
         )
     } else {
@@ -585,11 +696,18 @@ pub(crate) fn roles_matching_scope_filter<DB: Database>(
 }
 
 /// Holder filter fragment for `roles_matching` (the `user.roles` join
-/// branch: only rows linked to the holder).
+/// branch: only rows linked to the holder). The holder primary key is an
+/// integer on the fixture tables while the bind carries the stringified
+/// id, so the comparison binds against the text cast (same rationale as
+/// the holder join in [`select_roles_matching`]).
 #[must_use]
 pub(crate) fn roles_matching_holder_filter<DB: Database>(start_index: usize) -> (String, usize) {
     (
-        format!("AND holder.id = {}", placeholder::<DB>(start_index)),
+        format!(
+            "AND {} = {}",
+            cast_to_text::<DB>("holder.id"),
+            placeholder::<DB>(start_index)
+        ),
         start_index + 1,
     )
 }
@@ -746,6 +864,69 @@ mod tests {
         assert!(link_exists.contains("LIMIT 1"));
     }
 
+    fn assert_resource_templates<DB: Database>() {
+        let role_table = quote_identifier::<DB>("roles");
+        let join_table = quote_identifier::<DB>("users_roles");
+        let placeholder_count = |sql_text: &str| {
+            if DB::NAME == "PostgreSQL" {
+                sql_text.matches('$').count()
+            } else {
+                sql_text.matches('?').count()
+            }
+        };
+
+        // Instance keys arm: types 1..=2, then the name bind.
+        let instance_keys = select_instance_resource_keys::<DB>(&role_table, 2);
+        assert!(instance_keys.contains("resource_type IN ("));
+        assert!(instance_keys.contains("resource_id != ''"));
+        assert_eq!(placeholder_count(&instance_keys), 3, "types plus name");
+        if DB::NAME == "PostgreSQL" {
+            assert!(instance_keys.contains("resource_type IN ($1, $2)"));
+            assert!(instance_keys.contains("role_row.name = $3"));
+        }
+
+        // Class expansion: the registry type interpolates as a literal
+        // twice (projection and join), the name binds once, and the pk
+        // projection casts to text.
+        let expansion = select_resources_find_class_expansion::<DB>(
+            &role_table,
+            &quote_identifier::<DB>("forums"),
+            "id",
+            "Forum",
+        );
+        assert!(expansion.contains("'Forum' AS resource_type"));
+        assert!(expansion.contains("role_row.resource_type = 'Forum'"));
+        assert!(expansion.contains("role_row.resource_id = ''"));
+        assert_eq!(placeholder_count(&expansion), 1, "only the name binds");
+        let expected_cast = if DB::NAME == "MySQL" {
+            "CAST(res.id AS CHAR)"
+        } else {
+            "CAST(res.id AS TEXT)"
+        };
+        assert!(expansion.contains(expected_cast));
+
+        // in_list holder scan: one holder bind plus one per name.
+        let holder_rows = select_holder_scope_rows::<DB>(&role_table, &join_table, 2);
+        assert!(holder_rows.contains("role_row.name IN ("));
+        assert_eq!(placeholder_count(&holder_rows), 3, "holder plus names");
+        if DB::NAME == "PostgreSQL" {
+            assert!(holder_rows.contains("link.user_id = $1"));
+            assert!(holder_rows.contains("role_row.name IN ($2, $3)"));
+        }
+
+        // The holder join and filter cast the integer holder key to text
+        // (fixture holder tables are integer-keyed, the link column text).
+        let holder_cast = if DB::NAME == "MySQL" {
+            "CAST(holder.id AS CHAR)"
+        } else {
+            "CAST(holder.id AS TEXT)"
+        };
+        let catalog = select_roles_matching::<DB>(&role_table, &join_table, Some("users"), true);
+        assert!(catalog.contains(holder_cast));
+        let (holder_filter, _) = roles_matching_holder_filter::<DB>(4);
+        assert!(holder_filter.contains(holder_cast));
+    }
+
     #[cfg(feature = "postgres")]
     #[test]
     fn postgres_placeholder_and_bind_table() {
@@ -764,6 +945,7 @@ mod tests {
         assert_strict_bind_counts::<sqlx::Postgres>();
         assert_any_where_joins_ladders::<sqlx::Postgres>();
         assert_templates::<sqlx::Postgres>();
+        assert_resource_templates::<sqlx::Postgres>();
     }
 
     #[cfg(feature = "mysql")]
@@ -782,6 +964,7 @@ mod tests {
         assert_strict_bind_counts::<sqlx::MySql>();
         assert_any_where_joins_ladders::<sqlx::MySql>();
         assert_templates::<sqlx::MySql>();
+        assert_resource_templates::<sqlx::MySql>();
     }
 
     #[cfg(feature = "sqlite")]
@@ -800,5 +983,6 @@ mod tests {
         assert_strict_bind_counts::<sqlx::Sqlite>();
         assert_any_where_joins_ladders::<sqlx::Sqlite>();
         assert_templates::<sqlx::Sqlite>();
+        assert_resource_templates::<sqlx::Sqlite>();
     }
 }

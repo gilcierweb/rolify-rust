@@ -164,14 +164,9 @@ impl ResourceKeyRow {
         })
     }
 
-    /// Translate to a [`ResourceKey`] (the catalog path never returns
-    /// sentinel-scoped rows, so a sentinel `resource_id` here is a query
-    /// bug and fails loudly).
-    ///
-    /// The resource-side finders consume this in the next plan of this
-    /// phase (`ResourceStore`); the role-side catalog read only needs
-    /// [`Self::to_record`] today.
-    #[allow(dead_code)] // reserved for the ResourceStore expansion (04-04)
+    /// Translate to a [`ResourceKey`] (the `resources_find` and catalog
+    /// paths never return sentinel-scoped rows for the id column, so a
+    /// sentinel `resource_id` here is a query bug and fails loudly).
     #[must_use]
     pub(crate) fn to_key(&self) -> ResourceKey {
         ResourceKey::new(

@@ -35,8 +35,10 @@
 //!   choreographies because each statement could land on a different
 //!   connection.
 //!
-//! `ResourceStore` is deliberately absent here: it lands with the
-//! resource-side expansion in the next plan of this phase.
+//! `ResourceStore` completes the sealed SPI union here: `resources_find`
+//! (the instance scan plus the registry-driven class expansion with its
+//! literal-`resource_type` audit, T-04-07) and `in_list` (per-name binds
+//! with caller-side coverage, mirroring `InMemoryStore::in_list`).
 
 use core::future::Future;
 use std::marker::PhantomData;
@@ -47,7 +49,9 @@ use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
-use rolify_core::store::{RemovalOutcome, RoleStore, ScopeColumn, Sealed};
+use rolify_core::store::{
+    RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
+};
 use sqlx::database::Database;
 use sqlx::query::Query;
 use sqlx::{AssertSqlSafe, Connection as _, Executor, IntoArguments};
@@ -291,6 +295,16 @@ where
     fn decode_catalog_rows(rows: &[<DB as Database>::Row]) -> Result<Vec<RoleRecord>, Error> {
         rows.iter()
             .map(|row| ResourceKeyRow::from_row::<DB>(row).map(|key_row| key_row.to_record()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Error::from)
+    }
+
+    /// Decode the `resources_find` projection rows into resource keys
+    /// (the instance scan and every class-expansion select share the
+    /// `name, resource_type, resource_id` shape).
+    fn decode_key_rows(rows: &[<DB as Database>::Row]) -> Result<Vec<ResourceKey>, Error> {
+        rows.iter()
+            .map(|row| ResourceKeyRow::from_row::<DB>(row).map(|key_row| key_row.to_key()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(Error::from)
     }
@@ -842,7 +856,7 @@ where
                 return Ok(Vec::new());
             }
             let has_holder = query.holder.is_some();
-            let base_sql = sql::select_roles_matching(
+            let base_sql = sql::select_roles_matching::<DB>(
                 &role_table,
                 &join_table,
                 has_holder.then_some(holder_table.as_str()),
@@ -929,6 +943,142 @@ where
 
             transaction.commit().await?;
             Ok(removed_count)
+        }
+    }
+}
+
+impl<DB> ResourceStore for SqlxStore<DB>
+where
+    DB: Database,
+    <DB as Database>::Arguments: IntoArguments<DB>,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> &'r str: sqlx::ColumnIndex<<DB as Database>::Row>,
+    for<'r> usize: sqlx::ColumnIndex<<DB as Database>::Row>,
+{
+    type Conn = <DB as Database>::Connection;
+    type Error = Error;
+
+    /// Gem `resources_find` (`resource_adapter.rb:13-25`): the keys of
+    /// the `types` family's resources holding `name` at class scope or at
+    /// their own instance scope. Two query arms mirror the gem's ONE join
+    /// (`resource_id IS NULL OR resource_id = relation.pk`):
+    ///
+    /// 1. the instance arm scans the role table directly for concrete
+    ///    (non-sentinel) ids within the family;
+    /// 2. the class arm expands every registered type of the family over
+    ///    its resource table, so one class row surfaces every persisted
+    ///    resource of that type (the asymmetry: global rows never match
+    ///    here because their type column is the sentinel).
+    ///
+    /// Unlike the diesel reference's fixed-arity bind ladder (capped at
+    /// four types), the binds assemble through the ordered `Vec` seam, so
+    /// any family size works; semantics are identical.
+    fn resources_find(
+        &self,
+        conn: &mut Self::Conn,
+        types: &[&str],
+        name: &RoleName,
+    ) -> impl Future<Output = Result<Vec<ResourceKey>, Self::Error>> + Send {
+        let role_table = self.role_table.clone();
+        let family: Vec<String> = types
+            .iter()
+            .map(|type_name| (*type_name).to_owned())
+            .collect();
+        let expansions: Vec<(String, String, String)> = self
+            .resource_tables
+            .iter()
+            .filter(|(type_name, _, _)| types.contains(&type_name.as_str()))
+            .cloned()
+            .collect();
+        let name_text = name.as_str().to_owned();
+        async move {
+            if family.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let mut all_keys: Vec<ResourceKey> = Vec::new();
+
+            // 1. Instance arm: rows with a concrete id inside the family.
+            let instance_sql = sql::select_instance_resource_keys::<DB>(&role_table, family.len());
+            let mut binds: Vec<BindValue> = family
+                .iter()
+                .map(|type_name| BindValue::Text(type_name.clone()))
+                .collect();
+            binds.push(BindValue::Text(name_text.clone()));
+            let instance_rows = Self::fetch_rows(conn, instance_sql, &binds).await?;
+            all_keys.extend(Self::decode_key_rows(&instance_rows)?);
+
+            // 2. Class arm: registry-driven expansion over each
+            // registered type of the family.
+            for (type_name, resource_table, pk_column) in &expansions {
+                let expansion_sql = sql::select_resources_find_class_expansion::<DB>(
+                    &role_table,
+                    resource_table,
+                    pk_column,
+                    type_name,
+                );
+                let name_bind = [BindValue::Text(name_text.clone())];
+                let class_rows = Self::fetch_rows(conn, expansion_sql, &name_bind).await?;
+                all_keys.extend(Self::decode_key_rows(&class_rows)?);
+            }
+
+            Ok(all_keys)
+        }
+    }
+
+    /// Gem `in` (`resource_adapter.rb:27-30`, renamed `in_list` because
+    /// `in` is a keyword): among `candidates`, the keys where the holder
+    /// carries any of `names` bound to that id OR scopeless (class or
+    /// global rows cover every instance - the same coverage rule as
+    /// `InMemoryStore::in_list`, with no resource-type check, as the
+    /// gem's SQL carries none on this path).
+    ///
+    /// The query narrows by holder and names in ONE round-trip; the
+    /// per-candidate coverage decision happens in Rust so candidate keys
+    /// (never row keys) are returned: a scopeless covering row cannot
+    /// leak its sentinel id.
+    fn in_list(
+        &self,
+        conn: &mut Self::Conn,
+        candidates: &[ResourceKey],
+        holder: &ResourceId,
+        names: &[RoleName],
+    ) -> impl Future<Output = Result<Vec<ResourceKey>, Self::Error>> + Send {
+        let role_table = self.role_table.clone();
+        let join_table = self.join_table.clone();
+        let candidates: Vec<ResourceKey> = candidates.to_vec();
+        let holder_text = holder.as_str().to_owned();
+        let names: Vec<RoleName> = names.to_vec();
+        async move {
+            if candidates.is_empty() || names.is_empty() {
+                return Ok(Vec::new());
+            }
+            let rows_sql =
+                sql::select_holder_scope_rows::<DB>(&role_table, &join_table, names.len());
+            let mut binds = vec![BindValue::Text(holder_text)];
+            for name in &names {
+                binds.push(BindValue::Text(name.as_str().to_owned()));
+            }
+            let rows = Self::fetch_rows(conn, rows_sql, &binds).await?;
+            let records = Self::decode_role_rows(&rows)?;
+
+            let mut covered: Vec<ResourceKey> = Vec::new();
+            for key in &candidates {
+                let matches = records.iter().any(|row| {
+                    names.contains(&row.name)
+                        && (row.resource_id.is_none()
+                            || row.resource_id.as_ref() == Some(&key.resource_id))
+                });
+                if matches && !covered.contains(key) {
+                    covered.push(key.clone());
+                }
+            }
+            Ok(covered)
         }
     }
 }
