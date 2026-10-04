@@ -16,23 +16,23 @@
 //! helpers and add the `blocking` feature to the `testcontainers-modules`
 //! dev-dependency if that becomes necessary.
 
-#[cfg(feature = "postgres")]
-use sqlx::PgPool;
 #[cfg(feature = "mysql")]
 use sqlx::MySqlPool;
-#[cfg(feature = "sqlite")]
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+#[cfg(feature = "postgres")]
+use sqlx::PgPool;
 #[cfg(feature = "sqlite")]
 use sqlx::SqlitePool;
+#[cfg(feature = "sqlite")]
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 #[cfg(any(feature = "postgres", feature = "mysql"))]
 use testcontainers::runners::AsyncRunner;
 #[cfg(any(feature = "postgres", feature = "mysql"))]
 use testcontainers::{ContainerAsync, ImageExt};
-#[cfg(feature = "postgres")]
-use testcontainers_modules::postgres;
 #[cfg(feature = "mysql")]
 use testcontainers_modules::mysql;
+#[cfg(feature = "postgres")]
+use testcontainers_modules::postgres;
 
 /// Get or start the shared Postgres container (postgres:17, Phase 3 D-14 pin).
 #[cfg(feature = "postgres")]
@@ -63,7 +63,9 @@ pub async fn mysql_container() -> &'static ContainerAsync<mysql::Mysql> {
                 .with_tag("8.4")
                 .start()
                 .await
-                .expect("Docker must be available for MySQL parity leg; mysql:8.4 image will be pulled")
+                .expect(
+                    "Docker must be available for MySQL parity leg; mysql:8.4 image will be pulled",
+                )
         })
         .await
 }

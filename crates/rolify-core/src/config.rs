@@ -295,9 +295,7 @@ impl RolifyConfigBuilder {
         let first = chars.next().expect("non-empty string has first char");
         if !first.is_ascii_alphabetic() && first != '_' {
             return Err(RolifyError::InvalidConfig {
-                reason: format!(
-                    "identifier '{name}' must start with ASCII letter or underscore"
-                ),
+                reason: format!("identifier '{name}' must start with ASCII letter or underscore"),
             });
         }
         for ch in chars {

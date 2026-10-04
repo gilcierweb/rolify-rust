@@ -22,7 +22,10 @@ mod tests {
     use rolify_core::store::{ResourceKey, ResourceStore, RoleStore};
     use rolify_diesel::{DieselStore, MIGRATIONS};
 
-    use crate::support::{insert_holder, insert_resource, pg_conn, pg_container, reset_roles, run_migrations, setup_fixtures, test_config};
+    use crate::support::{
+        insert_holder, insert_resource, pg_conn, pg_container, reset_roles, run_migrations,
+        setup_fixtures, test_config,
+    };
 
     /// Helper to create a store with all resource types registered
     fn make_store() -> DieselStore {
@@ -51,13 +54,23 @@ mod tests {
         // Grant instance-scoped role
         let role = RoleRecord::for_instance("moderator", "Forum", &forum_id);
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let role_rec = store.find_or_create_by(conn, &role.name, ResourceRef::Instance("Forum", &forum_id)).wait().unwrap();
-            store.add(conn, &ResourceId::from(1), &role_rec).wait().unwrap();
+            let role_rec = store
+                .find_or_create_by(conn, &role.name, ResourceRef::Instance("Forum", &forum_id))
+                .wait()
+                .unwrap();
+            store
+                .add(conn, &ResourceId::from(1), &role_rec)
+                .wait()
+                .unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Query resources_find
-        let found = store.resources_find(&mut conn, &["Forum"], &RoleName::from("moderator")).wait().unwrap();
+        let found = store
+            .resources_find(&mut conn, &["Forum"], &RoleName::from("moderator"))
+            .wait()
+            .unwrap();
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].resource_type, "Forum");
@@ -82,16 +95,31 @@ mod tests {
         // Grant class-scoped role on Forum
         let role = RoleRecord::for_class("admin", "Forum");
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let role_rec = store.find_or_create_by(conn, &role.name, ResourceRef::Class("Forum")).wait().unwrap();
-            store.add(conn, &ResourceId::from(1), &role_rec).wait().unwrap();
+            let role_rec = store
+                .find_or_create_by(conn, &role.name, ResourceRef::Class("Forum"))
+                .wait()
+                .unwrap();
+            store
+                .add(conn, &ResourceId::from(1), &role_rec)
+                .wait()
+                .unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Query resources_find - should return all three forums
-        let found = store.resources_find(&mut conn, &["Forum"], &RoleName::from("admin")).wait().unwrap();
+        let found = store
+            .resources_find(&mut conn, &["Forum"], &RoleName::from("admin"))
+            .wait()
+            .unwrap();
 
         let found_ids: HashSet<_> = found.iter().map(|k| k.resource_id.as_str()).collect();
-        let expected_ids: HashSet<_> = [forum1_key.resource_id.as_str(), forum2_key.resource_id.as_str(), forum3_key.resource_id.as_str()].into();
+        let expected_ids: HashSet<_> = [
+            forum1_key.resource_id.as_str(),
+            forum2_key.resource_id.as_str(),
+            forum3_key.resource_id.as_str(),
+        ]
+        .into();
 
         assert_eq!(found.len(), 3);
         assert_eq!(found_ids, expected_ids);
@@ -118,22 +146,37 @@ mod tests {
         let org1_id: i64 = diesel::sql_query("SELECT id FROM organizations WHERE type = 'Company'")
             .get_result(&mut conn)
             .unwrap();
-        let org2_id: i64 = diesel::sql_query("SELECT id FROM organizations WHERE type = 'Department'")
-            .get_result(&mut conn)
-            .unwrap();
+        let org2_id: i64 =
+            diesel::sql_query("SELECT id FROM organizations WHERE type = 'Department'")
+                .get_result(&mut conn)
+                .unwrap();
 
         // Grant class-scoped role on Organization (parent type)
         let role = RoleRecord::for_class("owner", "Organization");
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let role_rec = store.find_or_create_by(conn, &role.name, ResourceRef::Class("Organization")).wait().unwrap();
-            store.add(conn, &ResourceId::from(1), &role_rec).wait().unwrap();
+            let role_rec = store
+                .find_or_create_by(conn, &role.name, ResourceRef::Class("Organization"))
+                .wait()
+                .unwrap();
+            store
+                .add(conn, &ResourceId::from(1), &role_rec)
+                .wait()
+                .unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Query with STI family (Organization + descendants)
         // Note: descendant_types for Organization would include Company, Department
         // For this test, we query with both types explicitly
-        let found = store.resources_find(&mut conn, &["Organization", "Company", "Department"], &RoleName::from("owner")).wait().unwrap();
+        let found = store
+            .resources_find(
+                &mut conn,
+                &["Organization", "Company", "Department"],
+                &RoleName::from("owner"),
+            )
+            .wait()
+            .unwrap();
 
         // Should find both organizations since they're in the STI family
         let found_ids: HashSet<_> = found.iter().map(|k| k.resource_id.as_str()).collect();
@@ -158,13 +201,27 @@ mod tests {
         // Grant instance-scoped role
         let role = RoleRecord::for_instance("member", "Team", &team_key.resource_id);
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let role_rec = store.find_or_create_by(conn, &role.name, ResourceRef::Instance("Team", &team_key.resource_id)).wait().unwrap();
-            store.add(conn, &ResourceId::from(1), &role_rec).wait().unwrap();
+            let role_rec = store
+                .find_or_create_by(
+                    conn,
+                    &role.name,
+                    ResourceRef::Instance("Team", &team_key.resource_id),
+                )
+                .wait()
+                .unwrap();
+            store
+                .add(conn, &ResourceId::from(1), &role_rec)
+                .wait()
+                .unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Query resources_find
-        let found = store.resources_find(&mut conn, &["Team"], &RoleName::from("member")).wait().unwrap();
+        let found = store
+            .resources_find(&mut conn, &["Team"], &RoleName::from("member"))
+            .wait()
+            .unwrap();
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].resource_type, "Team");
@@ -193,27 +250,61 @@ mod tests {
         // holder2 has moderator on forum3 (instance-scoped)
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             // Class-scoped role for holder1
-            let class_role = store.find_or_create_by(conn, &RoleName::from("moderator"), ResourceRef::Class("Forum")).wait().unwrap();
+            let class_role = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("moderator"),
+                    ResourceRef::Class("Forum"),
+                )
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &class_role).wait().unwrap();
 
             // Instance-scoped role for holder2 on forum3
-            let inst_role = store.find_or_create_by(conn, &RoleName::from("moderator"), ResourceRef::Instance("Forum", &forum3_key.resource_id)).wait().unwrap();
+            let inst_role = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("moderator"),
+                    ResourceRef::Instance("Forum", &forum3_key.resource_id),
+                )
+                .wait()
+                .unwrap();
             store.add(conn, &holder2, &inst_role).wait().unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         let candidates = vec![forum1_key.clone(), forum2_key.clone(), forum3_key.clone()];
 
         // holder1 should see forum1 and forum2 (class-scoped role covers all)
-        let holder1_results = store.in_list(&mut conn, &candidates, &holder1, &[RoleName::from("moderator")]).wait().unwrap();
-        let holder1_ids: HashSet<_> = holder1_results.iter().map(|k| k.resource_id.as_str()).collect();
+        let holder1_results = store
+            .in_list(
+                &mut conn,
+                &candidates,
+                &holder1,
+                &[RoleName::from("moderator")],
+            )
+            .wait()
+            .unwrap();
+        let holder1_ids: HashSet<_> = holder1_results
+            .iter()
+            .map(|k| k.resource_id.as_str())
+            .collect();
         assert_eq!(holder1_results.len(), 2);
         assert!(holder1_ids.contains(&forum1_key.resource_id.as_str()));
         assert!(holder1_ids.contains(&forum2_key.resource_id.as_str()));
         assert!(!holder1_ids.contains(&forum3_key.resource_id.as_str()));
 
         // holder2 should see only forum3 (instance-scoped)
-        let holder2_results = store.in_list(&mut conn, &candidates, &holder2, &[RoleName::from("moderator")]).wait().unwrap();
+        let holder2_results = store
+            .in_list(
+                &mut conn,
+                &candidates,
+                &holder2,
+                &[RoleName::from("moderator")],
+            )
+            .wait()
+            .unwrap();
         assert_eq!(holder2_results.len(), 1);
         assert_eq!(holder2_results[0].resource_id, forum3_key.resource_id);
     }
@@ -234,23 +325,52 @@ mod tests {
         // holder1: global admin role
         // holder2: class-scoped admin on Forum
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let global_role = store.find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Global).wait().unwrap();
+            let global_role = store
+                .find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Global)
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &global_role).wait().unwrap();
 
-            let class_role = store.find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Class("Forum")).wait().unwrap();
+            let class_role = store
+                .find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Class("Forum"))
+                .wait()
+                .unwrap();
             store.add(conn, &holder2, &class_role).wait().unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Non-strict: global role matches class query (override ladder)
-        let non_strict = store.holders_where(&mut conn, &["User"], &RoleQuery::with_role_and_filter(&RoleName::from("admin"), ResourceFilter::Class("Forum")), false).wait().unwrap();
+        let non_strict = store
+            .holders_where(
+                &mut conn,
+                &["User"],
+                &RoleQuery::with_role_and_filter(
+                    &RoleName::from("admin"),
+                    ResourceFilter::Class("Forum"),
+                ),
+                false,
+            )
+            .wait()
+            .unwrap();
         let non_strict_ids: HashSet<_> = non_strict.iter().map(|id| id.as_str()).collect();
         assert_eq!(non_strict.len(), 2);
         assert!(non_strict_ids.contains("1"));
         assert!(non_strict_ids.contains("2"));
 
         // Strict: only exact class-scoped matches
-        let strict = store.holders_where(&mut conn, &["User"], &RoleQuery::with_role_and_filter(&RoleName::from("admin"), ResourceFilter::Class("Forum")), true).wait().unwrap();
+        let strict = store
+            .holders_where(
+                &mut conn,
+                &["User"],
+                &RoleQuery::with_role_and_filter(
+                    &RoleName::from("admin"),
+                    ResourceFilter::Class("Forum"),
+                ),
+                true,
+            )
+            .wait()
+            .unwrap();
         let strict_ids: HashSet<_> = strict.iter().map(|id| id.as_str()).collect();
         assert_eq!(strict.len(), 1);
         assert!(strict_ids.contains("2"));
@@ -274,10 +394,14 @@ mod tests {
         // Grant role to one user
         let holder1 = ResourceId::from(1);
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let role = store.find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Global).wait().unwrap();
+            let role = store
+                .find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Global)
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &role).wait().unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // all_holders should return all users including never-rolified
         let all = store.all_holders(&mut conn, &["User"]).wait().unwrap();
@@ -304,24 +428,45 @@ mod tests {
         // Create various roles
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             // Global admin
-            let r1 = store.find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Global).wait().unwrap();
+            let r1 = store
+                .find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Global)
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &r1).wait().unwrap();
 
             // Class-scoped moderator on Forum
-            let r2 = store.find_or_create_by(conn, &RoleName::from("moderator"), ResourceRef::Class("Forum")).wait().unwrap();
+            let r2 = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("moderator"),
+                    ResourceRef::Class("Forum"),
+                )
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &r2).wait().unwrap();
 
             // Instance-scoped editor on Forum#1
             let forum_key = insert_resource(&mut conn, "forums", "Test Forum");
-            let r3 = store.find_or_create_by(conn, &RoleName::from("editor"), ResourceRef::Instance("Forum", &forum_key.resource_id)).wait().unwrap();
+            let r3 = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("editor"),
+                    ResourceRef::Instance("Forum", &forum_key.resource_id),
+                )
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &r3).wait().unwrap();
 
             // Another global role (viewer)
-            let r4 = store.find_or_create_by(conn, &RoleName::from("viewer"), ResourceRef::Global).wait().unwrap();
+            let r4 = store
+                .find_or_create_by(conn, &RoleName::from("viewer"), ResourceRef::Global)
+                .wait()
+                .unwrap();
             store.add(conn, &holder1, &r4).wait().unwrap();
 
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Filter by name
         let query = RoleCatalogQuery::for_types(&["Forum"]).with_name(&RoleName::from("moderator"));
@@ -333,15 +478,22 @@ mod tests {
         // Filter by scope: ClassOnly
         let query = RoleCatalogQuery::for_types(&["Forum"]).class_only();
         let results = store.roles_matching(&mut conn, &query).wait().unwrap();
-        let class_roles: Vec<_> = results.iter().filter(|r| r.is_class_scoped_to("Forum")).collect();
+        let class_roles: Vec<_> = results
+            .iter()
+            .filter(|r| r.is_class_scoped_to("Forum"))
+            .collect();
         assert_eq!(class_roles.len(), 1);
         assert_eq!(class_roles[0].name.as_str(), "moderator");
 
         // Filter by scope: InstanceOnly (specific instance)
         let forum_key = insert_resource(&mut conn, "forums", "Test Forum");
-        let query = RoleCatalogQuery::for_types(&["Forum"]).instance_only(Some(&forum_key.resource_id));
+        let query =
+            RoleCatalogQuery::for_types(&["Forum"]).instance_only(Some(&forum_key.resource_id));
         let results = store.roles_matching(&mut conn, &query).wait().unwrap();
-        let inst_roles: Vec<_> = results.iter().filter(|r| r.is_instance_scoped_to("Forum", &forum_key.resource_id)).collect();
+        let inst_roles: Vec<_> = results
+            .iter()
+            .filter(|r| r.is_instance_scoped_to("Forum", &forum_key.resource_id))
+            .collect();
         assert_eq!(inst_roles.len(), 1);
         assert_eq!(inst_roles[0].name.as_str(), "editor");
 
@@ -366,25 +518,51 @@ mod tests {
 
         // Create roles: one instance-scoped, one class-scoped on same type
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let inst_role = store.find_or_create_by(conn, &RoleName::from("moderator"), ResourceRef::Instance("Forum", &forum_id)).wait().unwrap();
-            store.add(conn, &ResourceId::from(1), &inst_role).wait().unwrap();
+            let inst_role = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("moderator"),
+                    ResourceRef::Instance("Forum", &forum_id),
+                )
+                .wait()
+                .unwrap();
+            store
+                .add(conn, &ResourceId::from(1), &inst_role)
+                .wait()
+                .unwrap();
 
-            let class_role = store.find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Class("Forum")).wait().unwrap();
-            store.add(conn, &ResourceId::from(1), &class_role).wait().unwrap();
+            let class_role = store
+                .find_or_create_by(conn, &RoleName::from("admin"), ResourceRef::Class("Forum"))
+                .wait()
+                .unwrap();
+            store
+                .add(conn, &ResourceId::from(1), &class_role)
+                .wait()
+                .unwrap();
 
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Verify both roles exist before delete
-        let before = store.roles_matching(&mut conn, &RoleCatalogQuery::for_types(&["Forum"])).wait().unwrap();
+        let before = store
+            .roles_matching(&mut conn, &RoleCatalogQuery::for_types(&["Forum"]))
+            .wait()
+            .unwrap();
         assert_eq!(before.len(), 2);
 
         // Delete instance-scoped roles for this forum
-        let deleted = store.remove_roles_for_scope(&mut conn, "Forum", &forum_id).wait().unwrap();
+        let deleted = store
+            .remove_roles_for_scope(&mut conn, "Forum", &forum_id)
+            .wait()
+            .unwrap();
         assert_eq!(deleted, 1);
 
         // Verify only instance-scoped role was deleted, class-scoped survives
-        let after = store.roles_matching(&mut conn, &RoleCatalogQuery::for_types(&["Forum"])).wait().unwrap();
+        let after = store
+            .roles_matching(&mut conn, &RoleCatalogQuery::for_types(&["Forum"]))
+            .wait()
+            .unwrap();
         assert_eq!(after.len(), 1);
         assert!(after[0].is_class_scoped_to("Forum"));
         assert_eq!(after[0].name.as_str(), "admin");
@@ -407,18 +585,37 @@ mod tests {
         let holder = ResourceId::from(1);
 
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
-            let role = custom_store.find_or_create_by(conn, &RoleName::from("moderator"), ResourceRef::Instance("Forum", &forum_key.resource_id)).wait().unwrap();
+            let role = custom_store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("moderator"),
+                    ResourceRef::Instance("Forum", &forum_key.resource_id),
+                )
+                .wait()
+                .unwrap();
             custom_store.add(conn, &holder, &role).wait().unwrap();
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Verify the role was created and linked
-        let results = custom_store.resources_find(&mut conn, &["Forum"], &RoleName::from("moderator")).wait().unwrap();
+        let results = custom_store
+            .resources_find(&mut conn, &["Forum"], &RoleName::from("moderator"))
+            .wait()
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].resource_id, forum_key.resource_id);
 
         // Verify in_list works with custom tables
-        let in_results = custom_store.in_list(&mut conn, &[forum_key.clone()], &holder, &[RoleName::from("moderator")]).wait().unwrap();
+        let in_results = custom_store
+            .in_list(
+                &mut conn,
+                &[forum_key.clone()],
+                &holder,
+                &[RoleName::from("moderator")],
+            )
+            .wait()
+            .unwrap();
         assert_eq!(in_results.len(), 1);
     }
 }

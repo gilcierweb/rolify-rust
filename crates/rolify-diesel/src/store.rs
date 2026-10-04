@@ -13,11 +13,13 @@ use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::RoleQuery;
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
-use rolify_core::store::{RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed};
+use rolify_core::store::{
+    RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
+};
 
 use crate::dialect::{placeholder, quote_identifier};
 use crate::error::Error;
-use crate::rows::{ResourceKeyRow, RoleRow, IdRow, HolderIdRow};
+use crate::rows::{HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
 use crate::sentinel::{resource_id_to_storage, to_storage};
 
 /// Diesel sync store — holds the configured table names and a resource registry.
@@ -69,7 +71,8 @@ impl DieselStore {
     #[must_use]
     pub fn for_holder_table(mut self, holder_table: &str) -> Self {
         // Validate via config's identifier validation (allow-list ^[A-Za-z_][A-Za-z0-9_]*$)
-        RolifyConfigBuilder::validate_identifier(holder_table).expect("holder table name must pass validation");
+        RolifyConfigBuilder::validate_identifier(holder_table)
+            .expect("holder table name must pass validation");
         self.holder_table = Some(quote_identifier(holder_table));
         self
     }
@@ -78,14 +81,25 @@ impl DieselStore {
     /// `type_name` is the STI type (e.g., "Forum"), `table_name` is the DB table (e.g., "forums"),
     /// `pk_column` is the primary key column (e.g., "id" or "team_code").
     #[must_use]
-    pub fn register_resource_table(mut self, type_name: &str, table_name: &str, pk_column: &str) -> Self {
+    pub fn register_resource_table(
+        mut self,
+        type_name: &str,
+        table_name: &str,
+        pk_column: &str,
+    ) -> Self {
         // Validate identifiers using the same allow-list as config
-        RolifyConfigBuilder::validate_identifier(table_name).expect("resource table name must pass validation");
-        RolifyConfigBuilder::validate_identifier(pk_column).expect("pk column name must pass validation");
-        RolifyConfigBuilder::validate_identifier(type_name).expect("type name must pass validation");
+        RolifyConfigBuilder::validate_identifier(table_name)
+            .expect("resource table name must pass validation");
+        RolifyConfigBuilder::validate_identifier(pk_column)
+            .expect("pk column name must pass validation");
+        RolifyConfigBuilder::validate_identifier(type_name)
+            .expect("type name must pass validation");
 
-        self.resource_tables
-            .push((type_name.to_string(), quote_identifier(table_name), pk_column.to_owned()));
+        self.resource_tables.push((
+            type_name.to_string(),
+            quote_identifier(table_name),
+            pk_column.to_owned(),
+        ));
         self
     }
 
@@ -210,29 +224,30 @@ mod pg_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Class(type_name) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>(type_name)
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
                         .bind::<Text, _>(holder.as_str())
@@ -246,13 +261,11 @@ mod pg_impl {
                         .load(conn)
                         .map_err(Error::Diesel)?
                 }
-                rolify_core::query::ResourceFilter::Any => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -270,27 +283,28 @@ mod pg_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Class(type_name) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>(type_name)
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
                         .bind::<Text, _>(holder.as_str())
@@ -300,13 +314,11 @@ mod pg_impl {
                         .load(conn)
                         .map_err(Error::Diesel)?
                 }
-                rolify_core::query::ResourceFilter::Any => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -327,7 +339,12 @@ mod pg_impl {
                 queries,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             // Collect all bind values in order, then match on query count for typed binds
             let mut all_values: Vec<String> = Vec::new();
             all_values.push(holder.as_str().to_owned());
@@ -363,26 +380,276 @@ mod pg_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<RoleRow> = match all_values.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(&all_values[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).load(conn).map_err(Error::Diesel)?,
-                5 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).load(conn).map_err(Error::Diesel)?,
-                6 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).load(conn).map_err(Error::Diesel)?,
-                7 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).load(conn).map_err(Error::Diesel)?,
-                8 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).load(conn).map_err(Error::Diesel)?,
-                9 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).load(conn).map_err(Error::Diesel)?,
-                10 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).load(conn).map_err(Error::Diesel)?,
-                11 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).load(conn).map_err(Error::Diesel)?,
-                12 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).load(conn).map_err(Error::Diesel)?,
-                13 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).load(conn).map_err(Error::Diesel)?,
-                14 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).load(conn).map_err(Error::Diesel)?,
-                15 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).load(conn).map_err(Error::Diesel)?,
-                16 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).load(conn).map_err(Error::Diesel)?,
-                17 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).load(conn).map_err(Error::Diesel)?,
-                18 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).load(conn).map_err(Error::Diesel)?,
-                19 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).load(conn).map_err(Error::Diesel)?,
-                20 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).bind::<Text, _>(&all_values[19]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                12 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                13 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                14 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                15 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                16 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                17 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                18 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                19 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                20 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("where_any: too many bind values (max 20)"),
             };
             async move {
@@ -419,17 +686,26 @@ mod pg_impl {
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
-            let role_record = match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
-                Ok(r) => r,
-                Err(e) => return async move { Err(e) },
-            };
+            let role_record =
+                match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
+                    Ok(r) => r,
+                    Err(e) => return async move { Err(e) },
+                };
 
             let role_id = match get_role_id(
                 conn,
                 &self.role_table,
                 &role_record.name,
-                role_record.resource_type.as_ref().map(|s| s.as_str()).unwrap_or_default(),
-                role_record.resource_id.as_ref().map(|r| r.as_str()).unwrap_or_default(),
+                role_record
+                    .resource_type
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or_default(),
+                role_record
+                    .resource_id
+                    .as_ref()
+                    .map(|r| r.as_str())
+                    .unwrap_or_default(),
             ) {
                 Ok(id) => id,
                 Err(e) => return async move { Err(e) },
@@ -469,7 +745,8 @@ mod pg_impl {
 
             async move {
                 conn.transaction::<_, Error, _>(|conn| {
-                    let affected_sql = crate::sql::select_affected_roles(&role_table, &join_table, &target_owned);
+                    let affected_sql =
+                        crate::sql::select_affected_roles(&role_table, &join_table, &target_owned);
                     let affected_rows: Vec<RoleRow> = match &target_owned {
                         RemovalTarget::NameOnly => {
                             let q = diesel::sql_query(affected_sql)
@@ -493,9 +770,14 @@ mod pg_impl {
                             q.load(conn).map_err(Error::Diesel)?
                         }
                     };
-                    let affected_records: Vec<RoleRecord> = affected_rows.into_iter().map(|r| r.to_record()).collect();
+                    let affected_records: Vec<RoleRecord> =
+                        affected_rows.into_iter().map(|r| r.to_record()).collect();
 
-                    let delete_sql = crate::sql::delete_links_for_target(&join_table, &role_table, &target_owned);
+                    let delete_sql = crate::sql::delete_links_for_target(
+                        &join_table,
+                        &role_table,
+                        &target_owned,
+                    );
                     let removed_links = match &target_owned {
                         RemovalTarget::NameOnly => {
                             let q = diesel::sql_query(delete_sql)
@@ -527,10 +809,17 @@ mod pg_impl {
                                 conn,
                                 &role_table,
                                 &role.name,
-                                role.resource_type.as_ref().map(|s| s.as_str()).unwrap_or_default(),
-                                role.resource_id.as_ref().map(|r| r.as_str()).unwrap_or_default(),
+                                role.resource_type
+                                    .as_ref()
+                                    .map(|s| s.as_str())
+                                    .unwrap_or_default(),
+                                role.resource_id
+                                    .as_ref()
+                                    .map(|r| r.as_str())
+                                    .unwrap_or_default(),
                             )?;
-                            let sweep_sql = crate::sql::delete_orphan_role(&role_table, &join_table);
+                            let sweep_sql =
+                                crate::sql::delete_orphan_role(&role_table, &join_table);
                             let deleted = diesel::sql_query(sweep_sql)
                                 .bind::<BigInt, _>(role_id)
                                 .execute(conn)
@@ -570,7 +859,6 @@ mod pg_impl {
             }
         }
 
-
         fn exists(
             &self,
             conn: &mut Self::Conn,
@@ -602,7 +890,7 @@ mod pg_impl {
             async move { Ok(found) }
         }
 
-fn roles_of(
+        fn roles_of(
             &self,
             conn: &mut Self::Conn,
             holder: &ResourceId,
@@ -652,7 +940,8 @@ fn roles_of(
             };
 
             let holder_table = self.holder_table_sql();
-            let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> =
+                (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -671,13 +960,36 @@ fn roles_of(
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(holder_types[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).bind::<Text, _>(holder_types[3]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(holder_types[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("holders_where: too many holder types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| ResourceId::new(r.user_id)).collect()) }
+            async move {
+                Ok(rows
+                    .into_iter()
+                    .map(|r| ResourceId::new(r.user_id))
+                    .collect())
+            }
         }
 
         fn all_holders(
@@ -690,7 +1002,8 @@ fn roles_of(
             }
 
             let holder_table = self.holder_table_sql();
-            let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> =
+                (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -702,13 +1015,36 @@ fn roles_of(
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(holder_types[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).bind::<Text, _>(holder_types[3]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(holder_types[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("all_holders: too many holder types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| ResourceId::new(r.user_id)).collect()) }
+            async move {
+                Ok(rows
+                    .into_iter()
+                    .map(|r| ResourceId::new(r.user_id))
+                    .collect())
+            }
         }
 
         fn roles_matching(
@@ -723,7 +1059,12 @@ fn roles_of(
             let has_holder = query.holder.is_some();
             let holder_table = query.holder.map(|_| self.holder_table_sql());
 
-            let base_sql = crate::sql::select_roles_matching(&self.role_table, &self.join_table, holder_table.as_deref(), has_holder);
+            let base_sql = crate::sql::select_roles_matching(
+                &self.role_table,
+                &self.join_table,
+                holder_table.as_deref(),
+                has_holder,
+            );
 
             let (type_filter, idx) = crate::sql::roles_matching_type_filter(query.types, 1);
             let (name_filter, idx) = if let Some(name) = query.name {
@@ -766,14 +1107,66 @@ fn roles_of(
             let q = diesel::sql_query(sql);
             let rows: Vec<ResourceKeyRow> = match type_vals.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(type_vals[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).load(conn).map_err(Error::Diesel)?,
-                5 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).load(conn).map_err(Error::Diesel)?,
-                6 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).load(conn).map_err(Error::Diesel)?,
-                7 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).bind::<Text, _>(type_vals[6]).load(conn).map_err(Error::Diesel)?,
-                8 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).bind::<Text, _>(type_vals[6]).bind::<Text, _>(type_vals[7]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .bind::<Text, _>(type_vals[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .bind::<Text, _>(type_vals[6])
+                    .bind::<Text, _>(type_vals[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("roles_matching: too many bind values (max 8)"),
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
@@ -894,7 +1287,9 @@ fn roles_of(
             }
             let candidate_filter = candidate_conditions.join(" OR ");
 
-            let name_placeholders: Vec<String> = (bind_idx..bind_idx + names.len()).map(placeholder).collect();
+            let name_placeholders: Vec<String> = (bind_idx..bind_idx + names.len())
+                .map(placeholder)
+                .collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
 
             let sql = format!(
@@ -1138,29 +1533,30 @@ mod mysql_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Class(type_name) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>(type_name)
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
                         .bind::<Text, _>(holder.as_str())
@@ -1174,13 +1570,11 @@ mod mysql_impl {
                         .load(conn)
                         .map_err(Error::Diesel)?
                 }
-                rolify_core::query::ResourceFilter::Any => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -1198,27 +1592,28 @@ mod mysql_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Class(type_name) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>(type_name)
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
                         .bind::<Text, _>(holder.as_str())
@@ -1228,13 +1623,11 @@ mod mysql_impl {
                         .load(conn)
                         .map_err(Error::Diesel)?
                 }
-                rolify_core::query::ResourceFilter::Any => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -1255,7 +1648,12 @@ mod mysql_impl {
                 queries,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             // Collect all bind values in order, then match on query count for typed binds
             let mut all_values: Vec<String> = Vec::new();
             all_values.push(holder.as_str().to_owned());
@@ -1291,26 +1689,276 @@ mod mysql_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<RoleRow> = match all_values.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(&all_values[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).load(conn).map_err(Error::Diesel)?,
-                5 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).load(conn).map_err(Error::Diesel)?,
-                6 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).load(conn).map_err(Error::Diesel)?,
-                7 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).load(conn).map_err(Error::Diesel)?,
-                8 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).load(conn).map_err(Error::Diesel)?,
-                9 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).load(conn).map_err(Error::Diesel)?,
-                10 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).load(conn).map_err(Error::Diesel)?,
-                11 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).load(conn).map_err(Error::Diesel)?,
-                12 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).load(conn).map_err(Error::Diesel)?,
-                13 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).load(conn).map_err(Error::Diesel)?,
-                14 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).load(conn).map_err(Error::Diesel)?,
-                15 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).load(conn).map_err(Error::Diesel)?,
-                16 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).load(conn).map_err(Error::Diesel)?,
-                17 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).load(conn).map_err(Error::Diesel)?,
-                18 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).load(conn).map_err(Error::Diesel)?,
-                19 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).load(conn).map_err(Error::Diesel)?,
-                20 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).bind::<Text, _>(&all_values[19]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                12 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                13 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                14 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                15 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                16 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                17 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                18 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                19 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                20 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("where_any: too many bind values (max 20)"),
             };
             async move {
@@ -1347,17 +1995,26 @@ mod mysql_impl {
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
-            let role_record = match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
-                Ok(r) => r,
-                Err(e) => return async move { Err(e) },
-            };
+            let role_record =
+                match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
+                    Ok(r) => r,
+                    Err(e) => return async move { Err(e) },
+                };
 
             let role_id = match get_role_id(
                 conn,
                 &self.role_table,
                 &role_record.name,
-                role_record.resource_type.as_ref().map(|s| s.as_str()).unwrap_or_default(),
-                role_record.resource_id.as_ref().map(|r| r.as_str()).unwrap_or_default(),
+                role_record
+                    .resource_type
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or_default(),
+                role_record
+                    .resource_id
+                    .as_ref()
+                    .map(|r| r.as_str())
+                    .unwrap_or_default(),
             ) {
                 Ok(id) => id,
                 Err(e) => return async move { Err(e) },
@@ -1397,7 +2054,8 @@ mod mysql_impl {
 
             async move {
                 conn.transaction::<_, Error, _>(|conn| {
-                    let affected_sql = crate::sql::select_affected_roles(&role_table, &join_table, &target_owned);
+                    let affected_sql =
+                        crate::sql::select_affected_roles(&role_table, &join_table, &target_owned);
                     let affected_rows: Vec<RoleRow> = match &target_owned {
                         RemovalTarget::NameOnly => {
                             let q = diesel::sql_query(affected_sql)
@@ -1421,9 +2079,14 @@ mod mysql_impl {
                             q.load(conn).map_err(Error::Diesel)?
                         }
                     };
-                    let affected_records: Vec<RoleRecord> = affected_rows.into_iter().map(|r| r.to_record()).collect();
+                    let affected_records: Vec<RoleRecord> =
+                        affected_rows.into_iter().map(|r| r.to_record()).collect();
 
-                    let delete_sql = crate::sql::delete_links_for_target(&join_table, &role_table, &target_owned);
+                    let delete_sql = crate::sql::delete_links_for_target(
+                        &join_table,
+                        &role_table,
+                        &target_owned,
+                    );
                     let removed_links = match &target_owned {
                         RemovalTarget::NameOnly => {
                             let q = diesel::sql_query(delete_sql)
@@ -1455,10 +2118,17 @@ mod mysql_impl {
                                 conn,
                                 &role_table,
                                 &role.name,
-                                role.resource_type.as_ref().map(|s| s.as_str()).unwrap_or_default(),
-                                role.resource_id.as_ref().map(|r| r.as_str()).unwrap_or_default(),
+                                role.resource_type
+                                    .as_ref()
+                                    .map(|s| s.as_str())
+                                    .unwrap_or_default(),
+                                role.resource_id
+                                    .as_ref()
+                                    .map(|r| r.as_str())
+                                    .unwrap_or_default(),
                             )?;
-                            let sweep_sql = crate::sql::delete_orphan_role(&role_table, &join_table);
+                            let sweep_sql =
+                                crate::sql::delete_orphan_role(&role_table, &join_table);
                             let deleted = diesel::sql_query(sweep_sql)
                                 .bind::<BigInt, _>(role_id)
                                 .execute(conn)
@@ -1577,7 +2247,8 @@ mod mysql_impl {
             };
 
             let holder_table = self.holder_table_sql();
-            let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> =
+                (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -1596,13 +2267,36 @@ mod mysql_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(holder_types[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).bind::<Text, _>(holder_types[3]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(holder_types[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("holders_where: too many holder types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| ResourceId::new(r.user_id)).collect()) }
+            async move {
+                Ok(rows
+                    .into_iter()
+                    .map(|r| ResourceId::new(r.user_id))
+                    .collect())
+            }
         }
 
         fn all_holders(
@@ -1615,7 +2309,8 @@ mod mysql_impl {
             }
 
             let holder_table = self.holder_table_sql();
-            let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> =
+                (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -1627,13 +2322,36 @@ mod mysql_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(holder_types[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).bind::<Text, _>(holder_types[3]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(holder_types[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("all_holders: too many holder types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| ResourceId::new(r.user_id)).collect()) }
+            async move {
+                Ok(rows
+                    .into_iter()
+                    .map(|r| ResourceId::new(r.user_id))
+                    .collect())
+            }
         }
 
         fn roles_matching(
@@ -1648,7 +2366,12 @@ mod mysql_impl {
             let has_holder = query.holder.is_some();
             let holder_table = query.holder.map(|_| self.holder_table_sql());
 
-            let base_sql = crate::sql::select_roles_matching(&self.role_table, &self.join_table, holder_table.as_deref(), has_holder);
+            let base_sql = crate::sql::select_roles_matching(
+                &self.role_table,
+                &self.join_table,
+                holder_table.as_deref(),
+                has_holder,
+            );
 
             let (type_filter, idx) = crate::sql::roles_matching_type_filter(query.types, 1);
             let (name_filter, idx) = if let Some(name) = query.name {
@@ -1691,14 +2414,66 @@ mod mysql_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<ResourceKeyRow> = match type_vals.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(type_vals[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).load(conn).map_err(Error::Diesel)?,
-                5 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).load(conn).map_err(Error::Diesel)?,
-                6 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).load(conn).map_err(Error::Diesel)?,
-                7 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).bind::<Text, _>(type_vals[6]).load(conn).map_err(Error::Diesel)?,
-                8 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).bind::<Text, _>(type_vals[6]).bind::<Text, _>(type_vals[7]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .bind::<Text, _>(type_vals[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .bind::<Text, _>(type_vals[6])
+                    .bind::<Text, _>(type_vals[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("roles_matching: too many bind values (max 8)"),
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
@@ -1742,10 +2517,32 @@ mod mysql_impl {
             let q = diesel::sql_query(sql);
             let instance_rows: Vec<ResourceKeyRow> = match types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(types[0]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(types[3]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(types[2])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(types[2])
+                    .bind::<Text, _>(types[3])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("resources_find: too many types (max 4)"),
             };
             for row in instance_rows {
@@ -1789,7 +2586,10 @@ mod mysql_impl {
                 .iter()
                 .map(|c| format!("('{}', '{}')", c.resource_type, c.resource_id.as_str()))
                 .collect();
-            let candidate_filter = format!("(role_row.resource_type, role_row.resource_id) IN ({})", candidate_pairs.join(", "));
+            let candidate_filter = format!(
+                "(role_row.resource_type, role_row.resource_id) IN ({})",
+                candidate_pairs.join(", ")
+            );
 
             let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
@@ -1810,10 +2610,28 @@ mod mysql_impl {
             let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
             let rows: Vec<ResourceKeyRow> = match names.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(names[0].as_str()).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).bind::<Text, _>(names[2].as_str()).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).bind::<Text, _>(names[2].as_str()).bind::<Text, _>(names[3].as_str()).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .bind::<Text, _>(names[1].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .bind::<Text, _>(names[1].as_str())
+                    .bind::<Text, _>(names[2].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .bind::<Text, _>(names[1].as_str())
+                    .bind::<Text, _>(names[2].as_str())
+                    .bind::<Text, _>(names[3].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("in_list: too many names (max 4)"),
             };
             async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
@@ -1899,29 +2717,30 @@ mod sqlite_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Class(type_name) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>(type_name)
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
                         .bind::<Text, _>(holder.as_str())
@@ -1935,13 +2754,11 @@ mod sqlite_impl {
                         .load(conn)
                         .map_err(Error::Diesel)?
                 }
-                rolify_core::query::ResourceFilter::Any => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -1959,27 +2776,28 @@ mod sqlite_impl {
                 query,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             let name = query.name.as_str();
             let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Class(type_name) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>("")
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .bind::<Text, _>(type_name)
+                    .bind::<Text, _>("")
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
                         .bind::<Text, _>(holder.as_str())
@@ -1989,13 +2807,11 @@ mod sqlite_impl {
                         .load(conn)
                         .map_err(Error::Diesel)?
                 }
-                rolify_core::query::ResourceFilter::Any => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
-                        .bind::<Text, _>(name)
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
+                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
+                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(name)
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -2016,7 +2832,12 @@ mod sqlite_impl {
                 queries,
                 2,
             );
-            let sql = crate::sql::select_roles_for_holder(&self.role_table, &self.join_table, &where_clause, &placeholder(1));
+            let sql = crate::sql::select_roles_for_holder(
+                &self.role_table,
+                &self.join_table,
+                &where_clause,
+                &placeholder(1),
+            );
             // Collect all bind values in order, then match on query count for typed binds
             let mut all_values: Vec<String> = Vec::new();
             all_values.push(holder.as_str().to_owned());
@@ -2052,26 +2873,276 @@ mod sqlite_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<RoleRow> = match all_values.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(&all_values[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).load(conn).map_err(Error::Diesel)?,
-                5 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).load(conn).map_err(Error::Diesel)?,
-                6 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).load(conn).map_err(Error::Diesel)?,
-                7 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).load(conn).map_err(Error::Diesel)?,
-                8 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).load(conn).map_err(Error::Diesel)?,
-                9 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).load(conn).map_err(Error::Diesel)?,
-                10 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).load(conn).map_err(Error::Diesel)?,
-                11 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).load(conn).map_err(Error::Diesel)?,
-                12 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).load(conn).map_err(Error::Diesel)?,
-                13 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).load(conn).map_err(Error::Diesel)?,
-                14 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).load(conn).map_err(Error::Diesel)?,
-                15 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).load(conn).map_err(Error::Diesel)?,
-                16 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).load(conn).map_err(Error::Diesel)?,
-                17 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).load(conn).map_err(Error::Diesel)?,
-                18 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).load(conn).map_err(Error::Diesel)?,
-                19 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).load(conn).map_err(Error::Diesel)?,
-                20 => q.bind::<Text, _>(&all_values[0]).bind::<Text, _>(&all_values[1]).bind::<Text, _>(&all_values[2]).bind::<Text, _>(&all_values[3]).bind::<Text, _>(&all_values[4]).bind::<Text, _>(&all_values[5]).bind::<Text, _>(&all_values[6]).bind::<Text, _>(&all_values[7]).bind::<Text, _>(&all_values[8]).bind::<Text, _>(&all_values[9]).bind::<Text, _>(&all_values[10]).bind::<Text, _>(&all_values[11]).bind::<Text, _>(&all_values[12]).bind::<Text, _>(&all_values[13]).bind::<Text, _>(&all_values[14]).bind::<Text, _>(&all_values[15]).bind::<Text, _>(&all_values[16]).bind::<Text, _>(&all_values[17]).bind::<Text, _>(&all_values[18]).bind::<Text, _>(&all_values[19]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                9 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                10 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                11 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                12 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                13 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                14 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                15 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                16 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                17 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                18 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                19 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                20 => q
+                    .bind::<Text, _>(&all_values[0])
+                    .bind::<Text, _>(&all_values[1])
+                    .bind::<Text, _>(&all_values[2])
+                    .bind::<Text, _>(&all_values[3])
+                    .bind::<Text, _>(&all_values[4])
+                    .bind::<Text, _>(&all_values[5])
+                    .bind::<Text, _>(&all_values[6])
+                    .bind::<Text, _>(&all_values[7])
+                    .bind::<Text, _>(&all_values[8])
+                    .bind::<Text, _>(&all_values[9])
+                    .bind::<Text, _>(&all_values[10])
+                    .bind::<Text, _>(&all_values[11])
+                    .bind::<Text, _>(&all_values[12])
+                    .bind::<Text, _>(&all_values[13])
+                    .bind::<Text, _>(&all_values[14])
+                    .bind::<Text, _>(&all_values[15])
+                    .bind::<Text, _>(&all_values[16])
+                    .bind::<Text, _>(&all_values[17])
+                    .bind::<Text, _>(&all_values[18])
+                    .bind::<Text, _>(&all_values[19])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("where_any: too many bind values (max 20)"),
             };
             async move {
@@ -2108,17 +3179,26 @@ mod sqlite_impl {
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
-            let role_record = match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
-                Ok(r) => r,
-                Err(e) => return async move { Err(e) },
-            };
+            let role_record =
+                match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
+                    Ok(r) => r,
+                    Err(e) => return async move { Err(e) },
+                };
 
             let role_id = match get_role_id(
                 conn,
                 &self.role_table,
                 &role_record.name,
-                role_record.resource_type.as_ref().map(|s| s.as_str()).unwrap_or_default(),
-                role_record.resource_id.as_ref().map(|r| r.as_str()).unwrap_or_default(),
+                role_record
+                    .resource_type
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or_default(),
+                role_record
+                    .resource_id
+                    .as_ref()
+                    .map(|r| r.as_str())
+                    .unwrap_or_default(),
             ) {
                 Ok(id) => id,
                 Err(e) => return async move { Err(e) },
@@ -2158,7 +3238,8 @@ mod sqlite_impl {
 
             async move {
                 conn.transaction::<_, Error, _>(|conn| {
-                    let affected_sql = crate::sql::select_affected_roles(&role_table, &join_table, &target_owned);
+                    let affected_sql =
+                        crate::sql::select_affected_roles(&role_table, &join_table, &target_owned);
                     let affected_rows: Vec<RoleRow> = match &target_owned {
                         RemovalTarget::NameOnly => {
                             let q = diesel::sql_query(affected_sql)
@@ -2182,9 +3263,14 @@ mod sqlite_impl {
                             q.load(conn).map_err(Error::Diesel)?
                         }
                     };
-                    let affected_records: Vec<RoleRecord> = affected_rows.into_iter().map(|r| r.to_record()).collect();
+                    let affected_records: Vec<RoleRecord> =
+                        affected_rows.into_iter().map(|r| r.to_record()).collect();
 
-                    let delete_sql = crate::sql::delete_links_for_target(&join_table, &role_table, &target_owned);
+                    let delete_sql = crate::sql::delete_links_for_target(
+                        &join_table,
+                        &role_table,
+                        &target_owned,
+                    );
                     let removed_links = match &target_owned {
                         RemovalTarget::NameOnly => {
                             let q = diesel::sql_query(delete_sql)
@@ -2216,10 +3302,17 @@ mod sqlite_impl {
                                 conn,
                                 &role_table,
                                 &role.name,
-                                role.resource_type.as_ref().map(|s| s.as_str()).unwrap_or_default(),
-                                role.resource_id.as_ref().map(|r| r.as_str()).unwrap_or_default(),
+                                role.resource_type
+                                    .as_ref()
+                                    .map(|s| s.as_str())
+                                    .unwrap_or_default(),
+                                role.resource_id
+                                    .as_ref()
+                                    .map(|r| r.as_str())
+                                    .unwrap_or_default(),
                             )?;
-                            let sweep_sql = crate::sql::delete_orphan_role(&role_table, &join_table);
+                            let sweep_sql =
+                                crate::sql::delete_orphan_role(&role_table, &join_table);
                             let deleted = diesel::sql_query(sweep_sql)
                                 .bind::<BigInt, _>(role_id)
                                 .execute(conn)
@@ -2338,7 +3431,8 @@ mod sqlite_impl {
             };
 
             let holder_table = self.holder_table_sql();
-            let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> =
+                (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -2357,13 +3451,36 @@ mod sqlite_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(holder_types[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).bind::<Text, _>(holder_types[3]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(holder_types[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("holders_where: too many holder types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| ResourceId::new(r.user_id)).collect()) }
+            async move {
+                Ok(rows
+                    .into_iter()
+                    .map(|r| ResourceId::new(r.user_id))
+                    .collect())
+            }
         }
 
         fn all_holders(
@@ -2376,7 +3493,8 @@ mod sqlite_impl {
             }
 
             let holder_table = self.holder_table_sql();
-            let type_placeholders: Vec<String> = (1..1 + holder_types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> =
+                (1..1 + holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -2388,13 +3506,36 @@ mod sqlite_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(holder_types[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(holder_types[0]).bind::<Text, _>(holder_types[1]).bind::<Text, _>(holder_types[2]).bind::<Text, _>(holder_types[3]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(holder_types[0])
+                    .bind::<Text, _>(holder_types[1])
+                    .bind::<Text, _>(holder_types[2])
+                    .bind::<Text, _>(holder_types[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("all_holders: too many holder types (max 4)"),
             };
-            async move { Ok(rows.into_iter().map(|r| ResourceId::new(r.user_id)).collect()) }
+            async move {
+                Ok(rows
+                    .into_iter()
+                    .map(|r| ResourceId::new(r.user_id))
+                    .collect())
+            }
         }
 
         fn roles_matching(
@@ -2409,7 +3550,12 @@ mod sqlite_impl {
             let has_holder = query.holder.is_some();
             let holder_table = query.holder.map(|_| self.holder_table_sql());
 
-            let base_sql = crate::sql::select_roles_matching(&self.role_table, &self.join_table, holder_table.as_deref(), has_holder);
+            let base_sql = crate::sql::select_roles_matching(
+                &self.role_table,
+                &self.join_table,
+                holder_table.as_deref(),
+                has_holder,
+            );
 
             let (type_filter, idx) = crate::sql::roles_matching_type_filter(query.types, 1);
             let (name_filter, idx) = if let Some(name) = query.name {
@@ -2452,14 +3598,66 @@ mod sqlite_impl {
             let q = diesel::sql_query(sql);
             let rows: Vec<ResourceKeyRow> = match type_vals.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(type_vals[0]).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).load(conn).map_err(Error::Diesel)?,
-                5 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).load(conn).map_err(Error::Diesel)?,
-                6 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).load(conn).map_err(Error::Diesel)?,
-                7 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).bind::<Text, _>(type_vals[6]).load(conn).map_err(Error::Diesel)?,
-                8 => q.bind::<Text, _>(type_vals[0]).bind::<Text, _>(type_vals[1]).bind::<Text, _>(type_vals[2]).bind::<Text, _>(type_vals[3]).bind::<Text, _>(type_vals[4]).bind::<Text, _>(type_vals[5]).bind::<Text, _>(type_vals[6]).bind::<Text, _>(type_vals[7]).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                5 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                6 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                7 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .bind::<Text, _>(type_vals[6])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                8 => q
+                    .bind::<Text, _>(type_vals[0])
+                    .bind::<Text, _>(type_vals[1])
+                    .bind::<Text, _>(type_vals[2])
+                    .bind::<Text, _>(type_vals[3])
+                    .bind::<Text, _>(type_vals[4])
+                    .bind::<Text, _>(type_vals[5])
+                    .bind::<Text, _>(type_vals[6])
+                    .bind::<Text, _>(type_vals[7])
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("roles_matching: too many bind values (max 8)"),
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
@@ -2502,10 +3700,32 @@ mod sqlite_impl {
             let q = diesel::sql_query(sql);
             let instance_rows: Vec<ResourceKeyRow> = match types.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(types[0]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(types[0]).bind::<Text, _>(types[1]).bind::<Text, _>(types[2]).bind::<Text, _>(types[3]).bind::<Text, _>(name.as_str()).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(types[2])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(types[0])
+                    .bind::<Text, _>(types[1])
+                    .bind::<Text, _>(types[2])
+                    .bind::<Text, _>(types[3])
+                    .bind::<Text, _>(name.as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("resources_find: too many types (max 4)"),
             };
             for row in instance_rows {
@@ -2549,7 +3769,10 @@ mod sqlite_impl {
                 .iter()
                 .map(|c| format!("('{}', '{}')", c.resource_type, c.resource_id.as_str()))
                 .collect();
-            let candidate_filter = format!("(role_row.resource_type, role_row.resource_id) IN ({})", candidate_pairs.join(", "));
+            let candidate_filter = format!(
+                "(role_row.resource_type, role_row.resource_id) IN ({})",
+                candidate_pairs.join(", ")
+            );
 
             let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
@@ -2570,10 +3793,28 @@ mod sqlite_impl {
             let q = diesel::sql_query(sql).bind::<Text, _>(holder.as_str());
             let rows: Vec<ResourceKeyRow> = match names.len() {
                 0 => unreachable!(),
-                1 => q.bind::<Text, _>(names[0].as_str()).load(conn).map_err(Error::Diesel)?,
-                2 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).load(conn).map_err(Error::Diesel)?,
-                3 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).bind::<Text, _>(names[2].as_str()).load(conn).map_err(Error::Diesel)?,
-                4 => q.bind::<Text, _>(names[0].as_str()).bind::<Text, _>(names[1].as_str()).bind::<Text, _>(names[2].as_str()).bind::<Text, _>(names[3].as_str()).load(conn).map_err(Error::Diesel)?,
+                1 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                2 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .bind::<Text, _>(names[1].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                3 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .bind::<Text, _>(names[1].as_str())
+                    .bind::<Text, _>(names[2].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
+                4 => q
+                    .bind::<Text, _>(names[0].as_str())
+                    .bind::<Text, _>(names[1].as_str())
+                    .bind::<Text, _>(names[2].as_str())
+                    .bind::<Text, _>(names[3].as_str())
+                    .load(conn)
+                    .map_err(Error::Diesel)?,
                 _ => panic!("in_list: too many names (max 4)"),
             };
             async move { Ok(rows.into_iter().map(|r| r.to_key()).collect()) }
@@ -2621,7 +3862,8 @@ mod tests {
     fn scope_to_triple_class() {
         let config = RolifyConfig::builder().build().unwrap();
         let store = DieselStore::new(&config);
-        let (name, rt, rid) = store.scope_to_triple(&RoleName::from("manager"), ResourceRef::Class("Forum"));
+        let (name, rt, rid) =
+            store.scope_to_triple(&RoleName::from("manager"), ResourceRef::Class("Forum"));
         assert_eq!(name, "manager");
         assert_eq!(rt, "Forum");
         assert_eq!(rid, "");
@@ -2632,7 +3874,10 @@ mod tests {
     fn scope_to_triple_instance() {
         let config = RolifyConfig::builder().build().unwrap();
         let store = DieselStore::new(&config);
-        let (name, rt, rid) = store.scope_to_triple(&RoleName::from("moderator"), ResourceRef::Instance("Forum", &ResourceId::from("42")));
+        let (name, rt, rid) = store.scope_to_triple(
+            &RoleName::from("moderator"),
+            ResourceRef::Instance("Forum", &ResourceId::from("42")),
+        );
         assert_eq!(name, "moderator");
         assert_eq!(rt, "Forum");
         assert_eq!(rid, "42");

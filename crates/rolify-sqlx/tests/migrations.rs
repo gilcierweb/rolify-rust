@@ -126,15 +126,18 @@ mod pg_migrations {
         }
 
         // Behavioral: UNIQUE triple rejects a duplicate global role (PG code 23505)
-        sqlx::query("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')")
-            .execute(&pool)
-            .await
-            .expect("first admin role insert on Postgres");
-        let duplicate_triple_error =
-            sqlx::query("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')")
-                .execute(&pool)
-                .await
-                .expect_err("UNIQUE triple constraint rejects duplicate global role on Postgres");
+        sqlx::query(
+            "INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("first admin role insert on Postgres");
+        let duplicate_triple_error = sqlx::query(
+            "INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("UNIQUE triple constraint rejects duplicate global role on Postgres");
         crate::assert_unique_violation(&duplicate_triple_error, "23505", "roles_triple_unique");
 
         let admin_role_id: i64 = sqlx::query("SELECT id FROM roles WHERE name = 'admin'")
@@ -189,12 +192,13 @@ mod pg_migrations {
             swept_links, 0,
             "FK ON DELETE CASCADE sweeps the deleted role's join rows on Postgres"
         );
-        let surviving_links: i64 = sqlx::query("SELECT COUNT(*) FROM users_roles WHERE role_id = $1")
-            .bind(admin_role_id)
-            .fetch_one(&pool)
-            .await
-            .expect("count surviving links on Postgres")
-            .get(0);
+        let surviving_links: i64 =
+            sqlx::query("SELECT COUNT(*) FROM users_roles WHERE role_id = $1")
+                .bind(admin_role_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count surviving links on Postgres")
+                .get(0);
         assert_eq!(
             surviving_links, 1,
             "FK cascade leaves other roles' join rows untouched on Postgres"
@@ -213,7 +217,10 @@ mod pg_migrations {
         .await
         .expect("query information_schema after revert")
         .get(0);
-        assert_eq!(tables_after_revert, 0, "tables dropped on revert on Postgres");
+        assert_eq!(
+            tables_after_revert, 0,
+            "tables dropped on revert on Postgres"
+        );
 
         MIGRATIONS_POSTGRES
             .run(&pool)
@@ -290,7 +297,10 @@ mod mysql_migrations {
         for column in &sentinel_columns {
             let column_name: String = column.get("column_name");
             let is_nullable: String = column.get("is_nullable");
-            assert_eq!(is_nullable, "NO", "roles.{column_name} is NOT NULL on MySQL");
+            assert_eq!(
+                is_nullable, "NO",
+                "roles.{column_name} is NOT NULL on MySQL"
+            );
             let column_default: Option<String> = column.get("column_default");
             let column_default = column_default.unwrap_or_else(|| {
                 panic!("roles.{column_name} carries an explicit DEFAULT on MySQL")
@@ -332,15 +342,18 @@ mod mysql_migrations {
         // research assumed; the native number is only on the MySQL-specific
         // MySqlDatabaseError::number(). The 04-03 store catch arm must match
         // THIS recorded value (or use the portable ErrorKind::UniqueViolation).
-        sqlx::query("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')")
-            .execute(&pool)
-            .await
-            .expect("first admin role insert on MySQL");
-        let duplicate_triple_error =
-            sqlx::query("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')")
-                .execute(&pool)
-                .await
-                .expect_err("UNIQUE triple constraint rejects duplicate global role on MySQL");
+        sqlx::query(
+            "INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("first admin role insert on MySQL");
+        let duplicate_triple_error = sqlx::query(
+            "INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("UNIQUE triple constraint rejects duplicate global role on MySQL");
         crate::assert_unique_violation(&duplicate_triple_error, "23000", "roles_triple_unique");
 
         let admin_role_id: i64 = sqlx::query("SELECT id FROM roles WHERE name = 'admin'")
@@ -395,12 +408,13 @@ mod mysql_migrations {
             swept_links, 0,
             "FK ON DELETE CASCADE sweeps the deleted role's join rows on MySQL"
         );
-        let surviving_links: i64 = sqlx::query("SELECT COUNT(*) FROM users_roles WHERE role_id = ?")
-            .bind(admin_role_id)
-            .fetch_one(&pool)
-            .await
-            .expect("count surviving links on MySQL")
-            .get(0);
+        let surviving_links: i64 =
+            sqlx::query("SELECT COUNT(*) FROM users_roles WHERE role_id = ?")
+                .bind(admin_role_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count surviving links on MySQL")
+                .get(0);
         assert_eq!(
             surviving_links, 1,
             "FK cascade leaves other roles' join rows untouched on MySQL"
@@ -494,8 +508,9 @@ mod sqlite_migrations {
             let not_null: i64 = column.get("notnull");
             assert_eq!(not_null, 1, "roles.{column_name} is NOT NULL on SQLite");
             let default_value: Option<String> = column.get("dflt_value");
-            let default_value = default_value
-                .unwrap_or_else(|| panic!("roles.{column_name} carries an explicit DEFAULT on SQLite"));
+            let default_value = default_value.unwrap_or_else(|| {
+                panic!("roles.{column_name} carries an explicit DEFAULT on SQLite")
+            });
             assert_eq!(
                 default_value, "''",
                 "roles.{column_name} defaults to the empty-string sentinel on SQLite"
@@ -525,15 +540,18 @@ mod sqlite_migrations {
 
         // Behavioral: UNIQUE triple rejects a duplicate global role
         // (A1: SQLite's extended result code is 2067, SQLITE_CONSTRAINT_UNIQUE)
-        sqlx::query("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')")
-            .execute(&pool)
-            .await
-            .expect("first admin role insert on SQLite");
-        let duplicate_triple_error =
-            sqlx::query("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')")
-                .execute(&pool)
-                .await
-                .expect_err("UNIQUE triple constraint rejects duplicate global role on SQLite");
+        sqlx::query(
+            "INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("first admin role insert on SQLite");
+        let duplicate_triple_error = sqlx::query(
+            "INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("UNIQUE triple constraint rejects duplicate global role on SQLite");
         crate::assert_unique_violation(&duplicate_triple_error, "2067", "roles_triple_unique");
 
         let admin_role_id: i64 = sqlx::query("SELECT id FROM roles WHERE name = 'admin'")
@@ -589,12 +607,13 @@ mod sqlite_migrations {
             swept_links, 0,
             "FK ON DELETE CASCADE sweeps the deleted role's join rows on SQLite"
         );
-        let surviving_links: i64 = sqlx::query("SELECT COUNT(*) FROM users_roles WHERE role_id = ?")
-            .bind(admin_role_id)
-            .fetch_one(&pool)
-            .await
-            .expect("count surviving links on SQLite")
-            .get(0);
+        let surviving_links: i64 =
+            sqlx::query("SELECT COUNT(*) FROM users_roles WHERE role_id = ?")
+                .bind(admin_role_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count surviving links on SQLite")
+                .get(0);
         assert_eq!(
             surviving_links, 1,
             "FK cascade leaves other roles' join rows untouched on SQLite"

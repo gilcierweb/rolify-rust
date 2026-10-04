@@ -74,12 +74,14 @@ pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::E
     let _ = role_set.has_cached_role(&query);
     let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum"));
     let _ = role_set.has_cached_role(&query);
-    let query = RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Instance("Forum", forum_id));
+    let query =
+        RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Instance("Forum", forum_id));
     let _ = role_set.has_cached_role(&query);
     // Global override visible through cache
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
     let _ = role_set.has_cached_role(&query);
-    let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Instance("Forum", forum_id));
+    let query =
+        RoleQuery::with_role_and_filter(&admin, ResourceFilter::Instance("Forum", forum_id));
     let _ = role_set.has_cached_role(&query);
     // Reverse never holds
     let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Global);
@@ -96,12 +98,14 @@ pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::E
     // has_strict_cached_role
     let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum"));
     let _ = role_set.has_strict_cached_role(&query);
-    let query = RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Instance("Forum", forum_id));
+    let query =
+        RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Instance("Forum", forum_id));
     let _ = role_set.has_strict_cached_role(&query);
     // No overrides under strict
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
     let _ = role_set.has_strict_cached_role(&query);
-    let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Instance("Forum", forum_id));
+    let query =
+        RoleQuery::with_role_and_filter(&manager, ResourceFilter::Instance("Forum", forum_id));
     let _ = role_set.has_strict_cached_role(&query);
 
     // has_all_cached
@@ -123,7 +127,10 @@ pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::E
         RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
     ];
     let _ = role_set.has_any_cached(&queries);
-    let queries = [RoleQuery::with_role_and_filter(&ghost, ResourceFilter::Global)];
+    let queries = [RoleQuery::with_role_and_filter(
+        &ghost,
+        ResourceFilter::Global,
+    )];
     let _ = role_set.has_any_cached(&queries);
     let _ = role_set.has_any_cached(&[]);
 

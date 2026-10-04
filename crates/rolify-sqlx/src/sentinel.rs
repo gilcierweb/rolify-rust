@@ -12,8 +12,8 @@
 //! The sentinel never crosses the SPI boundary: `RoleRecord` keeps
 //! `Option` semantics throughout the kernel and consumer API.
 
-use rolify_core::role::SCOPE_SENTINEL;
 use rolify_core::role::ResourceId;
+use rolify_core::role::SCOPE_SENTINEL;
 
 /// Convert an optional scope column value to its physical storage form.
 ///
@@ -90,7 +90,10 @@ mod tests {
         // None → sentinel → None
         assert_eq!(from_storage(to_storage(None)), None);
         // Some → value → Some
-        assert_eq!(from_storage(to_storage(Some("Forum"))), Some("Forum".to_owned()));
+        assert_eq!(
+            from_storage(to_storage(Some("Forum"))),
+            Some("Forum".to_owned())
+        );
         // ResourceId roundtrip
         let id = ResourceId::from("123");
         assert_eq!(

@@ -34,12 +34,11 @@ fn vendored_migrations_are_byte_identical_to_canonical() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     for engine in ENGINES {
-        let canonical_engine_dir =
-            manifest_dir
-                .join("..")
-                .join("rolify-diesel")
-                .join("migrations")
-                .join(engine);
+        let canonical_engine_dir = manifest_dir
+            .join("..")
+            .join("rolify-diesel")
+            .join("migrations")
+            .join(engine);
         let vendored_engine_dir = manifest_dir.join("migrations").join(engine);
 
         // T-04-02: both trees must exist before anything is compared, with
@@ -180,14 +179,12 @@ fn assert_byte_equal(vendored: &Path, canonical: &Path) {
 /// Panics if the name lacks a `<VERSION>_` segment, the segment does not
 /// parse as `i64`, or the parsed value is not greater than zero.
 fn assert_version_segment_is_positive(file_name: &str, source_path: &Path) {
-    let (version, _description) = file_name
-        .split_once('_')
-        .unwrap_or_else(|| {
-            panic!(
-                "migration name `{file_name}` lacks a `<VERSION>_<DESCRIPTION>` segment: {}",
-                source_path.display()
-            )
-        });
+    let (version, _description) = file_name.split_once('_').unwrap_or_else(|| {
+        panic!(
+            "migration name `{file_name}` lacks a `<VERSION>_<DESCRIPTION>` segment: {}",
+            source_path.display()
+        )
+    });
     let parsed: i64 = version.parse().unwrap_or_else(|_| {
         panic!(
             "migration name `{file_name}` has version segment `{version}` that does not parse \

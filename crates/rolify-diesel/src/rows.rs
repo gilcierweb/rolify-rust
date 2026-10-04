@@ -85,8 +85,9 @@ impl ResourceKeyRow {
 
         rolify_core::store::ResourceKey::new(
             self.resource_type.clone(),
-            resource_id_from_storage(&self.resource_id)
-                .expect("ResourceKeyRow.resource_id is never sentinel; catalog queries filter globals out"),
+            resource_id_from_storage(&self.resource_id).expect(
+                "ResourceKeyRow.resource_id is never sentinel; catalog queries filter globals out",
+            ),
         )
     }
 

@@ -173,7 +173,8 @@ mod user {
             resource_type: &str,
             resource_id: &ResourceId,
         ) -> impl Future<Output = Result<usize, Self::Error>> + Send {
-            self.inner.remove_roles_for_scope(conn, resource_type, resource_id)
+            self.inner
+                .remove_roles_for_scope(conn, resource_type, resource_id)
         }
     }
 

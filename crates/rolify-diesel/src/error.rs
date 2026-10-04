@@ -58,7 +58,10 @@ mod tests {
             reason: "bad table".into(),
         };
         let err = Error::Core(core_err);
-        assert_eq!(err.to_string(), "core error: invalid rolify configuration: bad table");
+        assert_eq!(
+            err.to_string(),
+            "core error: invalid rolify configuration: bad table"
+        );
     }
 
     #[test]

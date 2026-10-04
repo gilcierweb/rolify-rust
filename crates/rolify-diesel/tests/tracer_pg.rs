@@ -31,7 +31,8 @@ fn tracer_grant_check_revoke_lifecycle() {
     let mut conn = pg_conn();
 
     // 2. Apply migrations
-    conn.run_pending_migrations(MIGRATIONS).expect("migrations apply");
+    conn.run_pending_migrations(MIGRATIONS)
+        .expect("migrations apply");
 
     // 3. Setup fixture tables (users, forums, etc.)
     setup_fixtures(&mut conn);
@@ -49,16 +50,24 @@ fn tracer_grant_check_revoke_lifecycle() {
 
     // 5a. Grant GLOBAL role "admin"
     let admin_global = store
-        .find_or_create_by(&mut conn, &RoleName::from("admin"), rolify_core::resource::ResourceRef::Global)
+        .find_or_create_by(
+            &mut conn,
+            &RoleName::from("admin"),
+            rolify_core::resource::ResourceRef::Global,
+        )
         .expect("find_or_create_by global admin");
     assert!(admin_global.is_global());
     assert_eq!(admin_global.name.as_str(), "admin");
 
-    let added = store.add(&mut conn, &user_id, &admin_global).expect("add global admin");
+    let added = store
+        .add(&mut conn, &user_id, &admin_global)
+        .expect("add global admin");
     assert!(added, "first add creates link");
 
     // Second add is idempotent (D-05: UNIQUE catch-and-ignore)
-    let added_again = store.add(&mut conn, &user_id, &admin_global).expect("add global admin again");
+    let added_again = store
+        .add(&mut conn, &user_id, &admin_global)
+        .expect("add global admin again");
     assert!(!added_again, "second add returns false (already linked)");
 
     // 5b. Grant CLASS role "manager" on Forum
@@ -71,7 +80,9 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("find_or_create_by class manager");
     assert!(manager_class.is_class_scoped_to("Forum"));
 
-    let added = store.add(&mut conn, &user_id, &manager_class).expect("add class manager");
+    let added = store
+        .add(&mut conn, &user_id, &manager_class)
+        .expect("add class manager");
     assert!(added);
 
     // 5c. Grant INSTANCE role "moderator" on Forum#42
@@ -85,7 +96,9 @@ fn tracer_grant_check_revoke_lifecycle() {
         .expect("find_or_create_by instance moderator");
     assert!(moderator_inst.is_instance_scoped_to("Forum", &forum_42));
 
-    let added = store.add(&mut conn, &user_id, &moderator_inst).expect("add instance moderator");
+    let added = store
+        .add(&mut conn, &user_id, &moderator_inst)
+        .expect("add instance moderator");
     assert!(added);
 
     // ============================================================
@@ -93,15 +106,29 @@ fn tracer_grant_check_revoke_lifecycle() {
     // ============================================================
 
     // where_ (non-strict ladder): global overrides class/instance
-    let admin_query = RoleQuery { name: &RoleName::from("admin"), filter: ResourceFilter::Global };
-    let roles = store.where_(&mut conn, &user_id, &admin_query).expect("where_ global admin");
+    let admin_query = RoleQuery {
+        name: &RoleName::from("admin"),
+        filter: ResourceFilter::Global,
+    };
+    let roles = store
+        .where_(&mut conn, &user_id, &admin_query)
+        .expect("where_ global admin");
     assert_eq!(roles.len(), 1);
     assert!(roles[0].is_global());
 
     // Global role visible through class query (override ladder)
-    let class_query = RoleQuery { name: &RoleName::from("admin"), filter: ResourceFilter::Class("Forum") };
-    let roles = store.where_(&mut conn, &user_id, &class_query).expect("where_ class sees global");
-    assert_eq!(roles.len(), 1, "global admin visible through class query (ladder override)");
+    let class_query = RoleQuery {
+        name: &RoleName::from("admin"),
+        filter: ResourceFilter::Class("Forum"),
+    };
+    let roles = store
+        .where_(&mut conn, &user_id, &class_query)
+        .expect("where_ class sees global");
+    assert_eq!(
+        roles.len(),
+        1,
+        "global admin visible through class query (ladder override)"
+    );
     assert!(roles[0].is_global());
 
     // Global role visible through instance query (override ladder)
@@ -109,13 +136,24 @@ fn tracer_grant_check_revoke_lifecycle() {
         name: &RoleName::from("admin"),
         filter: ResourceFilter::Instance("Forum", &forum_42),
     };
-    let roles = store.where_(&mut conn, &user_id, &inst_query).expect("where_ instance sees global");
-    assert_eq!(roles.len(), 1, "global admin visible through instance query (ladder override)");
+    let roles = store
+        .where_(&mut conn, &user_id, &inst_query)
+        .expect("where_ instance sees global");
+    assert_eq!(
+        roles.len(),
+        1,
+        "global admin visible through instance query (ladder override)"
+    );
     assert!(roles[0].is_global());
 
     // Class role visible through class query
-    let class_query = RoleQuery { name: &RoleName::from("manager"), filter: ResourceFilter::Class("Forum") };
-    let roles = store.where_(&mut conn, &user_id, &class_query).expect("where_ class manager");
+    let class_query = RoleQuery {
+        name: &RoleName::from("manager"),
+        filter: ResourceFilter::Class("Forum"),
+    };
+    let roles = store
+        .where_(&mut conn, &user_id, &class_query)
+        .expect("where_ class manager");
     assert_eq!(roles.len(), 1);
     assert!(roles[0].is_class_scoped_to("Forum"));
 
@@ -124,8 +162,14 @@ fn tracer_grant_check_revoke_lifecycle() {
         name: &RoleName::from("manager"),
         filter: ResourceFilter::Instance("Forum", &forum_42),
     };
-    let roles = store.where_(&mut conn, &user_id, &inst_query).expect("where_ instance sees class");
-    assert_eq!(roles.len(), 1, "class manager visible through instance query (ladder override)");
+    let roles = store
+        .where_(&mut conn, &user_id, &inst_query)
+        .expect("where_ instance sees class");
+    assert_eq!(
+        roles.len(),
+        1,
+        "class manager visible through instance query (ladder override)"
+    );
     assert!(roles[0].is_class_scoped_to("Forum"));
 
     // Instance role only visible through exact instance query
@@ -133,24 +177,45 @@ fn tracer_grant_check_revoke_lifecycle() {
         name: &RoleName::from("moderator"),
         filter: ResourceFilter::Instance("Forum", &forum_42),
     };
-    let roles = store.where_(&mut conn, &user_id, &inst_query).expect("where_ instance moderator");
+    let roles = store
+        .where_(&mut conn, &user_id, &inst_query)
+        .expect("where_ instance moderator");
     assert_eq!(roles.len(), 1);
     assert!(roles[0].is_instance_scoped_to("Forum", &forum_42));
 
     // Instance role NOT visible through class query (reverse never holds)
-    let class_query = RoleQuery { name: &RoleName::from("moderator"), filter: ResourceFilter::Class("Forum") };
-    let roles = store.where_(&mut conn, &user_id, &class_query).expect("where_ class no instance");
-    assert_eq!(roles.len(), 0, "instance role not visible through class query");
+    let class_query = RoleQuery {
+        name: &RoleName::from("moderator"),
+        filter: ResourceFilter::Class("Forum"),
+    };
+    let roles = store
+        .where_(&mut conn, &user_id, &class_query)
+        .expect("where_ class no instance");
+    assert_eq!(
+        roles.len(),
+        0,
+        "instance role not visible through class query"
+    );
 
     // where_strict (exact scope, no ladder)
-    let strict_global = RoleQuery { name: &RoleName::from("admin"), filter: ResourceFilter::Global };
-    let roles = store.where_strict(&mut conn, &user_id, &strict_global).expect("where_strict global");
+    let strict_global = RoleQuery {
+        name: &RoleName::from("admin"),
+        filter: ResourceFilter::Global,
+    };
+    let roles = store
+        .where_strict(&mut conn, &user_id, &strict_global)
+        .expect("where_strict global");
     assert_eq!(roles.len(), 1);
     assert!(roles[0].is_global());
 
     // Strict class query does NOT see global role
-    let strict_class = RoleQuery { name: &RoleName::from("admin"), filter: ResourceFilter::Class("Forum") };
-    let roles = store.where_strict(&mut conn, &user_id, &strict_class).expect("where_strict class");
+    let strict_class = RoleQuery {
+        name: &RoleName::from("admin"),
+        filter: ResourceFilter::Class("Forum"),
+    };
+    let roles = store
+        .where_strict(&mut conn, &user_id, &strict_class)
+        .expect("where_strict class");
     assert_eq!(roles.len(), 0, "strict class does not see global role");
 
     // Strict instance query does NOT see class role
@@ -158,15 +223,25 @@ fn tracer_grant_check_revoke_lifecycle() {
         name: &RoleName::from("manager"),
         filter: ResourceFilter::Instance("Forum", &forum_42),
     };
-    let roles = store.where_strict(&mut conn, &user_id, &strict_inst).expect("where_strict instance");
+    let roles = store
+        .where_strict(&mut conn, &user_id, &strict_inst)
+        .expect("where_strict instance");
     assert_eq!(roles.len(), 0, "strict instance does not see class role");
 
     // where_any (OR-joined multi-query, single round-trip)
     let any_queries = [
-        RoleQuery { name: &RoleName::from("ghost"), filter: ResourceFilter::Global },
-        RoleQuery { name: &RoleName::from("admin"), filter: ResourceFilter::Global },
+        RoleQuery {
+            name: &RoleName::from("ghost"),
+            filter: ResourceFilter::Global,
+        },
+        RoleQuery {
+            name: &RoleName::from("admin"),
+            filter: ResourceFilter::Global,
+        },
     ];
-    let roles = store.where_any(&mut conn, &user_id, &any_queries).expect("where_any");
+    let roles = store
+        .where_any(&mut conn, &user_id, &any_queries)
+        .expect("where_any");
     assert_eq!(roles.len(), 1, "where_any finds admin, not ghost");
     assert!(roles[0].is_global());
 
@@ -175,11 +250,23 @@ fn tracer_grant_check_revoke_lifecycle() {
     // ============================================================
 
     // Has any scoped role (resource_type != '')
-    let has_scoped = store.exists(&mut conn, &user_id, rolify_core::store::ScopeColumn::ResourceType).expect("exists resource_type");
+    let has_scoped = store
+        .exists(
+            &mut conn,
+            &user_id,
+            rolify_core::store::ScopeColumn::ResourceType,
+        )
+        .expect("exists resource_type");
     assert!(has_scoped, "user has class/instance roles");
 
     // Has any instance-scoped role (resource_id != '')
-    let has_instance = store.exists(&mut conn, &user_id, rolify_core::store::ScopeColumn::ResourceId).expect("exists resource_id");
+    let has_instance = store
+        .exists(
+            &mut conn,
+            &user_id,
+            rolify_core::store::ScopeColumn::ResourceId,
+        )
+        .expect("exists resource_id");
     assert!(has_instance, "user has instance role");
 
     // ============================================================
@@ -187,7 +274,11 @@ fn tracer_grant_check_revoke_lifecycle() {
     // ============================================================
 
     let all_roles = store.roles_of(&mut conn, &user_id).expect("roles_of");
-    assert_eq!(all_roles.len(), 3, "user has 3 roles: global admin, class manager, instance moderator");
+    assert_eq!(
+        all_roles.len(),
+        3,
+        "user has 3 roles: global admin, class manager, instance moderator"
+    );
     let names: Vec<&str> = all_roles.iter().map(|r| r.name.as_str()).collect();
     assert!(names.contains(&"admin"));
     assert!(names.contains(&"manager"));
@@ -199,22 +290,34 @@ fn tracer_grant_check_revoke_lifecycle() {
 
     // Second find_or_create_by for same triple returns same record, no duplicate row
     let admin_global_2 = store
-        .find_or_create_by(&mut conn, &RoleName::from("admin"), rolify_core::resource::ResourceRef::Global)
+        .find_or_create_by(
+            &mut conn,
+            &RoleName::from("admin"),
+            rolify_core::resource::ResourceRef::Global,
+        )
         .expect("find_or_create_by global admin again");
-    assert_eq!(admin_global, admin_global_2, "find_or_create_by is idempotent on triple");
+    assert_eq!(
+        admin_global, admin_global_2,
+        "find_or_create_by is idempotent on triple"
+    );
 
     // Verify only ONE role row exists for (admin, '', '')
     let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count admin rows");
-    assert_eq!(count, 1, "exactly one global admin role row (no duplicates)");
+    assert_eq!(
+        count, 1,
+        "exactly one global admin role row (no duplicates)"
+    );
 
     // ============================================================
     // ADD IDEMPOTENCE (D-05: UNIQUE catch-and-ignore on join)
     // ============================================================
 
     // Third add of same link returns false, link count stays 1
-    let added_third = store.add(&mut conn, &user_id, &admin_global).expect("add admin third time");
+    let added_third = store
+        .add(&mut conn, &user_id, &admin_global)
+        .expect("add admin third time");
     assert!(!added_third);
 
     let link_count: i64 = diesel::sql_query("SELECT COUNT(*) FROM users_roles WHERE user_id = $1 AND role_id = (SELECT id FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = '')")
@@ -238,7 +341,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         )
         .expect("remove instance moderator");
     assert_eq!(outcome.removed_links, 1);
-    assert_eq!(outcome.removed_roles.len(), 1, "orphan instance role row deleted");
+    assert_eq!(
+        outcome.removed_roles.len(),
+        1,
+        "orphan instance role row deleted"
+    );
     assert_eq!(outcome.removed_roles[0].name.as_str(), "moderator");
 
     // Verify role row is gone
@@ -258,7 +365,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         )
         .expect("remove class manager");
     assert_eq!(outcome.removed_links, 1);
-    assert_eq!(outcome.removed_roles.len(), 1, "orphan class role row deleted");
+    assert_eq!(
+        outcome.removed_roles.len(),
+        1,
+        "orphan class role row deleted"
+    );
     assert_eq!(outcome.removed_roles[0].name.as_str(), "manager");
 
     // Remove global role (NameOnly) — global role has no other holders, so it should be deleted
@@ -272,11 +383,17 @@ fn tracer_grant_check_revoke_lifecycle() {
         )
         .expect("remove global admin");
     assert_eq!(outcome.removed_links, 1);
-    assert_eq!(outcome.removed_roles.len(), 1, "orphan global role row deleted");
+    assert_eq!(
+        outcome.removed_roles.len(),
+        1,
+        "orphan global role row deleted"
+    );
     assert_eq!(outcome.removed_roles[0].name.as_str(), "admin");
 
     // All roles gone
-    let all_roles = store.roles_of(&mut conn, &user_id).expect("roles_of after remove all");
+    let all_roles = store
+        .roles_of(&mut conn, &user_id)
+        .expect("roles_of after remove all");
     assert_eq!(all_roles.len(), 0);
 
     // ============================================================
@@ -289,10 +406,18 @@ fn tracer_grant_check_revoke_lifecycle() {
     let user2 = crate::support::insert_holder(&mut conn, "users", "User", "user2");
 
     let editor = store
-        .find_or_create_by(&mut conn, &RoleName::from("editor"), rolify_core::resource::ResourceRef::Global)
+        .find_or_create_by(
+            &mut conn,
+            &RoleName::from("editor"),
+            rolify_core::resource::ResourceRef::Global,
+        )
         .expect("find_or_create_by editor");
-    store.add(&mut conn, &user1, &editor).expect("add editor to user1");
-    store.add(&mut conn, &user2, &editor).expect("add editor to user2");
+    store
+        .add(&mut conn, &user1, &editor)
+        .expect("add editor to user1");
+    store
+        .add(&mut conn, &user2, &editor)
+        .expect("add editor to user2");
 
     // Remove from user1 only — role row should survive (user2 still has it)
     let outcome = store
@@ -305,7 +430,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         )
         .expect("remove editor from user1");
     assert_eq!(outcome.removed_links, 1);
-    assert_eq!(outcome.removed_roles.len(), 0, "role row NOT deleted — user2 still holds it");
+    assert_eq!(
+        outcome.removed_roles.len(),
+        0,
+        "role row NOT deleted — user2 still holds it"
+    );
 
     // Verify role row still exists
     let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'editor' AND resource_type = '' AND resource_id = ''")
@@ -324,7 +453,11 @@ fn tracer_grant_check_revoke_lifecycle() {
         )
         .expect("remove editor from user2");
     assert_eq!(outcome.removed_links, 1);
-    assert_eq!(outcome.removed_roles.len(), 1, "orphan role row deleted after last holder");
+    assert_eq!(
+        outcome.removed_roles.len(),
+        1,
+        "orphan role row deleted after last holder"
+    );
     assert_eq!(outcome.removed_roles[0].name.as_str(), "editor");
 
     // ============================================================
@@ -336,25 +469,41 @@ fn tracer_grant_check_revoke_lifecycle() {
 
     // Add "Admin" (capital A)
     let admin_cap = store
-        .find_or_create_by(&mut conn, &RoleName::from("Admin"), rolify_core::resource::ResourceRef::Global)
+        .find_or_create_by(
+            &mut conn,
+            &RoleName::from("Admin"),
+            rolify_core::resource::ResourceRef::Global,
+        )
         .expect("find_or_create_by Admin");
     store.add(&mut conn, &user, &admin_cap).expect("add Admin");
 
     // Query for "admin" (lowercase) — should NOT match (byte-exact)
-    let query = RoleQuery { name: &RoleName::from("admin"), filter: ResourceFilter::Global };
-    let roles = store.where_(&mut conn, &user, &query).expect("where_ lowercase admin");
+    let query = RoleQuery {
+        name: &RoleName::from("admin"),
+        filter: ResourceFilter::Global,
+    };
+    let roles = store
+        .where_(&mut conn, &user, &query)
+        .expect("where_ lowercase admin");
     assert_eq!(roles.len(), 0, "byte-exact: 'admin' != 'Admin'");
 
     // Add "admin" — creates SEPARATE row (two rows total)
     let admin_low = store
-        .find_or_create_by(&mut conn, &RoleName::from("admin"), rolify_core::resource::ResourceRef::Global)
+        .find_or_create_by(
+            &mut conn,
+            &RoleName::from("admin"),
+            rolify_core::resource::ResourceRef::Global,
+        )
         .expect("find_or_create_by admin");
     store.add(&mut conn, &user, &admin_low).expect("add admin");
 
     let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name IN ('Admin', 'admin') AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count admin rows");
-    assert_eq!(count, 2, "byte-exact: 'Admin' and 'admin' are two distinct rows");
+    assert_eq!(
+        count, 2,
+        "byte-exact: 'Admin' and 'admin' are two distinct rows"
+    );
 
     // Clean up
     reset_roles(&mut conn);
@@ -378,7 +527,11 @@ fn tracer_concurrent_find_or_create_by_race() {
         setup_fixtures(&mut conn);
         let mut store = DieselStore::new(&config);
         store
-            .find_or_create_by(&mut conn, &RoleName::from("racer"), rolify_core::resource::ResourceRef::Global)
+            .find_or_create_by(
+                &mut conn,
+                &RoleName::from("racer"),
+                rolify_core::resource::ResourceRef::Global,
+            )
             .expect("seed");
     }
 
@@ -391,7 +544,11 @@ fn tracer_concurrent_find_or_create_by_race() {
             let mut conn = pg_conn();
             let mut store = DieselStore::new(&config);
             store
-                .find_or_create_by(&mut conn, &RoleName::from("racer"), rolify_core::resource::ResourceRef::Global)
+                .find_or_create_by(
+                    &mut conn,
+                    &RoleName::from("racer"),
+                    rolify_core::resource::ResourceRef::Global,
+                )
                 .expect("concurrent find_or_create_by")
         });
         handles.push(handle);
@@ -406,5 +563,8 @@ fn tracer_concurrent_find_or_create_by_race() {
     let count: i64 = diesel::sql_query("SELECT COUNT(*) FROM roles WHERE name = 'racer' AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)
         .expect("count racer rows");
-    assert_eq!(count, 1, "concurrent find_or_create_by created exactly one row");
+    assert_eq!(
+        count, 1,
+        "concurrent find_or_create_by created exactly one row"
+    );
 }

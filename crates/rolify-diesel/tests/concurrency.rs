@@ -25,10 +25,13 @@ use rolify_core::config::RolifyConfig;
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::store::RoleStore;
-use rolify_diesel::{DieselStore, MIGRATIONS, rows::{CountRow, IdRow}};
+use rolify_diesel::{
+    DieselStore, MIGRATIONS,
+    rows::{CountRow, IdRow},
+};
 
 use testcontainers::ImageExt;
-use testcontainers_modules::{postgres, mysql, testcontainers::runners::SyncRunner};
+use testcontainers_modules::{mysql, postgres, testcontainers::runners::SyncRunner};
 
 const RACE_ITERATIONS: usize = 3;
 
@@ -70,10 +73,14 @@ mod pg_concurrency {
                 .with_tag("17")
                 .start()
                 .expect("Docker must be available for Postgres; postgres:17 image will be pulled");
-            let host_port = container.get_host_port_ipv4(5432).expect("Postgres port mapping");
+            let host_port = container
+                .get_host_port_ipv4(5432)
+                .expect("Postgres port mapping");
             let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
-            let mut conn = PgConnection::establish(&url).expect("Postgres connection for migrations");
-            conn.run_pending_migrations(MIGRATIONS).expect("initial migrations");
+            let mut conn =
+                PgConnection::establish(&url).expect("Postgres connection for migrations");
+            conn.run_pending_migrations(MIGRATIONS)
+                .expect("initial migrations");
             // Set up fixture tables once
             setup_fixtures(&mut conn);
             container
@@ -82,7 +89,9 @@ mod pg_concurrency {
 
     fn pg_conn() -> PgConnection {
         let container = pg_container();
-        let host_port = container.get_host_port_ipv4(5432).expect("Postgres port mapping");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .expect("Postgres port mapping");
         let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
         PgConnection::establish(&url).expect("Postgres connection")
     }
@@ -95,7 +104,7 @@ mod pg_concurrency {
                 rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
                 name VARCHAR(255) NOT NULL
             );
-            "#
+            "#,
         )
         .execute(conn)
         .expect("fixture tables");
@@ -107,7 +116,12 @@ mod pg_concurrency {
             .expect("truncate roles");
     }
 
-    fn insert_holder(conn: &mut PgConnection, table: &str, holder_type: &str, name: &str) -> ResourceId {
+    fn insert_holder(
+        conn: &mut PgConnection,
+        table: &str,
+        holder_type: &str,
+        name: &str,
+    ) -> ResourceId {
         let row: IdRow = diesel::sql_query(&format!(
             "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
             table
@@ -142,7 +156,11 @@ mod pg_concurrency {
                     let mut store = DieselStore::new(&config);
                     barrier.wait();
                     store
-                        .find_or_create_by(&mut conn, &RoleName::from(role_name.as_str()), scope.to_resource_ref())
+                        .find_or_create_by(
+                            &mut conn,
+                            &RoleName::from(role_name.as_str()),
+                            scope.to_resource_ref(),
+                        )
                         .expect("concurrent find_or_create_by")
                 });
                 handles.push(handle);
@@ -153,7 +171,10 @@ mod pg_concurrency {
                 results.push(handle.join().expect("thread panicked"));
             }
 
-            assert_eq!(results[0], results[1], "iteration {iteration}: both threads got same RoleRecord");
+            assert_eq!(
+                results[0], results[1],
+                "iteration {iteration}: both threads got same RoleRecord"
+            );
 
             let mut verify_conn = pg_conn();
             let (rt, rid) = scope.sql_values();
@@ -165,7 +186,11 @@ mod pg_concurrency {
             .bind::<diesel::sql_types::Text, _>(rid)
             .get_result(&mut verify_conn)
             .expect("count role rows");
-            assert_eq!(count_row.count, 1, "iteration {iteration}: exactly one role row for '{}'", role_name);
+            assert_eq!(
+                count_row.count, 1,
+                "iteration {iteration}: exactly one role row for '{}'",
+                role_name
+            );
         }
     }
 
@@ -179,9 +204,18 @@ mod pg_concurrency {
             let config = Arc::new(RolifyConfig::builder().build().unwrap());
             let mut store = DieselStore::new(&config);
             let role = store
-                .find_or_create_by(&mut seed_conn, &RoleName::from(role_name), scope.to_resource_ref())
+                .find_or_create_by(
+                    &mut seed_conn,
+                    &RoleName::from(role_name),
+                    scope.to_resource_ref(),
+                )
                 .expect("seed find_or_create_by");
-            let holder_id = insert_holder(&mut seed_conn, "users", "User", &format!("race_holder_{iteration}"));
+            let holder_id = insert_holder(
+                &mut seed_conn,
+                "users",
+                "User",
+                &format!("race_holder_{iteration}"),
+            );
 
             let config = Arc::new(config);
             let barrier = Arc::new(Barrier::new(2));
@@ -200,7 +234,9 @@ mod pg_concurrency {
                     let mut conn = pg_conn();
                     let mut store = DieselStore::new(&config);
                     barrier.wait();
-                    store.add(&mut conn, &holder, &role).expect("concurrent add")
+                    store
+                        .add(&mut conn, &holder, &role)
+                        .expect("concurrent add")
                 });
                 handles.push(handle);
             }
@@ -211,12 +247,16 @@ mod pg_concurrency {
             }
 
             results.sort();
-            assert_eq!(results, vec![false, true], "iteration {iteration}: one Ok(true), one Ok(false)");
+            assert_eq!(
+                results,
+                vec![false, true],
+                "iteration {iteration}: one Ok(true), one Ok(false)"
+            );
 
             let mut verify_conn = pg_conn();
             let (rt, rid) = scope.sql_values();
             let role_id_row: IdRow = diesel::sql_query(
-                "SELECT id FROM roles WHERE name = $1 AND resource_type = $2 AND resource_id = $3"
+                "SELECT id FROM roles WHERE name = $1 AND resource_type = $2 AND resource_id = $3",
             )
             .bind::<diesel::sql_types::Text, _>(role_name)
             .bind::<diesel::sql_types::Text, _>(rt)
@@ -226,13 +266,16 @@ mod pg_concurrency {
             let role_id = role_id_row.id;
 
             let link_count_row: CountRow = diesel::sql_query(
-                "SELECT COUNT(*) AS count FROM users_roles WHERE user_id = $1 AND role_id = $2"
+                "SELECT COUNT(*) AS count FROM users_roles WHERE user_id = $1 AND role_id = $2",
             )
             .bind::<diesel::sql_types::Text, _>(holder_id.as_str())
             .bind::<diesel::sql_types::BigInt, _>(role_id)
             .get_result(&mut verify_conn)
             .expect("count join rows");
-            assert_eq!(link_count_row.count, 1, "iteration {iteration}: exactly one join row for holder+role");
+            assert_eq!(
+                link_count_row.count, 1,
+                "iteration {iteration}: exactly one join row for holder+role"
+            );
         }
     }
 
@@ -243,12 +286,18 @@ mod pg_concurrency {
 
     #[test]
     fn concurrent_find_or_create_by_class_role() {
-        test_find_or_create_race("concurrent_class_manager", ScopeKind::Class("Forum".to_owned()));
+        test_find_or_create_race(
+            "concurrent_class_manager",
+            ScopeKind::Class("Forum".to_owned()),
+        );
     }
 
     #[test]
     fn concurrent_find_or_create_by_instance_role() {
-        test_find_or_create_race("concurrent_instance_moderator", ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")));
+        test_find_or_create_race(
+            "concurrent_instance_moderator",
+            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+        );
     }
 
     #[test]
@@ -258,12 +307,18 @@ mod pg_concurrency {
 
     #[test]
     fn concurrent_add_class_role() {
-        test_add_race("concurrent_add_manager", ScopeKind::Class("Forum".to_owned()));
+        test_add_race(
+            "concurrent_add_manager",
+            ScopeKind::Class("Forum".to_owned()),
+        );
     }
 
     #[test]
     fn concurrent_add_instance_role() {
-        test_add_race("concurrent_add_moderator", ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")));
+        test_add_race(
+            "concurrent_add_moderator",
+            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+        );
     }
 }
 
@@ -280,10 +335,14 @@ mod mysql_concurrency {
                 .with_tag("8.4")
                 .start()
                 .expect("Docker must be available for MySQL; mysql:8.4 image will be pulled");
-            let host_port = container.get_host_port_ipv4(3306).expect("MySQL port mapping");
+            let host_port = container
+                .get_host_port_ipv4(3306)
+                .expect("MySQL port mapping");
             let url = format!("mysql://root@127.0.0.1:{host_port}/test");
-            let mut conn = MysqlConnection::establish(&url).expect("MySQL connection for migrations");
-            conn.run_pending_migrations(MIGRATIONS).expect("initial migrations");
+            let mut conn =
+                MysqlConnection::establish(&url).expect("MySQL connection for migrations");
+            conn.run_pending_migrations(MIGRATIONS)
+                .expect("initial migrations");
             // Set up fixture tables once
             setup_fixtures(&mut conn);
             container
@@ -292,7 +351,9 @@ mod mysql_concurrency {
 
     fn mysql_conn() -> MysqlConnection {
         let container = mysql_container();
-        let host_port = container.get_host_port_ipv4(3306).expect("MySQL port mapping");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .expect("MySQL port mapping");
         let url = format!("mysql://root@127.0.0.1:{host_port}/test");
         MysqlConnection::establish(&url).expect("MySQL connection")
     }
@@ -305,7 +366,7 @@ mod mysql_concurrency {
                 rolify_type VARCHAR(191) NOT NULL DEFAULT 'User',
                 name VARCHAR(255) NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
-            "#
+            "#,
         )
         .execute(conn)
         .expect("fixture tables");
@@ -317,7 +378,12 @@ mod mysql_concurrency {
             .expect("truncate roles");
     }
 
-    fn insert_holder(conn: &mut MysqlConnection, table: &str, holder_type: &str, name: &str) -> ResourceId {
+    fn insert_holder(
+        conn: &mut MysqlConnection,
+        table: &str,
+        holder_type: &str,
+        name: &str,
+    ) -> ResourceId {
         diesel::sql_query(&format!(
             "INSERT INTO {} (rolify_type, name) VALUES (?, ?)",
             table
@@ -355,7 +421,11 @@ mod mysql_concurrency {
                     let mut store = DieselStore::new(&config);
                     barrier.wait();
                     store
-                        .find_or_create_by(&mut conn, &RoleName::from(role_name.as_str()), scope.to_resource_ref())
+                        .find_or_create_by(
+                            &mut conn,
+                            &RoleName::from(role_name.as_str()),
+                            scope.to_resource_ref(),
+                        )
                         .expect("concurrent find_or_create_by")
                 });
                 handles.push(handle);
@@ -366,7 +436,10 @@ mod mysql_concurrency {
                 results.push(handle.join().expect("thread panicked"));
             }
 
-            assert_eq!(results[0], results[1], "iteration {iteration}: both threads got same RoleRecord");
+            assert_eq!(
+                results[0], results[1],
+                "iteration {iteration}: both threads got same RoleRecord"
+            );
 
             let mut verify_conn = mysql_conn();
             let (rt, rid) = scope.sql_values();
@@ -378,7 +451,11 @@ mod mysql_concurrency {
             .bind::<diesel::sql_types::Text, _>(rid)
             .get_result(&mut verify_conn)
             .expect("count role rows");
-            assert_eq!(count_row.count, 1, "iteration {iteration}: exactly one role row for '{}'", role_name);
+            assert_eq!(
+                count_row.count, 1,
+                "iteration {iteration}: exactly one role row for '{}'",
+                role_name
+            );
         }
     }
 
@@ -392,9 +469,18 @@ mod mysql_concurrency {
             let config = Arc::new(RolifyConfig::builder().build().unwrap());
             let mut store = DieselStore::new(&config);
             let role = store
-                .find_or_create_by(&mut seed_conn, &RoleName::from(role_name), scope.to_resource_ref())
+                .find_or_create_by(
+                    &mut seed_conn,
+                    &RoleName::from(role_name),
+                    scope.to_resource_ref(),
+                )
                 .expect("seed find_or_create_by");
-            let holder_id = insert_holder(&mut seed_conn, "users", "User", &format!("race_holder_{iteration}"));
+            let holder_id = insert_holder(
+                &mut seed_conn,
+                "users",
+                "User",
+                &format!("race_holder_{iteration}"),
+            );
 
             let config = Arc::new(config);
             let barrier = Arc::new(Barrier::new(2));
@@ -413,7 +499,9 @@ mod mysql_concurrency {
                     let mut conn = mysql_conn();
                     let mut store = DieselStore::new(&config);
                     barrier.wait();
-                    store.add(&mut conn, &holder, &role).expect("concurrent add")
+                    store
+                        .add(&mut conn, &holder, &role)
+                        .expect("concurrent add")
                 });
                 handles.push(handle);
             }
@@ -424,12 +512,16 @@ mod mysql_concurrency {
             }
 
             results.sort();
-            assert_eq!(results, vec![false, true], "iteration {iteration}: one Ok(true), one Ok(false)");
+            assert_eq!(
+                results,
+                vec![false, true],
+                "iteration {iteration}: one Ok(true), one Ok(false)"
+            );
 
             let mut verify_conn = mysql_conn();
             let (rt, rid) = scope.sql_values();
             let role_id_row: IdRow = diesel::sql_query(
-                "SELECT id FROM roles WHERE name = ? AND resource_type = ? AND resource_id = ?"
+                "SELECT id FROM roles WHERE name = ? AND resource_type = ? AND resource_id = ?",
             )
             .bind::<diesel::sql_types::Text, _>(role_name)
             .bind::<diesel::sql_types::Text, _>(rt)
@@ -439,13 +531,16 @@ mod mysql_concurrency {
             let role_id = role_id_row.id;
 
             let link_count_row: CountRow = diesel::sql_query(
-                "SELECT COUNT(*) AS count FROM users_roles WHERE user_id = ? AND role_id = ?"
+                "SELECT COUNT(*) AS count FROM users_roles WHERE user_id = ? AND role_id = ?",
             )
             .bind::<diesel::sql_types::Text, _>(holder_id.as_str())
             .bind::<diesel::sql_types::BigInt, _>(role_id)
             .get_result(&mut verify_conn)
             .expect("count join rows");
-            assert_eq!(link_count_row.count, 1, "iteration {iteration}: exactly one join row for holder+role");
+            assert_eq!(
+                link_count_row.count, 1,
+                "iteration {iteration}: exactly one join row for holder+role"
+            );
         }
     }
 
@@ -456,12 +551,18 @@ mod mysql_concurrency {
 
     #[test]
     fn concurrent_find_or_create_by_class_role() {
-        test_find_or_create_race("concurrent_class_manager", ScopeKind::Class("Forum".to_owned()));
+        test_find_or_create_race(
+            "concurrent_class_manager",
+            ScopeKind::Class("Forum".to_owned()),
+        );
     }
 
     #[test]
     fn concurrent_find_or_create_by_instance_role() {
-        test_find_or_create_race("concurrent_instance_moderator", ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")));
+        test_find_or_create_race(
+            "concurrent_instance_moderator",
+            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+        );
     }
 
     #[test]
@@ -471,11 +572,17 @@ mod mysql_concurrency {
 
     #[test]
     fn concurrent_add_class_role() {
-        test_add_race("concurrent_add_manager", ScopeKind::Class("Forum".to_owned()));
+        test_add_race(
+            "concurrent_add_manager",
+            ScopeKind::Class("Forum".to_owned()),
+        );
     }
 
     #[test]
     fn concurrent_add_instance_role() {
-        test_add_race("concurrent_add_moderator", ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")));
+        test_add_race(
+            "concurrent_add_moderator",
+            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+        );
     }
 }

@@ -138,9 +138,8 @@ fn suite_is_fully_expanded() {
     );
 
     let suite_rs_path = manifest_dir.join("src").join("suite.rs");
-    let suite_source = fs::read_to_string(&suite_rs_path).unwrap_or_else(|error| {
-        panic!("cannot read {}: {error}", suite_rs_path.display())
-    });
+    let suite_source = fs::read_to_string(&suite_rs_path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", suite_rs_path.display()));
     for (module, _) in MODULE_CASE_MINIMUMS {
         let binding = format!("parity_{module}_cases!");
         assert!(
