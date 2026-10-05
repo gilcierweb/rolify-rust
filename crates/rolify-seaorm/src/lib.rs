@@ -62,6 +62,8 @@
 //! // ... SeaormStore lands in plan 05-03 and takes any `&impl ConnectionTrait`
 //! ```
 
+pub mod entity;
 pub mod error;
+pub mod ladder;
 
 pub use error::Error;
