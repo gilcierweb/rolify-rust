@@ -1,7 +1,7 @@
-//! SeaORM adapter error type.
+//! `SeaORM` adapter error type.
 //!
 //! `Error` is the backend-specific error currency for `rolify-seaorm`.
-//! It wraps SeaORM's native error and provides `From<RolifyError>` so
+//! It wraps `SeaORM`'s native error and provides `From<RolifyError>` so
 //! config-validation failures flow through adapter APIs uniformly.
 //! The enum is `#[non_exhaustive]` to allow future variants without
 //! breaking changes. `Send + Sync` is asserted for the public API.
@@ -9,12 +9,12 @@
 use rolify_core::error::RolifyError;
 use thiserror::Error;
 
-/// Errors returned by the SeaORM adapter.
+/// Errors returned by the `SeaORM` adapter.
 ///
 /// # Variants
 ///
 /// - `Db` - wraps `sea_orm::DbErr` (query execution, connection, schema
-///   errors). The inner error preserves SeaORM's full diagnostic
+///   errors). The inner error preserves `SeaORM`'s full diagnostic
 ///   information; the `find_or_create` race arm classifies portable
 ///   unique violations via `DbErr::sql_err()` (a unique-key or
 ///   foreign-key constraint violation across `MySQL`, Postgres and
@@ -29,7 +29,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// SeaORM execution or connection error.
+    /// `SeaORM` execution or connection error.
     #[error("seaorm error: {0}")]
     Db(#[from] sea_orm::DbErr),
 

@@ -66,7 +66,7 @@ impl Model {
         ActiveModel {
             name: sea_orm::Set(RoleName::as_str(&record.name).to_owned()),
             resource_type: sea_orm::Set(to_storage(record.resource_type.as_deref()).to_owned()),
-            resource_id: sea_orm::Set(resource_id_to_storage(record.resource_id.as_ref()).to_owned()),
+            resource_id: sea_orm::Set(resource_id_to_storage(record.resource_id.as_ref()).clone()),
             ..Default::default()
         }
     }
@@ -156,7 +156,10 @@ mod tests {
     fn from_record_writes_sentinel_for_absent_scope() {
         let record = RoleRecord::global("admin");
         let active = Model::from_record(&record);
-        assert_eq!(active.resource_type, sea_orm::ActiveValue::Set(String::new()));
+        assert_eq!(
+            active.resource_type,
+            sea_orm::ActiveValue::Set(String::new())
+        );
         assert_eq!(active.resource_id, sea_orm::ActiveValue::Set(String::new()));
     }
 

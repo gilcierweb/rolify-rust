@@ -29,16 +29,25 @@
 //!
 //! ## Parity divergences (locked in `05-CONTEXT.md`)
 //!
+//! - D-01: hybrid strategy - role-row CRUD and link writes use the static
+//!   entities (`Entity` find/insert/delete); ONLY the three gem ladder
+//!   branches live in raw SQL (statement builders), keeping executors
+//!   `ConnectionTrait`-generic while the ladder stays auditable.
 //! - D-06: entities expose `String` scope columns with the `''` sentinel;
 //!   the `None` <-> `''` translation lives entirely at the adapter
 //!   boundary and never leaks into the SPI or the suite.
 //! - D-03: ladder-only raw cut - only the three gem ladder branches
 //!   (`role_adapter.rb:106-121`) live in raw SQL; everything else uses
-//!   `SeaORM` `Entity`/`QueryFilter`.
+//!   SeaORM `Entity`/`QueryFilter`. Registry-driven finder reads
+//!   (`holders_where`, `roles_matching`, `resources_find`) join consumer
+//!   tables whose names arrive at runtime, so they stay raw statements by
+//!   construction (same reading the diesel/sqlx adapters take).
 //! - D-04: migrations use the native `sea-orm-migration` format (never
 //!   vendored `.sql` copies), reproducing the canonical physical schema
 //!   byte-faithfully (sentinel `''`, unique composite, composite indexes,
-//!   FK `role_id` with cascade).
+//!   FK `role_id` with cascade). Consequence: the Phase 6 CLI needs a
+//!   dedicated SeaORM emitter (the canonical `.sql` files are not reused
+//!   verbatim).
 //! - D-05: the store is generic over `ConnectionTrait`, so pool,
 //!   loose connection, and caller-owned transaction work uniformly
 //!   (SC-5). The trait is not dyn-compatible; never `Box<dyn ConnectionTrait>`.

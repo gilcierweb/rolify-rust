@@ -1,7 +1,8 @@
-//! Test bootstrap for `rolify-seaorm`: testcontainers engines (Postgres
-//! 17 / `MySQL` 8.4, pinned images, runner readiness waits), `Migrator::up`,
-//! shared fixture DDL from `rolify-test::ddl`, canonical fixture rows, and
-//! the `SeaormBackend` [`TestBackend`] implementation with the explicit
+//! Test bootstrap for `rolify-seaorm` (suite-grade): testcontainers
+//! engines (Postgres 17 / `MySQL` 8.4, pinned images, runner readiness
+//! waits), `Migrator::up`, shared fixture DDL from `rolify-test::ddl`,
+//! canonical `data.rb` rows, `SuiteGuard` serialization, and the
+//! `SeaormBackend` [`TestBackend`] implementation with the explicit
 //! query-count seam (TEST-05).
 //!
 //! Reset deletes only `users_roles` and `roles` rows; fixture tables are
@@ -9,8 +10,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use rolify_core::config::RolifyConfig;
 use rolify_core::manager::Rolify;
@@ -31,28 +31,36 @@ use rolify_test::fixtures::{FixtureResource, FixtureResources, UserClass, fixtur
 /// `DatabaseConnection` executor.
 pub type SuiteStore = SeaormStore<DatabaseConnection>;
 
+// ---------------------------------------------------------------------------
+// Containers (AsyncRunner: this crate is async-only, no sync feature)
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "postgres")]
 pub mod pg {
     use super::*;
     use testcontainers_modules::postgres;
 
-    static PG_CONTAINER: OnceLock<ContainerAsync<postgres::Postgres>> = OnceLock::new();
+    static PG_CONTAINER: tokio::sync::OnceCell<ContainerAsync<postgres::Postgres>> =
+        tokio::sync::OnceCell::const_new();
 
-    /// Shared `postgres:17` container for this test binary.
+    /// Shared `postgres:17` container for this test binary (single
+    /// concurrent init: OnceCell serializes the first-start race).
     pub async fn container() -> &'static ContainerAsync<postgres::Postgres> {
-        if let Some(container) = PG_CONTAINER.get() {
-            return container;
-        }
-        let container = postgres::Postgres::default()
-            .with_tag("17")
-            .start()
+        PG_CONTAINER
+            .get_or_init(|| async {
+                postgres::Postgres::default()
+                    .with_tag("17")
+                    .start()
+                    .await
+                    .expect(
+                        "Docker must be available for Postgres; postgres:17 image will be pulled",
+                    )
+            })
             .await
-            .expect("Docker must be available for Postgres; postgres:17 image will be pulled");
-        let _ = PG_CONTAINER.set(container);
-        PG_CONTAINER.get().expect("container initialized")
     }
 
     /// Fresh `DatabaseConnection` against the shared container.
+    #[allow(dead_code)] // unused when the dual gate favors the postgres arm only in some builds
     pub async fn connect() -> DatabaseConnection {
         let container = container().await;
         let host_port = container
@@ -65,25 +73,26 @@ pub mod pg {
 }
 
 #[cfg(feature = "mysql")]
-#[allow(dead_code)] // dual-feature builds route `connect()` to Postgres; the mysql arm is compiled for the mysql-only and dual gates
+#[allow(dead_code)] // dual-feature builds route `connect()` to Postgres
 mod mysql {
     use super::*;
     use testcontainers_modules::mysql;
 
-    static MYSQL_CONTAINER: OnceLock<ContainerAsync<mysql::Mysql>> = OnceLock::new();
+    static MYSQL_CONTAINER: tokio::sync::OnceCell<ContainerAsync<mysql::Mysql>> =
+        tokio::sync::OnceCell::const_new();
 
-    /// Shared `mysql:8.4` container for this test binary.
+    /// Shared `mysql:8.4` container for this test binary (single
+    /// concurrent init: OnceCell serializes the first-start race).
     pub async fn container() -> &'static ContainerAsync<mysql::Mysql> {
-        if let Some(container) = MYSQL_CONTAINER.get() {
-            return container;
-        }
-        let container = mysql::Mysql::default()
-            .with_tag("8.4")
-            .start()
+        MYSQL_CONTAINER
+            .get_or_init(|| async {
+                mysql::Mysql::default()
+                    .with_tag("8.4")
+                    .start()
+                    .await
+                    .expect("Docker must be available for MySQL; mysql:8.4 image will be pulled")
+            })
             .await
-            .expect("Docker must be available for MySQL; mysql:8.4 image will be pulled");
-        let _ = MYSQL_CONTAINER.set(container);
-        MYSQL_CONTAINER.get().expect("container initialized")
     }
 
     /// Fresh `DatabaseConnection` against the shared container.
@@ -99,12 +108,12 @@ mod mysql {
 }
 
 #[cfg(feature = "postgres")]
-async fn connect() -> DatabaseConnection {
+pub async fn connect() -> DatabaseConnection {
     pg::connect().await
 }
 
 #[cfg(all(feature = "mysql", not(feature = "postgres")))]
-async fn connect() -> DatabaseConnection {
+pub async fn connect() -> DatabaseConnection {
     mysql::connect().await
 }
 
@@ -119,27 +128,36 @@ fn fixture_ddl() -> &'static [&'static str] {
 }
 
 /// Apply the Migrator plus the shared fixture DDL and canonical rows
-/// (mirroring `data.rb`, identical across engines here).
-async fn setup_schema(conn: &DatabaseConnection) {
+/// (mirroring `data.rb`, identical across engines except for the
+/// reserved-word `groups` quoting on `MySQL`).
+pub async fn setup_schema(conn: &DatabaseConnection) {
     Migrator::up(conn, None).await.expect("Migrator up");
     for statement in fixture_ddl() {
         conn.execute_unprepared(statement)
             .await
             .expect("fixture DDL statement");
     }
-    for statement in [
-        "INSERT INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
-        "INSERT INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
-        if cfg!(feature = "mysql") && !cfg!(feature = "postgres") {
-            // `groups` is a reserved word on MySQL 8+ (backtick-quoted).
-            "INSERT INTO `groups` (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')"
-        } else {
-            "INSERT INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')"
-        },
-        "INSERT INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
-        "INSERT INTO organizations (id, type) VALUES (1, 'Organization')",
-    ] {
-        conn.execute_unprepared(statement)
+    // Idempotent seeds: every build seeds the same shared container, so
+    // repeats must be no-ops (PG: ON CONFLICT DO NOTHING; MySQL: IGNORE).
+    let statements: Vec<String> = if cfg!(feature = "mysql") && !cfg!(feature = "postgres") {
+        vec![
+            "INSERT IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')".to_owned(),
+            "INSERT IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')".to_owned(),
+            "INSERT IGNORE INTO `groups` (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')".to_owned(),
+            "INSERT IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')".to_owned(),
+            "INSERT IGNORE INTO organizations (id, type) VALUES (1, 'Organization')".to_owned(),
+        ]
+    } else {
+        vec![
+            "INSERT INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie') ON CONFLICT (id) DO NOTHING".to_owned(),
+            "INSERT INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3') ON CONFLICT (id) DO NOTHING".to_owned(),
+            "INSERT INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2') ON CONFLICT (id) DO NOTHING".to_owned(),
+            "INSERT INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2') ON CONFLICT (team_code) DO NOTHING".to_owned(),
+            "INSERT INTO organizations (id, type) VALUES (1, 'Organization') ON CONFLICT (id) DO NOTHING".to_owned(),
+        ]
+    };
+    for statement in statements {
+        conn.execute_unprepared(&statement)
             .await
             .expect("seed canonical fixture row");
     }
@@ -155,11 +173,48 @@ async fn reset_role_rows(conn: &DatabaseConnection) {
         .expect("reset roles");
 }
 
-/// The suite subject: a holder identity over the single engine
-/// (mirrors the diesel suite's local subject wrapper).
+// ---------------------------------------------------------------------------
+// SuiteGuard: one backend at a time per test binary (potentially shared
+// container schema). Spins on yield_now: timing-free, liveness-only.
+// ---------------------------------------------------------------------------
+
+static SUITE_SERIAL: AtomicBool = AtomicBool::new(false);
+
+/// Held for one backend's whole lifetime; releases on drop.
+pub struct SuiteGuard {
+    flag: &'static AtomicBool,
+}
+
+impl SuiteGuard {
+    /// Acquire the process-wide suite lock (spins until free).
+    #[must_use]
+    pub fn acquire() -> Self {
+        while SUITE_SERIAL.swap(true, Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        Self {
+            flag: &SUITE_SERIAL,
+        }
+    }
+}
+
+impl Drop for SuiteGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subject + backend
+// ---------------------------------------------------------------------------
+
+/// The suite subject: a holder identity over the backend's engine
+/// (mirrors the diesel/sqlx local subject wrappers).
 pub struct SeaormSubject<C: UserClass> {
+    login: String,
     holder: ResourceId,
     engine: Rolify<SuiteStore>,
+    config: RolifyConfig,
     _class: PhantomData<C>,
 }
 
@@ -172,7 +227,7 @@ impl<C: UserClass> RolifyUser for SeaormSubject<C> {
     }
 
     fn rolify_config(&self) -> &RolifyConfig {
-        self.engine.config()
+        &self.config
     }
 
     fn rolify_id(&self) -> ResourceId {
@@ -188,11 +243,14 @@ impl<C: UserClass> RolifyUser for SeaormSubject<C> {
     }
 }
 
-/// `TestBackend` over the `SeaORM` store and a pooled connection.
+/// `TestBackend` over the SeaORM store and a pooled connection.
 pub struct SeaormBackend<C: UserClass> {
+    // Process-wide suite lock, held for the backend's whole lifetime.
+    #[allow(dead_code)]
+    serial: SuiteGuard,
     subject: SeaormSubject<C>,
     resources: FixtureResources,
-    /// Shared counter handle (`query_count` takes &self via this seam).
+    /// Shared counter handle (`query_count` takes `&self` via this seam).
     counter: Arc<AtomicUsize>,
 }
 
@@ -205,6 +263,7 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
     type Error = Error;
 
     async fn build() -> Result<Self, Self::Error> {
+        let serial = SuiteGuard::acquire();
         let resources = FixtureResources::new();
         let conn = connect().await;
         setup_schema(&conn).await;
@@ -212,13 +271,16 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
         let config = C::config();
         let store = build_store(&config);
         let counter = store.query_counter_handle();
-        let engine = Rolify::new(store, conn, config);
+        let engine = Rolify::new(store, conn, config.clone());
         let subject = SeaormSubject {
+            login: "admin".to_owned(),
             holder: ResourceId::from(1_i64),
             engine,
+            config,
             _class: PhantomData,
         };
         Ok(Self {
+            serial,
             subject,
             resources,
             counter,
@@ -229,6 +291,7 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
         let holder = self
             .holder_id(login)
             .expect("unknown fixture login: expected admin, moderator, god, or zombie");
+        self.subject.login = login.to_owned();
         self.subject.holder = holder;
         &mut self.subject
     }
@@ -301,11 +364,11 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
     }
 
     fn reset_query_count(&mut self) {
-        self.counter.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.counter.store(0, Ordering::Relaxed);
     }
 
     fn query_count(&self) -> Option<usize> {
-        Some(self.counter.load(std::sync::atomic::Ordering::Relaxed))
+        Some(self.counter.load(Ordering::Relaxed))
     }
 
     fn engine(&mut self) -> &mut Rolify<Self::Store> {
@@ -315,9 +378,21 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
 
 /// Build the registered store (holder table plus resource registry,
 /// mirrors the diesel suite backend wiring).
-#[allow(clippy::missing_panics_doc)] // identifiers are validated upstream
-fn build_store(config: &RolifyConfig) -> SuiteStore {
+pub fn build_store(config: &RolifyConfig) -> SuiteStore {
     SeaormStore::new(config)
+        .for_holder_table("users")
+        .register_resource_table("Forum", "forums", "id")
+        .register_resource_table("Group", "groups", "id")
+        .register_resource_table("Team", "teams", "team_code")
+        .register_resource_table("Organization", "organizations", "id")
+        .register_resource_table("Company", "organizations", "id")
+        .register_resource_table("Right", "rights", "id")
+}
+
+/// Build the registered store for the transaction executor leg.
+pub fn tx_store() -> SeaormStore<sea_orm::DatabaseTransaction> {
+    let config = <rolify_test::fixtures::DefaultUser as UserClass>::config();
+    SeaormStore::new(&config)
         .for_holder_table("users")
         .register_resource_table("Forum", "forums", "id")
         .register_resource_table("Group", "groups", "id")

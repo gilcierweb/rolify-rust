@@ -11,7 +11,7 @@
 //!   quoted table/column names may interpolate via `format!`, and they do
 //!   so at the call sites that compose the full statement.
 //! - Placeholders follow the backend compiled into the statement
-//!   (`$1`-style for Postgres, `?` for MySQL) via the private
+//!   (`$1`-style for Postgres, `?` for `MySQL`) via the private
 //!   [`placeholder`] helper; the store lands them in
 //!   `Statement::from_sql_and_values`.
 //! - The roles table is referenced by the fixed alias `role_row`, matching
@@ -22,10 +22,10 @@ use sea_orm::DbBackend;
 
 /// Native placeholder for `index` on the target backend.
 ///
-/// Postgres uses `$N`; MySQL (and any other backend) uses the portable
+/// Postgres uses `$N`; `MySQL` (and any other backend) uses the portable
 /// `?` positional form (`DbBackend` is non-exhaustive; unknown engines
 /// fall back to `?`, like the diesel adapter's `dialect::placeholder`).
-fn placeholder(backend: &DbBackend, index: usize) -> String {
+pub(crate) fn placeholder(backend: DbBackend, index: usize) -> String {
     match backend {
         DbBackend::Postgres => format!("${index}"),
         _ => "?".to_owned(),
@@ -46,7 +46,7 @@ fn placeholder(backend: &DbBackend, index: usize) -> String {
 /// order; the store supplies the matching value vector.
 #[must_use]
 pub fn build_ladder_where(
-    backend: &DbBackend,
+    backend: DbBackend,
     query: &RoleQuery<'_>,
     start_index: usize,
 ) -> (String, usize) {
@@ -117,7 +117,10 @@ pub fn build_ladder_where(
         ResourceFilter::Any => {
             // Short-circuited above; unreachable arm retained for
             // exhaustiveness (kernel ratified corner).
-            (format!("(role_row.name = {name_ph} AND {global_pair})"), index)
+            (
+                format!("(role_row.name = {name_ph} AND {global_pair})"),
+                index,
+            )
         }
     }
 }
@@ -129,7 +132,7 @@ pub fn build_ladder_where(
 /// ratified corner).
 #[must_use]
 pub fn build_strict_where(
-    backend: &DbBackend,
+    backend: DbBackend,
     query: &RoleQuery<'_>,
     start_index: usize,
 ) -> (String, usize) {
@@ -145,8 +148,9 @@ pub fn build_strict_where(
     let id_ph = placeholder(backend, index + 1);
     index += 2;
 
-    let sql =
-        format!("(role_row.name = {name_ph} AND role_row.resource_type = {type_ph} AND role_row.resource_id = {id_ph})");
+    let sql = format!(
+        "(role_row.name = {name_ph} AND role_row.resource_type = {type_ph} AND role_row.resource_id = {id_ph})"
+    );
     (format!("({sql})"), index)
 }
 
@@ -155,7 +159,7 @@ pub fn build_strict_where(
 /// disjunct's `join(' OR ')`). Each sub-ladder gets its own bind sequence.
 #[must_use]
 pub fn build_any_where(
-    backend: &DbBackend,
+    backend: DbBackend,
     queries: &[RoleQuery<'_>],
     start_index: usize,
 ) -> (String, usize) {
@@ -179,7 +183,7 @@ mod tests {
     #[test]
     fn ladder_global_one_disjunct_postgres_placeholders() {
         let (sql, next) = build_ladder_where(
-            &DbBackend::Postgres,
+            DbBackend::Postgres,
             &RoleQuery {
                 name: &RoleName::from("admin"),
                 filter: ResourceFilter::Global,
@@ -196,7 +200,7 @@ mod tests {
     #[test]
     fn ladder_global_uses_mysql_placeholders() {
         let (sql, next) = build_ladder_where(
-            &DbBackend::MySql,
+            DbBackend::MySql,
             &RoleQuery {
                 name: &RoleName::from("admin"),
                 filter: ResourceFilter::Global,
@@ -211,7 +215,7 @@ mod tests {
     #[test]
     fn ladder_class_two_disjuncts() {
         let (sql, next) = build_ladder_where(
-            &DbBackend::Postgres,
+            DbBackend::Postgres,
             &RoleQuery {
                 name: &RoleName::from("manager"),
                 filter: ResourceFilter::Class("Forum"),
@@ -226,7 +230,7 @@ mod tests {
     #[test]
     fn ladder_instance_three_disjuncts() {
         let (sql, next) = build_ladder_where(
-            &DbBackend::Postgres,
+            DbBackend::Postgres,
             &RoleQuery {
                 name: &RoleName::from("moderator"),
                 filter: ResourceFilter::Instance("Forum", &ResourceId::from("42")),
@@ -241,7 +245,7 @@ mod tests {
     #[test]
     fn ladder_any_name_only_short_circuit() {
         let (sql, next) = build_ladder_where(
-            &DbBackend::Postgres,
+            DbBackend::Postgres,
             &RoleQuery {
                 name: &RoleName::from("admin"),
                 filter: ResourceFilter::Any,
@@ -255,7 +259,7 @@ mod tests {
     #[test]
     fn strict_where_exact_triple() {
         let (sql, next) = build_strict_where(
-            &DbBackend::Postgres,
+            DbBackend::Postgres,
             &RoleQuery {
                 name: &RoleName::from("moderator"),
                 filter: ResourceFilter::Class("Forum"),
@@ -281,7 +285,7 @@ mod tests {
                 filter: ResourceFilter::Instance("Forum", &id),
             },
         ];
-        let (sql, next) = build_any_where(&DbBackend::Postgres, &queries, 1);
+        let (sql, next) = build_any_where(DbBackend::Postgres, &queries, 1);
         // Two ladders: global (3 binds) + instance (7 binds) = 10 binds
         assert_eq!(sql.matches(" OR ").count(), 3);
         assert_eq!(next, 11);
