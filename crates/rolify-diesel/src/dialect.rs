@@ -14,7 +14,7 @@
 /// Return the positional placeholder for the currently compiled backend.
 ///
 /// - Postgres: `$1`, `$2`, ... (1-based, Postgres PREPARE syntax)
-/// - MySQL / SQLite: `?` (anonymous positional)
+/// - `MySQL` / `SQLite`: `?` (anonymous positional)
 ///
 /// # Panics
 ///
@@ -39,8 +39,8 @@ pub fn placeholder(_index: usize) -> String {
 
 /// Quote an identifier (table or column name) for the currently compiled backend.
 ///
-/// - Postgres / SQLite: double quotes (`"identifier"`)
-/// - MySQL: backticks (`` `identifier` ``)
+/// - Postgres / `SQLite`: double quotes (`"identifier"`)
+/// - `MySQL`: backticks (`` `identifier` ``)
 ///
 /// The input must have already passed the allow-list validation in
 /// `RolifyConfig::build()` (`^[A-Za-z_][A-Za-z0-9_]*$`). This function only

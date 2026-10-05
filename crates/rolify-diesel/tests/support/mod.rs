@@ -24,10 +24,10 @@ use rolify_diesel::rows::IdRow;
 
 #[cfg(feature = "postgres")]
 use diesel::pg::PgConnection;
-#[cfg(any(feature = "postgres", feature = "mysql"))]
-use testcontainers::{runners::SyncRunner, ImageExt};
 #[cfg(feature = "postgres")]
 use testcontainers::runners::AsyncRunner;
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use testcontainers::{ImageExt, runners::SyncRunner};
 #[cfg(feature = "postgres")]
 use testcontainers_modules::postgres;
 
@@ -107,7 +107,8 @@ pub fn pg_container() -> &'static testcontainers::Container<postgres::Postgres> 
 
 /// Get or start the shared Postgres container (AsyncRunner).
 #[cfg(feature = "postgres")]
-static PG_CONTAINER_ASYNC: OnceCell<testcontainers::ContainerAsync<postgres::Postgres>> = OnceCell::const_new();
+static PG_CONTAINER_ASYNC: OnceCell<testcontainers::ContainerAsync<postgres::Postgres>> =
+    OnceCell::const_new();
 
 #[cfg(feature = "postgres")]
 pub async fn pg_container_async() -> &'static testcontainers::ContainerAsync<postgres::Postgres> {
@@ -126,17 +127,18 @@ pub async fn pg_container_async() -> &'static testcontainers::ContainerAsync<pos
 #[cfg(feature = "postgres")]
 pub async fn pg_container_port() -> u16 {
     let container = pg_container_async().await;
-    container.get_host_port_ipv4(5432).await.expect("Postgres port mapping")
+    container
+        .get_host_port_ipv4(5432)
+        .await
+        .expect("Postgres port mapping")
 }
 
 /// Get or start the shared MySQL container.
 #[cfg(feature = "mysql")]
 pub fn mysql_container() -> &'static testcontainers::Container<mysql::Mysql> {
     MYSQL_CONTAINER.get_or_init(|| {
-        testcontainers::runners::SyncRunner::start(
-            mysql::Mysql::default().with_tag("8.4"),
-        )
-        .expect("Docker must be available for MySQL parity leg; mysql:8.4 image will be pulled")
+        testcontainers::runners::SyncRunner::start(mysql::Mysql::default().with_tag("8.4"))
+            .expect("Docker must be available for MySQL parity leg; mysql:8.4 image will be pulled")
     })
 }
 
@@ -489,7 +491,13 @@ pub fn test_config() -> rolify_core::config::RolifyConfig {
 ///   per `rolify-test/src/fixtures.rs`): seeded once with explicit ids
 ///   plus conflict-ignore, so every backend in the binary converges on
 ///   the identical rows the `InMemoryBackend` owns by construction.
-#[cfg(feature = "suite")]
+///
+///   Sync-mode only: the backend seats the engine over a sync connection
+///   (`PgConnection`/`MysqlConnection`/`SqliteConnection`), while
+///   `DieselStore::Conn` resolves to the async connection type when the
+///   `async` feature is on. The async parity bindings seat
+///   `DieselAsyncBackend` and friends instead.
+#[cfg(all(feature = "suite", feature = "sync"))]
 pub mod diesel_backend {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -874,41 +882,64 @@ mod tests {
 ///
 /// Provides:
 /// - bb8 pool helper for AsyncPgConnection (canonical gate pool)
-/// - Async migration application via AsyncMigrationHarness (A3)
+/// - Async migration application off the runtime (spawn_blocking, A3)
 /// - Async fixture application over rolify_test::ddl
 /// - Async reset helpers for role/fixture state
 #[cfg(all(feature = "async", feature = "postgres"))]
 pub mod async_support {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use bb8::Pool;
+    use diesel::Connection;
     use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, AsyncMigrationHarness};
+    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
     use diesel_migrations::MigrationHarness;
     use rolify_core::role::ResourceId;
     use rolify_diesel::MIGRATIONS;
 
-    use crate::support::{pg_container_async, pg_container_port};
+    use crate::support::pg_container_port;
 
     /// Get or build a bb8 pool for AsyncPgConnection.
     pub async fn pg_pool_async() -> Pool<AsyncDieselConnectionManager<AsyncPgConnection>> {
         let host_port = pg_container_port().await;
         let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
         let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(url);
-        let pool: Pool<AsyncDieselConnectionManager<AsyncPgConnection>> = Pool::builder().max_size(10).build(manager).await.expect("async pg pool");
+        let pool: Pool<AsyncDieselConnectionManager<AsyncPgConnection>> = Pool::builder()
+            .max_size(10)
+            .build(manager)
+            .await
+            .expect("async pg pool");
         pool
     }
 
-    /// Run embedded migrations on a direct async connection (not pooled).
-    /// Uses AsyncMigrationHarness which takes ownership of the connection.
+    /// Establish a direct (unpooled) async Postgres connection.
+    /// The engine seats one of these: a bb8 checkout cannot release its
+    /// inner connection to `Rolify::new`, which takes `Conn` by value.
+    pub async fn pg_conn_async() -> AsyncPgConnection {
+        let host_port = pg_container_port().await;
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+        AsyncPgConnection::establish(&url)
+            .await
+            .expect("async pg connection")
+    }
+
+    /// Run embedded migrations off the async runtime: the sync Postgres
+    /// connection plus the sync `MigrationHarness` run inside
+    /// `spawn_blocking` (the suite's `#[tokio::test]` is single-threaded,
+    /// so `AsyncMigrationHarness`'s `block_in_place` would panic; the
+    /// blocking pool is legal on every runtime flavor).
     pub async fn run_migrations_async_direct() {
         let host_port = pg_container_port().await;
         let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
-        let conn = AsyncPgConnection::establish(&url).await.expect("async pg connection for migrations");
-        let mut harness = AsyncMigrationHarness::new(conn);
-        harness.run_pending_migrations(MIGRATIONS)
-            .expect("async embedded migrations apply cleanly");
+        tokio::task::spawn_blocking(move || {
+            let mut conn = diesel::pg::PgConnection::establish(&url)
+                .expect("sync pg connection for migrations");
+            conn.run_pending_migrations(MIGRATIONS)
+                .expect("embedded migrations apply cleanly");
+        })
+        .await
+        .expect("migration task must join");
     }
 
     /// Apply fixture DDLs on an async connection (consumes rolify_test::ddl).
@@ -940,7 +971,12 @@ pub mod async_support {
     }
 
     /// Insert a fixture holder on an async connection and return its ID.
-    pub async fn insert_holder_async(conn: &mut AsyncPgConnection, table: &str, holder_type: &str, name: &str) -> ResourceId {
+    pub async fn insert_holder_async(
+        conn: &mut AsyncPgConnection,
+        table: &str,
+        holder_type: &str,
+        name: &str,
+    ) -> ResourceId {
         let row: rolify_diesel::rows::IdRow = diesel::sql_query(&format!(
             "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
             table
@@ -974,13 +1010,342 @@ pub mod async_support {
     pub fn install_query_counter_async(conn: &mut AsyncPgConnection) -> Arc<AtomicUsize> {
         let counter = Arc::new(AtomicUsize::new(0));
         let counting = Arc::clone(&counter);
-        conn.set_instrumentation(Box::new(move |event: diesel::connection::InstrumentationEvent<'_>| {
-            if matches!(event, diesel::connection::InstrumentationEvent::StartQuery { .. }) {
-                counting.fetch_add(1, Ordering::Relaxed);
-            }
-        }));
+        conn.set_instrumentation(Box::new(
+            move |event: diesel::connection::InstrumentationEvent<'_>| {
+                if matches!(
+                    event,
+                    diesel::connection::InstrumentationEvent::StartQuery { .. }
+                ) {
+                    counting.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+        ));
         counter
     }
+}
+
+/// Async test support for MySQL (diesel-async rider).
+#[cfg(all(feature = "async", feature = "mysql"))]
+pub mod async_mysql_support {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bb8::Pool;
+    use diesel::Connection;
+    use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+    use diesel_async::{AsyncConnection, AsyncMysqlConnection, RunQueryDsl};
+    use diesel_migrations::MigrationHarness;
+    use rolify_core::role::ResourceId;
+    use rolify_diesel::MIGRATIONS;
+
+    use crate::support::mysql_container_port;
+
+    /// Get or build a bb8 pool for AsyncMysqlConnection.
+    pub async fn mysql_pool_async() -> Pool<AsyncDieselConnectionManager<AsyncMysqlConnection>> {
+        let host_port = mysql_container_port().await;
+        let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+        let manager = AsyncDieselConnectionManager::<AsyncMysqlConnection>::new(url);
+        let pool: Pool<AsyncDieselConnectionManager<AsyncMysqlConnection>> = Pool::builder()
+            .max_size(10)
+            .build(manager)
+            .await
+            .expect("async mysql pool");
+        pool
+    }
+
+    /// Establish a direct (unpooled) async MySQL connection.
+    /// The engine seats one of these: a bb8 checkout cannot release its
+    /// inner connection to `Rolify::new`, which takes `Conn` by value.
+    pub async fn mysql_conn_async() -> AsyncMysqlConnection {
+        let host_port = mysql_container_port().await;
+        let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+        AsyncMysqlConnection::establish(&url)
+            .await
+            .expect("async mysql connection")
+    }
+
+    /// Run embedded migrations off the async runtime: the sync MySQL
+    /// connection plus the sync `MigrationHarness` run inside
+    /// `spawn_blocking` (the suite's `#[tokio::test]` is single-threaded,
+    /// so `AsyncMigrationHarness`'s `block_in_place` would panic).
+    pub async fn run_migrations_async_mysql_direct() {
+        let host_port = mysql_container_port().await;
+        let url = format!("mysql://root@127.0.0.1:{host_port}/test");
+        tokio::task::spawn_blocking(move || {
+            let mut conn = diesel::mysql::MysqlConnection::establish(&url)
+                .expect("sync mysql connection for migrations");
+            conn.run_pending_migrations(MIGRATIONS)
+                .expect("embedded migrations apply cleanly");
+        })
+        .await
+        .expect("migration task must join");
+    }
+
+    /// Apply fixture DDLs on an async MySQL connection (consumes rolify_test::ddl).
+    pub async fn setup_fixtures_async_mysql(conn: &mut AsyncMysqlConnection) {
+        for statement in rolify_test::ddl::MYSQL {
+            diesel::sql_query(*statement)
+                .execute(conn)
+                .await
+                .expect("async fixture tables");
+        }
+    }
+
+    /// Reset role state on an async MySQL connection.
+    pub async fn reset_roles_async_mysql(conn: &mut AsyncMysqlConnection) {
+        diesel::sql_query("DELETE FROM users_roles")
+            .execute(conn)
+            .await
+            .expect("delete users_roles");
+        diesel::sql_query("DELETE FROM roles")
+            .execute(conn)
+            .await
+            .expect("delete roles");
+    }
+
+    /// Reset consumer fixture tables on an async MySQL connection.
+    pub async fn reset_fixtures_async_mysql(conn: &mut AsyncMysqlConnection) {
+        diesel::sql_query(
+            "TRUNCATE TABLE users, customers, forums, `groups`, teams, organizations, rights, moderators_rights, admin_rights",
+        )
+        .execute(conn)
+        .await
+        .expect("async truncate fixtures");
+    }
+
+    /// Insert a fixture holder on an async MySQL connection and return its ID.
+    pub async fn insert_holder_async_mysql(
+        conn: &mut AsyncMysqlConnection,
+        table: &str,
+        holder_type: &str,
+        name: &str,
+    ) -> ResourceId {
+        diesel::sql_query(&format!(
+            "INSERT INTO {} (rolify_type, name) VALUES (?, ?)",
+            table
+        ))
+        .bind::<diesel::sql_types::Text, _>(holder_type)
+        .bind::<diesel::sql_types::Text, _>(name)
+        .execute(conn)
+        .await
+        .expect("async insert holder");
+        let row: rolify_diesel::rows::IdRow = diesel::sql_query("SELECT LAST_INSERT_ID() AS id")
+            .get_result(conn)
+            .await
+            .expect("last insert id");
+        ResourceId::from(row.id)
+    }
+
+    /// Insert a fixture resource on an async MySQL connection and return its key.
+    pub async fn insert_resource_async_mysql(
+        conn: &mut AsyncMysqlConnection,
+        table: &str,
+        name: &str,
+    ) -> rolify_core::store::ResourceKey {
+        diesel::sql_query(&format!("INSERT INTO {} (name) VALUES (?)", table))
+            .bind::<diesel::sql_types::Text, _>(name)
+            .execute(conn)
+            .await
+            .expect("async insert resource");
+        let row: rolify_diesel::rows::IdRow = diesel::sql_query("SELECT LAST_INSERT_ID() AS id")
+            .get_result(conn)
+            .await
+            .expect("last insert id");
+        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), row.id.to_string())
+    }
+
+    /// Query counting instrumentation for async TEST-05 (MySQL).
+    pub fn install_query_counter_async_mysql(conn: &mut AsyncMysqlConnection) -> Arc<AtomicUsize> {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&counter);
+        conn.set_instrumentation(Box::new(
+            move |event: diesel::connection::InstrumentationEvent<'_>| {
+                if matches!(
+                    event,
+                    diesel::connection::InstrumentationEvent::StartQuery { .. }
+                ) {
+                    counting.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+        ));
+        counter
+    }
+}
+
+/// Async test support for SQLite (diesel-async rider).
+#[cfg(all(feature = "async", feature = "sqlite"))]
+pub mod async_sqlite_support {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use diesel::Connection;
+    use diesel::sqlite::SqliteConnection;
+    use diesel_async::sync_connection_wrapper::SyncConnectionWrapper;
+    use diesel_async::{AsyncConnection, RunQueryDsl};
+    use diesel_migrations::MigrationHarness;
+    use rolify_core::role::ResourceId;
+    use rolify_diesel::MIGRATIONS;
+
+    type AsyncSqliteConnection = SyncConnectionWrapper<SqliteConnection>;
+
+    /// Build a fresh async SQLite in-memory connection with migrations and
+    /// the FK pragma applied. The connection IS the database (`:memory:` is
+    /// per-connection), so migrations must run on this same connection
+    /// before the engine seats it. Migrations and the PRAGMA run directly
+    /// on the sync connection before wrapping: in-memory SQLite is
+    /// microseconds, and `AsyncMigrationHarness` would need
+    /// `block_in_place`, which panics on the suite's single-threaded
+    /// `#[tokio::test]` runtime.
+    pub async fn sqlite_conn_async() -> AsyncSqliteConnection {
+        let mut conn = SqliteConnection::establish(":memory:").expect("SQLite in-memory");
+        conn.run_pending_migrations(MIGRATIONS)
+            .expect("embedded migrations apply cleanly");
+        // Fully qualified: the module also has diesel-async's RunQueryDsl in
+        // scope, whose unbounded blanket impl would capture the plain call.
+        diesel::RunQueryDsl::execute(diesel::sql_query("PRAGMA foreign_keys = ON"), &mut conn)
+            .expect("PRAGMA foreign_keys = ON");
+        SyncConnectionWrapper::new(conn)
+    }
+
+    /// Apply fixture DDLs on an async SQLite connection (consumes rolify_test::ddl).
+    pub async fn setup_fixtures_async_sqlite(conn: &mut AsyncSqliteConnection) {
+        for statement in rolify_test::ddl::SQLITE {
+            diesel::sql_query(*statement)
+                .execute(conn)
+                .await
+                .expect("async fixture tables");
+        }
+    }
+
+    /// Reset role state on an async SQLite connection.
+    pub async fn reset_roles_async_sqlite(conn: &mut AsyncSqliteConnection) {
+        diesel::sql_query("DELETE FROM users_roles")
+            .execute(conn)
+            .await
+            .expect("delete users_roles");
+        diesel::sql_query("DELETE FROM roles")
+            .execute(conn)
+            .await
+            .expect("delete roles");
+        diesel::sql_query("DELETE FROM sqlite_sequence WHERE name IN ('roles')")
+            .execute(conn)
+            .await
+            .ok();
+    }
+
+    /// Reset consumer fixture tables on an async SQLite connection.
+    pub async fn reset_fixtures_async_sqlite(conn: &mut AsyncSqliteConnection) {
+        for table in [
+            "users",
+            "customers",
+            "forums",
+            "groups",
+            "teams",
+            "organizations",
+            "rights",
+            "moderators_rights",
+            "admin_rights",
+        ] {
+            diesel::sql_query(format!("DELETE FROM {table}"))
+                .execute(conn)
+                .await
+                .unwrap_or_else(|error| panic!("delete fixtures from {table}: {error}"));
+        }
+        diesel::sql_query(
+            "DELETE FROM sqlite_sequence WHERE name IN ('users', 'customers', 'forums', 'groups', 'organizations', 'rights')",
+        )
+        .execute(conn)
+        .await
+        .ok();
+    }
+
+    /// Insert a fixture holder on an async SQLite connection and return its ID.
+    pub async fn insert_holder_async_sqlite(
+        conn: &mut AsyncSqliteConnection,
+        table: &str,
+        holder_type: &str,
+        name: &str,
+    ) -> ResourceId {
+        diesel::sql_query(&format!(
+            "INSERT INTO {} (rolify_type, name) VALUES (?, ?)",
+            table
+        ))
+        .bind::<diesel::sql_types::Text, _>(holder_type)
+        .bind::<diesel::sql_types::Text, _>(name)
+        .execute(conn)
+        .await
+        .expect("async insert holder");
+        let row: rolify_diesel::rows::IdRow = diesel::sql_query("SELECT last_insert_rowid() AS id")
+            .get_result(conn)
+            .await
+            .expect("last insert rowid");
+        ResourceId::from(row.id)
+    }
+
+    /// Insert a fixture resource on an async SQLite connection and return its key.
+    pub async fn insert_resource_async_sqlite(
+        conn: &mut AsyncSqliteConnection,
+        table: &str,
+        name: &str,
+    ) -> rolify_core::store::ResourceKey {
+        diesel::sql_query(&format!("INSERT INTO {} (name) VALUES (?)", table))
+            .bind::<diesel::sql_types::Text, _>(name)
+            .execute(conn)
+            .await
+            .expect("async insert resource");
+        let row: rolify_diesel::rows::IdRow = diesel::sql_query("SELECT last_insert_rowid() AS id")
+            .get_result(conn)
+            .await
+            .expect("last insert rowid");
+        rolify_core::store::ResourceKey::new(table.trim_end_matches('s'), row.id.to_string())
+    }
+
+    /// Query counting instrumentation for async TEST-05 (SQLite).
+    pub fn install_query_counter_async_sqlite(
+        conn: &mut AsyncSqliteConnection,
+    ) -> Arc<AtomicUsize> {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&counter);
+        conn.set_instrumentation(Box::new(
+            move |event: diesel::connection::InstrumentationEvent<'_>| {
+                if matches!(
+                    event,
+                    diesel::connection::InstrumentationEvent::StartQuery { .. }
+                ) {
+                    counting.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+        ));
+        counter
+    }
+}
+
+/// Get or start the shared MySQL container port (async).
+#[cfg(feature = "mysql")]
+static MYSQL_CONTAINER_ASYNC: OnceCell<testcontainers::ContainerAsync<mysql::Mysql>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "mysql")]
+pub async fn mysql_container_async() -> &'static testcontainers::ContainerAsync<mysql::Mysql> {
+    MYSQL_CONTAINER_ASYNC
+        .get_or_init(|| async {
+            testcontainers::runners::AsyncRunner::start(mysql::Mysql::default().with_tag("8.4"))
+                .await
+                .expect(
+                    "Docker must be available for MySQL parity leg; mysql:8.4 image will be pulled",
+                )
+        })
+        .await
+}
+
+/// Get the MySQL container port (async).
+#[cfg(feature = "mysql")]
+pub async fn mysql_container_port() -> u16 {
+    let container = mysql_container_async().await;
+    container
+        .get_host_port_ipv4(3306)
+        .await
+        .expect("MySQL port mapping")
 }
 
 /// Async DieselBackend for the parity suite (async mode).
@@ -990,8 +1355,8 @@ pub mod diesel_async_backend {
     use std::sync::{Arc, Mutex};
 
     use bb8::Pool;
-    use diesel_async::pooled_connection::bb8::AsyncDieselConnectionManager;
-    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+    use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+    use diesel_async::{AsyncPgConnection, RunQueryDsl};
     use rolify_core::config::RolifyConfig;
     use rolify_core::manager::Rolify;
     use rolify_core::resource::ResourceRef;
@@ -1002,8 +1367,8 @@ pub mod diesel_async_backend {
     use rolify_test::fixtures::{DefaultUser, FixtureResource, UserClass, fixture_holders};
 
     use crate::support::async_support::*;
+    use rolify_diesel::DieselStore;
     use rolify_diesel::rows::CountRow;
-    use rolify_diesel::{DieselStore, MIGRATIONS};
 
     // Re-export types needed by the trait
     type Store = DieselStore;
@@ -1070,7 +1435,9 @@ pub mod diesel_async_backend {
 
     impl DieselAsyncBackend {
         /// Get a checkout from the bb8 pool (DerefMut -> &mut AsyncPgConnection).
-        pub async fn checkout(&self) -> bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>> {
+        pub async fn checkout(
+            &self,
+        ) -> bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>> {
             self.pool.get().await.expect("async pool checkout")
         }
 
@@ -1141,13 +1508,17 @@ pub mod diesel_async_backend {
                 // Serialize backends sharing one database (see SuiteGuard).
                 let serial = crate::support::SuiteGuard::acquire();
                 let config = crate::support::test_config();
-                
-                // Run migrations on a direct connection first (AsyncMigrationHarness needs ownership)
-                run_migrations_async_direct().await;
-                
-                let pool = pg_pool_async().await;
-                let mut conn = pool.get().await.expect("initial async pool checkout");
 
+                // Run migrations off the async runtime before seating the engine
+                run_migrations_async_direct().await;
+
+                let pool = pg_pool_async().await;
+
+                // The engine seats a DIRECT connection: `Rolify::new` takes
+                // `Conn` by value and a bb8 checkout cannot release its
+                // inner connection. Fixtures, seeding, and the query
+                // counter all live on this same connection.
+                let mut conn = pg_conn_async().await;
                 setup_fixtures_async(&mut conn).await;
                 Self::seed_canonical_rows(&mut conn).await;
 
@@ -1274,7 +1645,613 @@ pub mod diesel_async_backend {
         }
 
         fn query_count(&self) -> Option<usize> {
-            Some(self.query_counter.load(Ordering::Relaxed))
+            // Fully qualified call: diesel-async's blanket RunQueryDsl
+            // impl puts a by-value `load` on every type, and method
+            // probing prefers that over AtomicUsize::load's &self
+            // receiver whenever the trait is in scope.
+            Some(AtomicUsize::load(&self.query_counter, Ordering::Relaxed))
+        }
+    }
+}
+
+/// Async DieselBackend for MySQL (async mode).
+#[cfg(all(feature = "async", feature = "mysql", feature = "suite"))]
+pub mod diesel_async_mysql_backend {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use bb8::Pool;
+    use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+    use diesel_async::{AsyncMysqlConnection, RunQueryDsl};
+    use rolify_core::config::RolifyConfig;
+    use rolify_core::manager::Rolify;
+    use rolify_core::resource::ResourceRef;
+    use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+    use rolify_core::store::{ResourceKey, RoleStore, Sealed};
+    use rolify_core::user::RolifyUser;
+
+    use rolify_test::fixtures::{DefaultUser, FixtureResource, UserClass, fixture_holders};
+
+    use crate::support::async_mysql_support::*;
+    use rolify_diesel::DieselStore;
+    use rolify_diesel::rows::CountRow;
+
+    // Re-export types needed by the trait
+    type Store = DieselStore;
+    type Error = rolify_diesel::Error;
+
+    /// The suite subject: a holder identity over the single async engine.
+    pub struct DieselAsyncMysqlSubject {
+        login: String,
+        holder: ResourceId,
+        engine_cell: Mutex<Rolify<DieselStore>>,
+        config: RolifyConfig,
+    }
+
+    impl DieselAsyncMysqlSubject {
+        fn engine_mut(&mut self) -> &mut Rolify<DieselStore> {
+            self.engine_cell
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl RolifyUser for DieselAsyncMysqlSubject {
+        type Store = DieselStore;
+
+        fn store(&mut self) -> &mut Self::Store {
+            self.engine_mut().store_with_conn().0
+        }
+
+        fn rolify_config(&self) -> &RolifyConfig {
+            &self.config
+        }
+
+        fn rolify_id(&self) -> ResourceId {
+            self.holder.clone()
+        }
+
+        fn rolify_type() -> &'static str {
+            DefaultUser::rolify_type()
+        }
+
+        fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn) {
+            self.engine_mut().store_with_conn()
+        }
+    }
+
+    /// The async Diesel backend for MySQL parity suite.
+    pub struct DieselAsyncMysqlBackend {
+        // Process-wide suite lock, held for the backend's whole lifetime.
+        serial: crate::support::SuiteGuard,
+        // The seated subject (default: "admin").
+        subject: DieselAsyncMysqlSubject,
+        // All registered holders (canonical fixture ids).
+        holders: Vec<(&'static str, ResourceId)>,
+        // All registered resources (canonical fixture keys).
+        resources: Vec<(FixtureResource, ResourceKey)>,
+        // Query counter installed on the engine connection (TEST-05).
+        query_counter: Arc<AtomicUsize>,
+        // bb8 pool for executor tests (SC-5).
+        pool: Pool<AsyncDieselConnectionManager<AsyncMysqlConnection>>,
+    }
+
+    impl Sealed for DieselAsyncMysqlBackend {}
+
+    impl DieselAsyncMysqlBackend {
+        /// Get a checkout from the bb8 pool (DerefMut -> &mut AsyncMysqlConnection).
+        pub async fn checkout(
+            &self,
+        ) -> bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncMysqlConnection>> {
+            self.pool.get().await.expect("async mysql pool checkout")
+        }
+
+        /// Seed the canonical fixture rows with explicit ids.
+        async fn seed_canonical_rows(conn: &mut AsyncMysqlConnection) {
+            for statement in [
+                "INSERT IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
+                "INSERT IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
+                "INSERT IGNORE INTO `groups` (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')",
+                "INSERT IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
+                "INSERT IGNORE INTO organizations (id, type) VALUES (1, 'Organization')",
+            ] {
+                diesel::sql_query(statement)
+                    .execute(conn)
+                    .await
+                    .expect("seed async canonical fixture row");
+            }
+        }
+
+        /// The canonical resource keys (identity with the seeded rows).
+        fn canonical_resources() -> Vec<(FixtureResource, ResourceKey)> {
+            vec![
+                (FixtureResource::ForumFirst, ResourceKey::new("Forum", "1")),
+                (FixtureResource::ForumSecond, ResourceKey::new("Forum", "2")),
+                (FixtureResource::ForumLast, ResourceKey::new("Forum", "3")),
+                (FixtureResource::GroupFirst, ResourceKey::new("Group", "1")),
+                (FixtureResource::GroupLast, ResourceKey::new("Group", "2")),
+                (FixtureResource::TeamFirst, ResourceKey::new("Team", "1")),
+                (FixtureResource::TeamLast, ResourceKey::new("Team", "2")),
+                (
+                    FixtureResource::Organization,
+                    ResourceKey::new("Organization", "1"),
+                ),
+                (FixtureResource::Company, ResourceKey::new("Company", "1")),
+            ]
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holders
+                .iter()
+                .find(|(known, _)| *known == login)
+                .map(|(_, holder)| holder.clone())
+        }
+
+        fn resource_key(&self, which: FixtureResource) -> Option<ResourceKey> {
+            self.resources
+                .iter()
+                .find(|(known, _)| *known == which)
+                .map(|(_, key)| key.clone())
+        }
+    }
+
+    // ============================================================
+    // TestBackend implementation (async MySQL)
+    // ============================================================
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl rolify_test::backend::TestBackend for DieselAsyncMysqlBackend {
+        type Store = DieselStore;
+        type Subject = DieselAsyncMysqlSubject;
+        type Error = Error;
+
+        fn build() -> impl Future<Output = Result<Self, Self::Error>> + Send
+        where
+            Self: Sized,
+        {
+            async move {
+                // Serialize backends sharing one database (see SuiteGuard).
+                let serial = crate::support::SuiteGuard::acquire();
+                let config = crate::support::test_config();
+
+                // Run migrations off the async runtime before seating the engine
+                run_migrations_async_mysql_direct().await;
+
+                let pool = mysql_pool_async().await;
+
+                // The engine seats a DIRECT connection: `Rolify::new` takes
+                // `Conn` by value and a bb8 checkout cannot release its
+                // inner connection. Fixtures, seeding, and the query
+                // counter all live on this same connection.
+                let mut conn = mysql_conn_async().await;
+                setup_fixtures_async_mysql(&mut conn).await;
+                Self::seed_canonical_rows(&mut conn).await;
+
+                // The counter lives on the engine connection, so every
+                // suite operation through the subject or the engine counts.
+                let query_counter = install_query_counter_async_mysql(&mut conn);
+
+                let store = DieselStore::new(&config)
+                    .for_holder_table("users")
+                    .register_resource_table("Forum", "forums", "id")
+                    .register_resource_table("Group", "groups", "id")
+                    .register_resource_table("Team", "teams", "team_code")
+                    .register_resource_table("Organization", "organizations", "id")
+                    .register_resource_table("Company", "organizations", "id")
+                    .register_resource_table("Right", "rights", "id");
+                let engine = Rolify::new(store, conn, config.clone());
+
+                let holders = fixture_holders();
+                let admin_holder = holders
+                    .iter()
+                    .find(|(login, _)| *login == "admin")
+                    .map(|(_, holder)| holder.clone())
+                    .expect("the admin fixture login is always seated");
+                let subject = DieselAsyncMysqlSubject {
+                    login: "admin".to_owned(),
+                    holder: admin_holder,
+                    engine_cell: Mutex::new(engine),
+                    config,
+                };
+                let resources = Self::canonical_resources();
+
+                Ok(Self {
+                    serial,
+                    subject,
+                    holders,
+                    resources,
+                    query_counter,
+                    pool,
+                })
+            }
+        }
+
+        fn subject(&mut self, login: &str) -> &mut Self::Subject {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            self.subject.login = login.to_owned();
+            self.subject.holder = holder;
+            &mut self.subject
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holder_id(login)
+        }
+
+        fn resource(&self, which: FixtureResource) -> ResourceKey {
+            self.resource_key(which).expect("unknown fixture resource")
+        }
+
+        fn reset_roles(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let pool = self.pool.clone();
+            async move {
+                let mut conn = pool
+                    .get()
+                    .await
+                    .expect("async mysql pool checkout for reset");
+                reset_roles_async_mysql(&mut conn).await;
+                Ok(())
+            }
+        }
+
+        fn create_role_row(
+            &mut self,
+            record: RoleRecord,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let scope_owned = (record.resource_type.clone(), record.resource_id.clone());
+            let name = record.name.clone();
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let scope = match (&scope_owned.0, &scope_owned.1) {
+                    (None, None) => ResourceRef::Global,
+                    (Some(type_name), None) => ResourceRef::Class(type_name),
+                    (Some(type_name), Some(resource_id)) => {
+                        ResourceRef::Instance(type_name, resource_id)
+                    }
+                    (None, Some(_)) => panic!(
+                        "a role row with an id but no type is not constructible through the public constructors"
+                    ),
+                };
+                store.find_or_create_by(&mut *conn, &name, scope).await?;
+                Ok(())
+            }
+        }
+
+        fn grant_to(
+            &mut self,
+            login: &str,
+            name: &RoleName,
+            scope: ResourceRef<'_>,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let role = store.find_or_create_by(&mut *conn, name, scope).await?;
+                store.add(&mut *conn, &holder, &role).await?;
+                Ok(())
+            }
+        }
+
+        fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let pool = self.pool.clone();
+            async move {
+                let mut conn = pool
+                    .get()
+                    .await
+                    .expect("async mysql pool checkout for count");
+                let table = "roles";
+                let row: CountRow =
+                    diesel::sql_query(format!("SELECT COUNT(*) AS count FROM {table}"))
+                        .get_result(&mut *conn)
+                        .await?;
+                Ok(usize::try_from(row.count).expect("role row count is never negative"))
+            }
+        }
+
+        fn engine(&mut self) -> &mut Rolify<Self::Store> {
+            self.subject.engine_mut()
+        }
+
+        fn reset_query_count(&mut self) {
+            self.query_counter.store(0, Ordering::Relaxed);
+        }
+
+        fn query_count(&self) -> Option<usize> {
+            // Fully qualified call: diesel-async's blanket RunQueryDsl
+            // impl puts a by-value `load` on every type, and method
+            // probing prefers that over AtomicUsize::load's &self
+            // receiver whenever the trait is in scope.
+            Some(AtomicUsize::load(&self.query_counter, Ordering::Relaxed))
+        }
+    }
+}
+
+/// Async DieselBackend for SQLite (async mode).
+#[cfg(all(feature = "async", feature = "sqlite", feature = "suite"))]
+pub mod diesel_async_sqlite_backend {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use diesel::sqlite::SqliteConnection;
+    use diesel_async::RunQueryDsl;
+    use diesel_async::sync_connection_wrapper::SyncConnectionWrapper;
+    use rolify_core::config::RolifyConfig;
+    use rolify_core::manager::Rolify;
+    use rolify_core::resource::ResourceRef;
+    use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+    use rolify_core::store::{ResourceKey, RoleStore, Sealed};
+    use rolify_core::user::RolifyUser;
+
+    use rolify_test::fixtures::{DefaultUser, FixtureResource, UserClass, fixture_holders};
+
+    use crate::support::async_sqlite_support::*;
+    use rolify_diesel::DieselStore;
+    use rolify_diesel::rows::CountRow;
+
+    type AsyncSqliteConnection = SyncConnectionWrapper<SqliteConnection>;
+
+    // Re-export types needed by the trait
+    type Store = DieselStore;
+    type Error = rolify_diesel::Error;
+
+    /// The suite subject: a holder identity over the single async engine.
+    pub struct DieselAsyncSqliteSubject {
+        login: String,
+        holder: ResourceId,
+        engine_cell: Mutex<Rolify<DieselStore>>,
+        config: RolifyConfig,
+    }
+
+    impl DieselAsyncSqliteSubject {
+        fn engine_mut(&mut self) -> &mut Rolify<DieselStore> {
+            self.engine_cell
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl RolifyUser for DieselAsyncSqliteSubject {
+        type Store = DieselStore;
+
+        fn store(&mut self) -> &mut Self::Store {
+            self.engine_mut().store_with_conn().0
+        }
+
+        fn rolify_config(&self) -> &RolifyConfig {
+            &self.config
+        }
+
+        fn rolify_id(&self) -> ResourceId {
+            self.holder.clone()
+        }
+
+        fn rolify_type() -> &'static str {
+            DefaultUser::rolify_type()
+        }
+
+        fn store_with_conn(&mut self) -> (&mut Self::Store, &mut <Self::Store as RoleStore>::Conn) {
+            self.engine_mut().store_with_conn()
+        }
+    }
+
+    /// The async Diesel backend for SQLite parity suite.
+    pub struct DieselAsyncSqliteBackend {
+        // Process-wide suite lock, held for the backend's whole lifetime.
+        serial: crate::support::SuiteGuard,
+        // The seated subject (default: "admin").
+        subject: DieselAsyncSqliteSubject,
+        // All registered holders (canonical fixture ids).
+        holders: Vec<(&'static str, ResourceId)>,
+        // All registered resources (canonical fixture keys).
+        resources: Vec<(FixtureResource, ResourceKey)>,
+        // Query counter installed on the engine connection (TEST-05).
+        query_counter: Arc<AtomicUsize>,
+        // No separate connection field: the engine owns THE connection
+        // (a second `:memory:` connection would see a different private
+        // database), so reset/count reach it through `store_with_conn()`.
+    }
+
+    impl Sealed for DieselAsyncSqliteBackend {}
+
+    impl DieselAsyncSqliteBackend {
+        /// Seed the canonical fixture rows with explicit ids.
+        async fn seed_canonical_rows(conn: &mut AsyncSqliteConnection) {
+            for statement in [
+                "INSERT OR IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
+                "INSERT OR IGNORE INTO forums (id, name) VALUES (1, 'Forum 1'), (2, 'Forum 2'), (3, 'Forum 3')",
+                "INSERT OR IGNORE INTO groups (id, name) VALUES (1, 'Group 1'), (2, 'Group 2')",
+                "INSERT OR IGNORE INTO teams (team_code, name) VALUES ('1', 'Team 1'), ('2', 'Team 2')",
+                "INSERT OR IGNORE INTO organizations (id, type) VALUES (1, 'Organization')",
+            ] {
+                diesel::sql_query(statement)
+                    .execute(conn)
+                    .await
+                    .expect("seed async canonical fixture row");
+            }
+        }
+
+        /// The canonical resource keys (identity with the seeded rows).
+        fn canonical_resources() -> Vec<(FixtureResource, ResourceKey)> {
+            vec![
+                (FixtureResource::ForumFirst, ResourceKey::new("Forum", "1")),
+                (FixtureResource::ForumSecond, ResourceKey::new("Forum", "2")),
+                (FixtureResource::ForumLast, ResourceKey::new("Forum", "3")),
+                (FixtureResource::GroupFirst, ResourceKey::new("Group", "1")),
+                (FixtureResource::GroupLast, ResourceKey::new("Group", "2")),
+                (FixtureResource::TeamFirst, ResourceKey::new("Team", "1")),
+                (FixtureResource::TeamLast, ResourceKey::new("Team", "2")),
+                (
+                    FixtureResource::Organization,
+                    ResourceKey::new("Organization", "1"),
+                ),
+                (FixtureResource::Company, ResourceKey::new("Company", "1")),
+            ]
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holders
+                .iter()
+                .find(|(known, _)| *known == login)
+                .map(|(_, holder)| holder.clone())
+        }
+
+        fn resource_key(&self, which: FixtureResource) -> Option<ResourceKey> {
+            self.resources
+                .iter()
+                .find(|(known, _)| *known == which)
+                .map(|(_, key)| key.clone())
+        }
+    }
+
+    // ============================================================
+    // TestBackend implementation (async SQLite)
+    // ============================================================
+
+    #[maybe_async::maybe_async(AFIT)]
+    impl rolify_test::backend::TestBackend for DieselAsyncSqliteBackend {
+        type Store = DieselStore;
+        type Subject = DieselAsyncSqliteSubject;
+        type Error = Error;
+
+        fn build() -> impl Future<Output = Result<Self, Self::Error>> + Send
+        where
+            Self: Sized,
+        {
+            async move {
+                // Serialize backends sharing one database (see SuiteGuard).
+                let serial = crate::support::SuiteGuard::acquire();
+                let config = crate::support::test_config();
+
+                let mut conn = sqlite_conn_async().await;
+                setup_fixtures_async_sqlite(&mut conn).await;
+                Self::seed_canonical_rows(&mut conn).await;
+
+                // The counter lives on the engine connection, so every
+                // suite operation through the subject or the engine counts.
+                let query_counter = install_query_counter_async_sqlite(&mut conn);
+
+                let store = DieselStore::new(&config)
+                    .for_holder_table("users")
+                    .register_resource_table("Forum", "forums", "id")
+                    .register_resource_table("Group", "groups", "id")
+                    .register_resource_table("Team", "teams", "team_code")
+                    .register_resource_table("Organization", "organizations", "id")
+                    .register_resource_table("Company", "organizations", "id")
+                    .register_resource_table("Right", "rights", "id");
+                let engine = Rolify::new(store, conn, config.clone());
+
+                let holders = fixture_holders();
+                let admin_holder = holders
+                    .iter()
+                    .find(|(login, _)| *login == "admin")
+                    .map(|(_, holder)| holder.clone())
+                    .expect("the admin fixture login is always seated");
+                let subject = DieselAsyncSqliteSubject {
+                    login: "admin".to_owned(),
+                    holder: admin_holder,
+                    engine_cell: Mutex::new(engine),
+                    config,
+                };
+                let resources = Self::canonical_resources();
+
+                Ok(Self {
+                    serial,
+                    subject,
+                    holders,
+                    resources,
+                    query_counter,
+                })
+            }
+        }
+
+        fn subject(&mut self, login: &str) -> &mut Self::Subject {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            self.subject.login = login.to_owned();
+            self.subject.holder = holder;
+            &mut self.subject
+        }
+
+        fn holder_id(&self, login: &str) -> Option<ResourceId> {
+            self.holder_id(login)
+        }
+
+        fn resource(&self, which: FixtureResource) -> ResourceKey {
+            self.resource_key(which).expect("unknown fixture resource")
+        }
+
+        fn reset_roles(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let (_, conn) = self.subject.store_with_conn();
+            async move {
+                reset_roles_async_sqlite(conn).await;
+                Ok(())
+            }
+        }
+
+        fn create_role_row(
+            &mut self,
+            record: RoleRecord,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let scope_owned = (record.resource_type.clone(), record.resource_id.clone());
+            let name = record.name.clone();
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let scope = match (&scope_owned.0, &scope_owned.1) {
+                    (None, None) => ResourceRef::Global,
+                    (Some(type_name), None) => ResourceRef::Class(type_name),
+                    (Some(type_name), Some(resource_id)) => {
+                        ResourceRef::Instance(type_name, resource_id)
+                    }
+                    (None, Some(_)) => panic!(
+                        "a role row with an id but no type is not constructible through the public constructors"
+                    ),
+                };
+                store.find_or_create_by(&mut *conn, &name, scope).await?;
+                Ok(())
+            }
+        }
+
+        fn grant_to(
+            &mut self,
+            login: &str,
+            name: &RoleName,
+            scope: ResourceRef<'_>,
+        ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+            let holder = self.holder_id(login).expect("unknown fixture login");
+            let (store, conn) = self.subject.store_with_conn();
+            async move {
+                let role = store.find_or_create_by(&mut *conn, name, scope).await?;
+                store.add(&mut *conn, &holder, &role).await?;
+                Ok(())
+            }
+        }
+
+        fn role_row_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send {
+            let (store, conn) = self.subject.store_with_conn();
+            let table = store.role_table().to_owned();
+            async move {
+                let row: CountRow =
+                    diesel::sql_query(format!("SELECT COUNT(*) AS count FROM {table}"))
+                        .get_result(&mut *conn)
+                        .await?;
+                Ok(usize::try_from(row.count).expect("role row count is never negative"))
+            }
+        }
+
+        fn engine(&mut self) -> &mut Rolify<Self::Store> {
+            self.subject.engine_mut()
+        }
+
+        fn reset_query_count(&mut self) {
+            self.query_counter.store(0, Ordering::Relaxed);
+        }
+
+        fn query_count(&self) -> Option<usize> {
+            // Fully qualified call: diesel-async's blanket RunQueryDsl
+            // impl puts a by-value `load` on every type, and method
+            // probing prefers that over AtomicUsize::load's &self
+            // receiver whenever the trait is in scope.
+            Some(AtomicUsize::load(&self.query_counter, Ordering::Relaxed))
         }
     }
 }

@@ -26,17 +26,18 @@ use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::store::RoleStore;
-use rolify_diesel::rows::CountRow;
 use rolify_diesel::DieselStore;
+use rolify_diesel::rows::CountRow;
 
-use crate::support::async_support::{
-    pg_pool_async, run_migrations_async_direct, setup_fixtures_async, reset_roles_async,
-    insert_holder_async,
-};
 use crate::support::SuiteGuard;
+use crate::support::async_support::{
+    insert_holder_async, pg_pool_async, reset_roles_async, run_migrations_async_direct,
+    setup_fixtures_async,
+};
 
 type AsyncPgPool = Pool<AsyncDieselConnectionManager<AsyncPgConnection>>;
-type AsyncPgPooledConn<'a> = bb8::PooledConnection<'a, AsyncDieselConnectionManager<AsyncPgConnection>>;
+type AsyncPgPooledConn<'a> =
+    bb8::PooledConnection<'a, AsyncDieselConnectionManager<AsyncPgConnection>>;
 
 /// Helper to get a typed connection from the pool.
 async fn checkout(pool: &AsyncPgPool) -> AsyncPgPooledConn<'_> {
@@ -539,7 +540,10 @@ async fn tracer_grant_check_revoke_lifecycle() {
         )
         .await
         .expect("find_or_create_by Admin");
-    store.add(&mut conn, &user, &admin_cap).await.expect("add Admin");
+    store
+        .add(&mut conn, &user, &admin_cap)
+        .await
+        .expect("add Admin");
 
     // Query for "admin" (lowercase) — should NOT match (byte-exact)
     let query = RoleQuery {
@@ -561,7 +565,10 @@ async fn tracer_grant_check_revoke_lifecycle() {
         )
         .await
         .expect("find_or_create_by admin");
-    store.add(&mut conn, &user, &admin_low).await.expect("add admin");
+    store
+        .add(&mut conn, &user, &admin_low)
+        .await
+        .expect("add admin");
 
     let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name IN ('Admin', 'admin') AND resource_type = '' AND resource_id = ''")
         .get_result(&mut conn)

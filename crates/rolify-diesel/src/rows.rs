@@ -7,7 +7,7 @@
 
 use diesel::deserialize::QueryableByName;
 use diesel::sql_types::Text;
-use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
+use rolify_core::role::{RoleName, RoleRecord};
 
 /// Row returned by the role-table SELECT projections.
 ///
@@ -120,7 +120,7 @@ impl ResourceKeyRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rolify_core::role::RoleRecord;
+    use rolify_core::role::ResourceId;
 
     #[test]
     fn role_row_to_record_global() {

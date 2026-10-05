@@ -332,7 +332,10 @@ fn tracer_grant_check_revoke_lifecycle() {
         .bind::<diesel::sql_types::Text, _>(user_id.as_str())
         .get_result(&mut conn)
         .expect("count links");
-    assert_eq!(link_count_row.count, 1, "exactly one link for admin (no duplicates)");
+    assert_eq!(
+        link_count_row.count, 1,
+        "exactly one link for admin (no duplicates)"
+    );
 
     // ============================================================
     // REMOVE PHASE: transactional with orphan sweep (PITFALL 2 / SC-3)
@@ -360,7 +363,10 @@ fn tracer_grant_check_revoke_lifecycle() {
     let count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM roles WHERE name = 'moderator' AND resource_type = 'Forum' AND resource_id = '42'")
         .get_result(&mut conn)
         .expect("count moderator rows");
-    assert_eq!(count_row.count, 0, "moderator role row deleted by orphan sweep");
+    assert_eq!(
+        count_row.count, 0,
+        "moderator role row deleted by orphan sweep"
+    );
 
     // Remove class role (TypeSweep) — class role has no other holders, so it should be deleted
     let outcome = store

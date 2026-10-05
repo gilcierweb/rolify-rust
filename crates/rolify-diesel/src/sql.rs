@@ -12,7 +12,7 @@
 //!   `SELECT *` (Pitfall 9: joined `QueryableByName` name clashes).
 //! - Sentinel `''` for global/class scope (D-01/D-02): scope branches
 //!   compare against `= ''`, never `= NULL` or binding `Option::None`.
-//! - Each function cites the gem file:line range it mirrors.
+//! - Each function cites the gem <file:line> range it mirrors.
 //!
 //! This module is only compiled when a backend feature is enabled
 //! (`postgres`, `mysql`, or `sqlite`). When no backend feature is enabled,
@@ -20,8 +20,7 @@
 
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 mod backend_sql {
-    use crate::dialect::{cast_to_text, placeholder, quote_identifier};
-    use crate::rows::{IdRow, ResourceKeyRow, RoleRow};
+    use crate::dialect::{cast_to_text, placeholder};
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::role::{ResourceId, RoleName};
 
@@ -37,10 +36,10 @@ mod backend_sql {
     /// The `role_table` and `join_table` parameters are **already quoted**
     /// identifiers (from `quote_identifier`).
     ///
-    /// The `holder_id_placeholder` is the bind index for the holder's user_id
+    /// The `holder_id_placeholder` is the bind index for the holder's `user_id`
     /// in the join condition (typically `$1` / `?`).
     ///
-    /// Returns (sql_fragment, next_placeholder_index_after_this_fragment).
+    /// Returns (`sql_fragment`, `next_placeholder_index_after_this_fragment`).
     #[must_use]
     pub fn build_ladder_where(
         _role_table: &str,
@@ -59,7 +58,7 @@ mod backend_sql {
 
         // Short-circuit for Any: name-only (gem: build_query:107)
         if matches!(query.filter, ResourceFilter::Any) {
-            let sql = format!("(role_row.name = {name_ph})", name_ph = name_ph);
+            let sql = format!("(role_row.name = {name_ph})");
             return (sql, idx);
         }
 
@@ -69,11 +68,8 @@ mod backend_sql {
         let rid_ph = placeholder(idx + 1);
         idx += 2;
 
-        let global_pair = format!(
-            "(role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
-            rt_ph = rt_ph,
-            rid_ph = rid_ph
-        );
+        let global_pair =
+            format!("(role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})");
 
         match &query.filter {
             ResourceFilter::Global => {
@@ -91,13 +87,10 @@ mod backend_sql {
                 idx += 1;
 
                 let class_pair = format!(
-                    "(role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
-                    class_rt_ph = class_rt_ph,
-                    class_rid_ph = class_rid_ph
+                    "(role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})"
                 );
-                let sql = format!(
-                    "(role_row.name = {name_ph} AND ({global_pair} OR {class_pair}))"
-                );
+                let sql =
+                    format!("(role_row.name = {name_ph} AND ({global_pair} OR {class_pair}))");
                 (sql, idx)
             }
             ResourceFilter::Instance(_type_name, _resource_id) => {
@@ -108,9 +101,7 @@ mod backend_sql {
                 idx += 1;
 
                 let class_pair = format!(
-                    "(role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})",
-                    class_rt_ph = class_rt_ph,
-                    class_rid_ph = class_rid_ph
+                    "(role_row.resource_type = {class_rt_ph} AND role_row.resource_id = {class_rid_ph})"
                 );
 
                 let inst_rt_ph = placeholder(idx);
@@ -119,9 +110,7 @@ mod backend_sql {
                 idx += 1;
 
                 let inst_pair = format!(
-                    "(role_row.resource_type = {inst_rt_ph} AND role_row.resource_id = {inst_rid_ph})",
-                    inst_rt_ph = inst_rt_ph,
-                    inst_rid_ph = inst_rid_ph
+                    "(role_row.resource_type = {inst_rt_ph} AND role_row.resource_id = {inst_rid_ph})"
                 );
                 let sql = format!(
                     "(role_row.name = {name_ph} AND ({global_pair} OR {class_pair} OR {inst_pair}))"
@@ -130,7 +119,10 @@ mod backend_sql {
             }
             ResourceFilter::Any => {
                 // Handled above — unreachable but kept for exhaustiveness
-                (format!("(role_row.name = {name_ph} AND {global_pair})"), idx)
+                (
+                    format!("(role_row.name = {name_ph} AND {global_pair})"),
+                    idx,
+                )
             }
         }
     }
@@ -144,7 +136,7 @@ mod backend_sql {
     /// - Instance(type, id): name + type + id
     /// - Any: name-only (kernel ratified corner)
     ///
-    /// `holder_id_placeholder` is the bind for the join's user_id.
+    /// `holder_id_placeholder` is the bind for the join's `user_id`.
     ///
     /// The WHERE clause references the `role_row` alias used in `select_roles_for_holder`.
     #[must_use]
@@ -160,7 +152,7 @@ mod backend_sql {
 
         // Any short-circuits to name-only (kernel ratified)
         if matches!(query.filter, ResourceFilter::Any) {
-            let sql = format!("(role_row.name = {name_ph})", name_ph = name_ph);
+            let sql = format!("(role_row.name = {name_ph})");
             return (sql, idx);
         }
 
@@ -168,26 +160,15 @@ mod backend_sql {
         let rid_ph = placeholder(idx + 1);
         idx += 2;
 
+        // Strict matching is the exact triple for every scoped filter
+        // shape; only the `Any` short-circuit differs (name only).
         let sql = match &query.filter {
-            ResourceFilter::Global => format!(
-                "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
-                name_ph = name_ph,
-                rt_ph = rt_ph,
-                rid_ph = rid_ph
-            ),
-            ResourceFilter::Class(_) => format!(
-                "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
-                name_ph = name_ph,
-                rt_ph = rt_ph,
-                rid_ph = rid_ph
-            ),
-            ResourceFilter::Instance(_, _) => format!(
-                "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})",
-                name_ph = name_ph,
-                rt_ph = rt_ph,
-                rid_ph = rid_ph
-            ),
-            ResourceFilter::Any => format!("(role_row.name = {name_ph})", name_ph = name_ph),
+            ResourceFilter::Global | ResourceFilter::Class(_) | ResourceFilter::Instance(_, _) => {
+                format!(
+                    "(role_row.name = {name_ph} AND role_row.resource_type = {rt_ph} AND role_row.resource_id = {rid_ph})"
+                )
+            }
+            ResourceFilter::Any => format!("(role_row.name = {name_ph})"),
         };
         (format!("({sql})"), idx)
     }
@@ -233,20 +214,16 @@ mod backend_sql {
             "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
          FROM {role_table} AS role_row \
          INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-         WHERE link.user_id = {holder_id_placeholder} AND {where_clause}",
-            role_table = role_table,
-            join_table = join_table,
-            where_clause = where_clause,
-            holder_id_placeholder = holder_id_placeholder
+         WHERE link.user_id = {holder_id_placeholder} AND {where_clause}"
         )
     }
 
-    /// SELECT role row by exact triple (name, resource_type, resource_id).
+    /// SELECT role row by exact triple (name, `resource_type`, `resource_id`).
     ///
     /// Used by `find_or_create_by` (SELECT-first) and the re-SELECT after
-    /// INSERT or caught UniqueViolation. Returns at most one row.
+    /// INSERT or caught `UniqueViolation`. Returns at most one row.
     ///
-    /// Bind order: 1=name, 2=resource_type, 3=resource_id.
+    /// Bind order: 1=name, `2=resource_type`, `3=resource_id`.
     #[must_use]
     pub fn select_role_by_triple(role_table: &str) -> String {
         format!(
@@ -260,12 +237,12 @@ mod backend_sql {
         )
     }
 
-    /// INSERT a new role row (name, resource_type, resource_id).
+    /// INSERT a new role row (name, `resource_type`, `resource_id`).
     ///
     /// Returns the number of rows inserted (0 or 1). The caller must re-SELECT
-    /// by triple to get the generated `id` (portable — MySQL lacks RETURNING).
+    /// by triple to get the generated `id` (portable: `MySQL` lacks RETURNING).
     ///
-    /// Bind order: 1=name, 2=resource_type, 3=resource_id.
+    /// Bind order: 1=name, `2=resource_type`, `3=resource_id`.
     #[must_use]
     pub fn insert_role(role_table: &str) -> String {
         format!(
@@ -277,9 +254,9 @@ mod backend_sql {
         )
     }
 
-    /// SELECT role `id` by triple (for link insertion after find_or_create_by).
+    /// SELECT role `id` by triple (for link insertion after `find_or_create_by`).
     ///
-    /// Bind order: 1=name, 2=resource_type, 3=resource_id.
+    /// Bind order: 1=name, `2=resource_type`, `3=resource_id`.
     #[must_use]
     pub fn select_role_id_by_triple(role_table: &str) -> String {
         format!(
@@ -293,7 +270,7 @@ mod backend_sql {
 
     /// INSERT a link (holder -> role).
     ///
-    /// Bind order: 1=user_id, 2=role_id.
+    /// Bind order: `1=user_id`, `2=role_id`.
     #[must_use]
     pub fn insert_link(join_table: &str) -> String {
         format!(
@@ -309,13 +286,13 @@ mod backend_sql {
     /// Mirrors `kernel::removal_match` (role_adapter.rb:58-70). The `target`
     /// determines which role rows are swept:
     /// - `NameOnly`: all roles with this name (any scope)
-    /// - `TypeSweep(type)`: roles with this name AND resource_type = type (class + instance)
+    /// - `TypeSweep(type)`: roles with this name AND `resource_type` = type (class + instance)
     /// - `Exact(type, id)`: exact triple only
     ///
-    /// The join uses a subquery to find matching role_ids, then deletes from
+    /// The join uses a subquery to find matching `role_ids`, then deletes from
     /// the join table where `user_id = holder` AND `role_id IN (...)`.
     ///
-    /// Bind order: 1=holder_id, 2=name, (3=type for TypeSweep/Exact), (4=id for Exact).
+    /// Bind order: `1=holder_id`, 2=name, (3=type for TypeSweep/Exact), (4=id for Exact).
     #[must_use]
     pub fn delete_links_for_target(
         join_table: &str,
@@ -423,7 +400,7 @@ mod backend_sql {
     /// Orphan sweep: `DELETE FROM roles WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM join_table WHERE role_id = $1)`.
     /// Returns 1 if deleted, 0 if links still exist.
     ///
-    /// Bind order: 1=role_id.
+    /// Bind order: `1=role_id`.
     #[must_use]
     pub fn delete_orphan_role(role_table: &str, join_table: &str) -> String {
         // Two placeholders (not one reused): `?` backends fill
@@ -440,18 +417,18 @@ mod backend_sql {
         )
     }
 
-    /// DELETE roles by exact resource scope (resource_type, resource_id).
+    /// DELETE roles by exact resource scope (`resource_type`, `resource_id`).
     ///
     /// Implements `RoleStore::remove_roles_for_scope` (OQ1 / SC-3 / D-10).
-    /// Deletes exactly the role rows matching the given resource_type and resource_id.
+    /// Deletes exactly the role rows matching the given `resource_type` and `resource_id`.
     /// Join rows vanish via FK ON DELETE CASCADE (D-10). Class-scoped rows of the
-    /// same type (where resource_id = '') are NOT touched — the WHERE is the exact
+    /// same type (where `resource_id` = '') are NOT touched: the WHERE is the exact
     /// scope pair, never a type-only sweep.
     ///
     /// Mirrors the gem's `dependent: :destroy` on resource destruction
     /// (`rolify/spec/rolify/resource_spec.rb:507-510`).
     ///
-    /// Bind order: 1=resource_type, 2=resource_id.
+    /// Bind order: `1=resource_type`, `2=resource_id`.
     #[must_use]
     pub fn delete_roles_by_scope(role_table: &str) -> String {
         format!(
@@ -464,7 +441,7 @@ mod backend_sql {
 
     /// SELECT resource keys for class-scope role expansion in `resources_find`.
     ///
-    /// For a given resource type with a class-scoped role (resource_id = ''),
+    /// For a given resource type with a class-scoped role (`resource_id` = ''),
     /// expand to all instances by joining with the resource's table.
     ///
     /// Mirrors `resource_adapter.rb:13-25`:
@@ -474,8 +451,8 @@ mod backend_sql {
     /// ```
     ///
     /// Bind order: 1=name.
-    /// The resource_type is interpolated as a literal (validated via registry).
-    /// The resource_table and pk_column are interpolated (validated identifiers).
+    /// The `resource_type` is interpolated as a literal (validated via registry).
+    /// The `resource_table` and `pk_column` are interpolated (validated identifiers).
     #[must_use]
     pub fn select_resources_find_class_expansion(
         role_table: &str,
@@ -502,7 +479,7 @@ mod backend_sql {
 
     /// SELECT 1 if a role with the exact triple exists (for `exists` SPI).
     ///
-    /// Bind order: 1=name, 2=resource_type, 3=resource_id.
+    /// Bind order: 1=name, `2=resource_type`, `3=resource_id`.
     #[must_use]
     pub fn select_role_exists_by_triple(role_table: &str) -> String {
         format!(
@@ -535,10 +512,7 @@ mod backend_sql {
          FROM {holder_table} AS holder \
          INNER JOIN {join_table} AS link ON link.user_id = holder.id \
          INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
-         WHERE {where_clause}",
-            holder_table = holder_table,
-            join_table = join_table,
-            role_table = role_table
+         WHERE {where_clause}"
         )
     }
 
@@ -547,18 +521,15 @@ mod backend_sql {
     /// No role join — just the holder table filtered by the type registry.
     #[must_use]
     pub fn select_all_holders(holder_table: &str) -> String {
-        format!(
-            "SELECT id AS user_id FROM {holder_table}",
-            holder_table = holder_table
-        )
+        format!("SELECT id AS user_id FROM {holder_table}")
     }
 
     /// SELECT resource keys for `roles_matching` catalog read.
     ///
     /// Mirrors the filter semantics documented on `RoleStore::roles_matching`:
-    /// - `types`: resource_type IN (types) — globals (sentinel) NEVER match
+    /// - `types`: `resource_type` IN (types) - globals (sentinel) NEVER match
     /// - `name`: byte-exact when Some
-    /// - `scope`: ClassAndInstance / ClassOnly / InstanceOnly
+    /// - `scope`: `ClassAndInstance` / `ClassOnly` / `InstanceOnly`
     /// - `holder`: when Some, only rows linked to that holder
     ///
     /// The holder table and join are only included when `holder` is Some.
@@ -592,9 +563,7 @@ mod backend_sql {
            {{type_filter}} \
            {{name_filter}} \
            {{scope_filter}} \
-           {{holder_filter}}",
-            role_table = role_table,
-            holder_join = holder_join
+           {{holder_filter}}"
         )
     }
 
@@ -617,7 +586,7 @@ mod backend_sql {
     #[must_use]
     pub fn roles_matching_name_filter(_name: &RoleName, index: usize) -> (String, usize) {
         let ph = placeholder(index);
-        (format!("AND role_row.name = {}", ph), index + 1)
+        (format!("AND role_row.name = {ph}"), index + 1)
     }
 
     /// Build the scope filter fragment for `roles_matching`.
@@ -634,20 +603,14 @@ mod backend_sql {
             rolify_core::catalog::CatalogScope::ClassOnly => {
                 // resource_id = sentinel (class-scoped only)
                 let ph = placeholder(start_index);
-                (
-                    format!("AND role_row.resource_id = {}", ph),
-                    start_index + 1,
-                )
+                (format!("AND role_row.resource_id = {ph}"), start_index + 1)
             }
             rolify_core::catalog::CatalogScope::InstanceOnly { resource_id } => {
                 match resource_id {
                     Some(_) => {
                         // resource_id = specific id
                         let ph = placeholder(start_index);
-                        (
-                            format!("AND role_row.resource_id = {}", ph),
-                            start_index + 1,
-                        )
+                        (format!("AND role_row.resource_id = {ph}"), start_index + 1)
                     }
                     None => {
                         // Every instance row in types — no additional filter
@@ -664,13 +627,16 @@ mod backend_sql {
         let ph = placeholder(index);
         // Holder primary keys are integers; the bind carries the
         // stringified id (see `cast_to_text`).
-        (format!("AND {} = {}", cast_to_text("holder.id"), ph), index + 1)
+        (
+            format!("AND {} = {}", cast_to_text("holder.id"), ph),
+            index + 1,
+        )
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-    use crate::dialect::{cast_to_text, placeholder, quote_identifier};
+        use crate::dialect::{placeholder, quote_identifier};
         use rolify_core::query::{ResourceFilter, RoleQuery};
         use rolify_core::role::{ResourceId, RoleName};
 

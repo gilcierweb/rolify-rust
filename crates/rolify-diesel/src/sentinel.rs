@@ -6,8 +6,8 @@
 //! constraint deduplicates identically on all three engines.
 //!
 //! This module owns BOTH directions:
-//! - Write side: `Option<&str>` → `&str` (None → SCOPE_SENTINEL)
-//! - Read side: `&str` → `Option<String>` (SCOPE_SENTINEL → None)
+//! - Write side: `Option<&str>` → `&str` (None → `SCOPE_SENTINEL`)
+//! - Read side: `&str` → `Option<String>` (`SCOPE_SENTINEL` → None)
 //!
 //! The sentinel never crosses the SPI boundary — `RoleRecord` keeps
 //! `Option` semantics throughout the kernel and consumer API.
@@ -20,20 +20,22 @@ use rolify_core::role::SCOPE_SENTINEL;
 /// `None` (global/class scope) becomes the sentinel `''`.
 /// `Some(value)` becomes `value` unchanged.
 #[inline]
+#[must_use]
 pub fn to_storage(value: Option<&str>) -> &str {
     value.unwrap_or(SCOPE_SENTINEL)
 }
 
-/// Convert an optional ResourceId to its physical storage form.
+/// Convert an optional `ResourceId` to its physical storage form.
 #[inline]
 pub fn resource_id_to_storage(value: Option<&ResourceId>) -> &str {
-    value.map(ResourceId::as_str).unwrap_or(SCOPE_SENTINEL)
+    value.map_or(SCOPE_SENTINEL, ResourceId::as_str)
 }
 
 /// Convert a physical storage value back to the semantic `Option`.
 ///
 /// The sentinel `''` becomes `None`. Any other value becomes `Some(value)`.
 #[inline]
+#[must_use]
 pub fn from_storage(value: &str) -> Option<String> {
     if value == SCOPE_SENTINEL {
         None
@@ -44,6 +46,7 @@ pub fn from_storage(value: &str) -> Option<String> {
 
 /// Convert a physical storage value back to `Option<ResourceId>`.
 #[inline]
+#[must_use]
 pub fn resource_id_from_storage(value: &str) -> Option<ResourceId> {
     if value == SCOPE_SENTINEL {
         None
