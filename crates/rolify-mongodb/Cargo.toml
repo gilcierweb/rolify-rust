@@ -5,5 +5,39 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 
+# D-11 (sync opt-in): default is async-first; the `sync` feature mirrors the
+# driver's own `mongodb::sync` module (tokio stays linked even in sync mode
+# because mongodb sync wraps async on its own threads; library code never
+# calls block_on). Direct version pins (not workspace deps) so this crate's
+# leg never edits the workspace root manifest (same posture as
+# rolify-seaorm, Phase 05).
+[dependencies]
+rolify-core = { workspace = true }
+mongodb = "=3.9.1"
+bson = "=2.15.0"
+thiserror = { workspace = true }
+maybe-async = { workspace = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+rolify-test = { workspace = true, features = ["suite"] }
+testcontainers = "=0.27.3"
+testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["mongo"] }
+tokio = { workspace = true }
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }
+
+# D-11/D-12: `sync` forwards `mongodb/sync` plus `rolify-core/is_sync` (and
+# the matching maybe-async mode, Phase 1 D-05) so the SAME store type
+# compiles in both modes. Default is async. `serde` opts the document
+# structs into serde derives (QUAL-03). `suite` forwards the shared parity
+# suite binding (Phase 2 D-11/D-12).
+[features]
+default = []
+is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
+sync = ["is_sync", "mongodb/sync"]
+serde = ["dep:serde"]
+suite = ["rolify-test/suite"]
+
 [lints]
 workspace = true
