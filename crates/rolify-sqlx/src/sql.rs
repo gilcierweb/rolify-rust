@@ -567,19 +567,23 @@ pub(crate) fn select_scoped_exists<DB: Database>(
 ///
 /// `type_filter` and `where_clause` arrive pre-built; the placeholder
 /// sequence is types first, then the fragment (the caller threads the
-/// index accordingly).
+/// index accordingly). The holder primary key is an integer column while
+/// the link table stores stringified ids, so both the projection and the
+/// join cast it to text (the same repair the diesel reference carries;
+/// Postgres has no implicit varchar = bigint coercion).
 #[must_use]
-pub(crate) fn select_holders_where(
+pub(crate) fn select_holders_where<DB: Database>(
     holder_table: &str,
     join_table: &str,
     role_table: &str,
     type_filter: &str,
     where_clause: &str,
 ) -> String {
+    let holder_id_text = cast_to_text::<DB>("holder.id");
     format!(
-        "SELECT DISTINCT holder.id AS user_id \
+        "SELECT DISTINCT {holder_id_text} AS user_id \
          FROM {holder_table} AS holder \
-         INNER JOIN {join_table} AS link ON link.user_id = holder.id \
+         INNER JOIN {join_table} AS link ON link.user_id = {holder_id_text} \
          INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
          WHERE {type_filter} AND {where_clause}"
     )
@@ -587,10 +591,14 @@ pub(crate) fn select_holders_where(
 
 /// SELECT every holder id of the given types: the FULL holder universe
 /// including never-rolificated holders (`User.all` behind `all_except`,
-/// `finders.rb:13`). `type_filter` arrives pre-built.
+/// `finders.rb:13`). `type_filter` arrives pre-built. The integer
+/// primary key is cast to text for the stringified-id output contract.
 #[must_use]
-pub(crate) fn select_all_holders(holder_table: &str, type_filter: &str) -> String {
-    format!("SELECT id AS user_id FROM {holder_table} WHERE {type_filter}")
+pub(crate) fn select_all_holders<DB: Database>(holder_table: &str, type_filter: &str) -> String {
+    format!(
+        "SELECT {} AS user_id FROM {holder_table} WHERE {type_filter}",
+        cast_to_text::<DB>("id")
+    )
 }
 
 /// SELECT the catalog read base for `roles_matching`

@@ -849,7 +849,7 @@ where
             } else {
                 sql::build_ladder_where::<DB>(query, fragment_start)
             };
-            let sql_text = sql::select_holders_where(
+            let sql_text = sql::select_holders_where::<DB>(
                 &holder_table,
                 &join_table,
                 &role_table,
@@ -884,7 +884,7 @@ where
                 return Ok(Vec::new());
             }
             let type_filter = holder_type_filter::<DB>(None, holder_types.len());
-            let sql_text = sql::select_all_holders(&holder_table, &type_filter);
+            let sql_text = sql::select_all_holders::<DB>(&holder_table, &type_filter);
             let binds: Vec<BindValue> = holder_types
                 .iter()
                 .map(|type_name| BindValue::Text((*type_name).to_owned()))
