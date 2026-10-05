@@ -187,9 +187,10 @@ mod tests {
 
         // Complements pin both directions: the class row empties the
         // universe; the global row excludes nothing.
-        let found = Forum::without_role(&mut engine, std::slice::from_ref(&curator), None, &universe)
-            .await
-            .expect("without_role curator");
+        let found =
+            Forum::without_role(&mut engine, std::slice::from_ref(&curator), None, &universe)
+                .await
+                .expect("without_role curator");
         assert!(found.is_empty(), "the class row empties the universe");
         let found = Forum::without_role(&mut engine, &[watcher], None, &universe)
             .await
@@ -225,7 +226,10 @@ mod tests {
             .await
             .expect("admin: class godfather on Forum");
         zombie
-            .add_role(&forum, ResourceRef::Instance("Forum", &forum_last.resource_id))
+            .add_role(
+                &forum,
+                ResourceRef::Instance("Forum", &forum_last.resource_id),
+            )
             .await
             .expect("zombie: instance forum on Forum last");
         // A global row sharing the name of an instance grant: the
@@ -236,9 +240,11 @@ mod tests {
             .await
             .expect("admin: global sneaky");
 
-        let admin_forum_first = RoleRecord::for_instance("forum", "Forum", forum_first.resource_id.as_str());
+        let admin_forum_first =
+            RoleRecord::for_instance("forum", "Forum", forum_first.resource_id.as_str());
         let admin_godfather_class = RoleRecord::for_class("godfather", "Forum");
-        let zombie_forum_last = RoleRecord::for_instance("forum", "Forum", forum_last.resource_id.as_str());
+        let zombie_forum_last =
+            RoleRecord::for_instance("forum", "Forum", forum_last.resource_id.as_str());
 
         // (None, None): the whole Forum family regardless of holder.
         let rows = Forum::find_roles(&mut engine, None, None)
@@ -261,14 +267,20 @@ mod tests {
         let rows = Forum::find_roles(&mut engine, Some(&forum), None)
             .await
             .expect("find_roles forum/any");
-        assert_record_set(&rows, &[admin_forum_first.clone(), zombie_forum_last.clone()]);
+        assert_record_set(
+            &rows,
+            &[admin_forum_first.clone(), zombie_forum_last.clone()],
+        );
 
         // (None, Some user): only the holder's rows, still inside the
         // family - the zombie's Forum row and the global row stay out.
         let rows = Forum::find_roles(&mut engine, None, Some(&admin_id))
             .await
             .expect("find_roles any/admin");
-        assert_record_set(&rows, &[admin_forum_first.clone(), admin_godfather_class.clone()]);
+        assert_record_set(
+            &rows,
+            &[admin_forum_first.clone(), admin_godfather_class.clone()],
+        );
 
         // (Some name, Some user): the intersection.
         let rows = Forum::find_roles(&mut engine, Some(&godfather), Some(&admin_id))
@@ -360,7 +372,10 @@ mod tests {
 
         let (_admin_id, mut admin) = seat_user("admin").await;
         admin
-            .add_role(&RoleName::from("keeper"), ResourceRef::Class("Organization"))
+            .add_role(
+                &RoleName::from("keeper"),
+                ResourceRef::Class("Organization"),
+            )
             .await
             .expect("admin: class keeper on the STI parent");
         admin
@@ -503,7 +518,10 @@ mod tests {
         let rows = Team::roles_of_instance(&mut engine, &alpha_instance)
             .await
             .expect("roles of Team alpha");
-        assert_record_set(&rows, &[RoleRecord::for_instance("captain", "Team", "alpha")]);
+        assert_record_set(
+            &rows,
+            &[RoleRecord::for_instance("captain", "Team", "alpha")],
+        );
     }
 
     /// Raw-SPI supplement pinning the 04-04 holder-join fix:

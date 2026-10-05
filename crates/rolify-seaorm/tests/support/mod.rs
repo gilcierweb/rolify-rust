@@ -44,7 +44,7 @@ pub mod pg {
         tokio::sync::OnceCell::const_new();
 
     /// Shared `postgres:17` container for this test binary (single
-    /// concurrent init: OnceCell serializes the first-start race).
+    /// concurrent init: `OnceCell` serializes the first-start race).
     pub async fn container() -> &'static ContainerAsync<postgres::Postgres> {
         PG_CONTAINER
             .get_or_init(|| async {
@@ -82,7 +82,7 @@ mod mysql {
         tokio::sync::OnceCell::const_new();
 
     /// Shared `mysql:8.4` container for this test binary (single
-    /// concurrent init: OnceCell serializes the first-start race).
+    /// concurrent init: `OnceCell` serializes the first-start race).
     pub async fn container() -> &'static ContainerAsync<mysql::Mysql> {
         MYSQL_CONTAINER
             .get_or_init(|| async {
@@ -243,7 +243,7 @@ impl<C: UserClass> RolifyUser for SeaormSubject<C> {
     }
 }
 
-/// `TestBackend` over the SeaORM store and a pooled connection.
+/// `TestBackend` over the `SeaORM` store and a pooled connection.
 pub struct SeaormBackend<C: UserClass> {
     // Process-wide suite lock, held for the backend's whole lifetime.
     #[allow(dead_code)]
@@ -291,7 +291,7 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
         let holder = self
             .holder_id(login)
             .expect("unknown fixture login: expected admin, moderator, god, or zombie");
-        self.subject.login = login.to_owned();
+        login.clone_into(&mut self.subject.login);
         self.subject.holder = holder;
         &mut self.subject
     }
@@ -378,21 +378,10 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
 
 /// Build the registered store (holder table plus resource registry,
 /// mirrors the diesel suite backend wiring).
-pub fn build_store(config: &RolifyConfig) -> SuiteStore {
+pub fn build_store<C: sea_orm::ConnectionTrait + Send + 'static>(
+    config: &RolifyConfig,
+) -> SeaormStore<C> {
     SeaormStore::new(config)
-        .for_holder_table("users")
-        .register_resource_table("Forum", "forums", "id")
-        .register_resource_table("Group", "groups", "id")
-        .register_resource_table("Team", "teams", "team_code")
-        .register_resource_table("Organization", "organizations", "id")
-        .register_resource_table("Company", "organizations", "id")
-        .register_resource_table("Right", "rights", "id")
-}
-
-/// Build the registered store for the transaction executor leg.
-pub fn tx_store() -> SeaormStore<sea_orm::DatabaseTransaction> {
-    let config = <rolify_test::fixtures::DefaultUser as UserClass>::config();
-    SeaormStore::new(&config)
         .for_holder_table("users")
         .register_resource_table("Forum", "forums", "id")
         .register_resource_table("Group", "groups", "id")

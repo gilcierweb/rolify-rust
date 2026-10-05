@@ -29,7 +29,7 @@ jobs:
       - name: cargo clippy (default)
         run: cargo clippy --workspace --all-targets --exclude rolify-sqlx -- -D warnings
       - name: cargo clippy (is_sync)
-        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync --exclude rolify-sqlx -- -D warnings
+        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync --exclude rolify-sqlx --exclude rolify-seaorm -- -D warnings
       # Same unification constraint for rustdoc: the sqlx docs build in its
       # own async graph (no rolify-diesel in the dependency closure).
       - name: cargo doc
@@ -53,8 +53,8 @@ jobs:
       # Neither mode can silently stop being exercised (04-09, T-04-15).
       - name: cargo test (workspace async mode, exclude rolify-diesel)
         run: cargo test --workspace --exclude rolify-diesel
-      - name: cargo test (workspace sync mode, exclude rolify-sqlx)
-        run: cargo test --workspace --features rolify-core/is_sync --exclude rolify-sqlx
+      - name: cargo test (workspace sync mode, exclude rolify-sqlx and rolify-seaorm)
+        run: cargo test --workspace --features rolify-core/is_sync --exclude rolify-sqlx --exclude rolify-seaorm
       - name: cargo test (rolify-test suite async)
         run: cargo test -p rolify-test --features suite
       - name: cargo test (rolify-test suite sync)
@@ -135,6 +135,30 @@ jobs:
       # (Pitfall 11), so this per-feature leg is its -D warnings gate.
       - name: cargo clippy (rolify-sqlx all engines)
         run: cargo clippy -p rolify-sqlx --features postgres,mysql,sqlite -- -D warnings
+
+  seaorm:
+    name: SeaORM adapter legs (Postgres, MySQL)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # D-17: seaorm legs are containerized, engine-additive. The crate is
+      # async-only (D-05): no sync feature exists to gate. The parity suite
+      # runs the full twelve modules per engine (the ADPT-05 gate).
+      - name: cargo test (rolify-seaorm postgres,suite)
+        run: cargo test -p rolify-seaorm --features postgres,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-seaorm mysql,suite)
+        run: cargo test -p rolify-seaorm --features mysql,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo clippy (rolify-seaorm all engines)
+        run: cargo clippy -p rolify-seaorm --features postgres,mysql -- -D warnings
+      # D-10 phase-5 floor: 1.94 for rolify-seaorm (sea-orm 2.0.4).
+      - uses: dtolnay/rust-toolchain@1.94
+      - name: cargo +1.94 check (rolify-seaorm)
+        run: cargo +1.94 check -p rolify-seaorm --features postgres,mysql
 
   rider-async:
     name: Diesel-async rider legs (Postgres, MySQL, SQLite)

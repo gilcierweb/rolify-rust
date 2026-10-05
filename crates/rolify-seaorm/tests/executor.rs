@@ -18,6 +18,7 @@ use rolify_core::store::RoleStore;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 
 use crate::support::SuiteStore;
+use rolify_seaorm::SeaormStore;
 
 /// Four-leg matrix over any executor the store accepts. Asserts identical
 /// semantics on each leg.
@@ -66,7 +67,7 @@ async fn run_executor_matrix() {
     // ConnectionTrait surface the store is generic over.
     let tx = bare.begin().await.expect("begin tx");
     let mut tx = tx;
-    let mut tx_store = crate::support::tx_store();
+    let mut tx_store = new_tx_store();
     let scoped = tx_store
         .find_or_create_by(
             &mut tx,
@@ -105,7 +106,7 @@ async fn run_executor_matrix() {
     // LEG 4: caller-owned transaction rolled back: nothing leaks.
     let tx2 = bare.begin().await.expect("begin tx2");
     let mut tx2 = tx2;
-    let mut tx2_store = crate::support::tx_store();
+    let mut tx2_store = new_tx_store();
     let ghost = tx2_store
         .find_or_create_by(&mut tx2, &RoleName::from("ghost"), ResourceRef::Global)
         .await
@@ -177,6 +178,13 @@ async fn reset() {
 }
 
 fn suite_store() -> SuiteStore {
+    let config = <rolify_test::fixtures::DefaultUser as rolify_test::fixtures::UserClass>::config();
+    crate::support::build_store(&config)
+}
+
+/// The transaction-typed store leg (same registrations; the executor
+/// type parameter is the whole point of SC-5).
+fn new_tx_store() -> SeaormStore<sea_orm::DatabaseTransaction> {
     let config = <rolify_test::fixtures::DefaultUser as rolify_test::fixtures::UserClass>::config();
     crate::support::build_store(&config)
 }
