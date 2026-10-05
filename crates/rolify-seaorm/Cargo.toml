@@ -5,5 +5,36 @@ edition = "2024"
 rust-version = "1.94"
 license = "MIT"
 
+# D-05 (async-only): this crate declares no `sync`/`is_sync` feature of any
+# name and never forwards `rolify-core/is_sync` (Phase 1 D-05 precedent).
+# Direct version pins (not workspace deps) so the SeaORM and MongoDB legs
+# of this phase never need to edit the workspace root manifest.
+[dependencies]
+rolify-core = { workspace = true }
+sea-orm = { version = "=2.0.4", default-features = false, features = ["sqlx-postgres", "sqlx-mysql", "runtime-tokio", "runtime-tokio-rustls", "macros"] }
+sea-orm-migration = "=2.0.4"
+thiserror = { workspace = true }
+maybe-async = { workspace = true }
+
+[dev-dependencies]
+rolify-test = { workspace = true, features = ["suite"] }
+testcontainers = "=0.27.3"
+testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["postgres", "mysql"] }
+tokio = { workspace = true }
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }
+
+# Engine features are additive (SeaORM backends combine in one build, the
+# sqlx 0.9 duality; no `compile_error!` mutual exclusion here). They only
+# gate the containerized integration tests; the library itself always
+# compiles with both sqlx engines linked via the base dependency.
+# Never enable sea-orm's `rbac` cargo feature (STACK "What NOT to Use"):
+# it is enforcement-oriented RBAC, the opposite of rolify's philosophy.
+[features]
+default = []
+postgres = []
+mysql = []
+suite = ["rolify-test/suite"]
+
 [lints]
 workspace = true
