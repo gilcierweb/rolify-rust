@@ -23,7 +23,14 @@
 //!
 //! [`Rolify`]: rolify_core::manager::Rolify
 
+// The cfg gate can only see this crate's own `is_sync` feature, while
+// maybe_async strips the `impl Future` signatures whenever ANY graph
+// member unifies `maybe-async/is_sync` on (the macro reads its own
+// package's unified feature, not the caller's). In such graphs the
+// import is present yet unused; the allow keeps them warning-free. In
+// this crate's own sync builds the cfg gate removes the import entirely.
 #[cfg(not(feature = "is_sync"))]
+#[allow(unused_imports)]
 use core::future::Future;
 
 use rolify_core::error::RolifyError;

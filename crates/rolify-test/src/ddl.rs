@@ -7,8 +7,8 @@
 //! inlined `setup_fixtures` batches
 //! (`rolify-diesel/tests/support/mod.rs`, Phase 3). D-06 relocates them
 //! into the shared suite so that every backend (diesel in 04-10, sqlx in
-//! 04-03/04-06, the diesel-async rider in 04-05/04-07, SeaORM and
-//! MongoDB in Phase 5) consumes provably identical fixtures by
+//! 04-03/04-06, the diesel-async rider in 04-05/04-07, `SeaORM` and
+//! `MongoDB` in Phase 5) consumes provably identical fixtures by
 //! construction.
 //!
 //! ## Consumption contract

@@ -24,8 +24,13 @@
 //! here).
 
 // `Future` is named in the impl signatures in async mode only; maybe-async
-// strips the `impl Future` return type in `is_sync` mode.
+// strips the `impl Future` return type in `is_sync` mode. The cfg gate can
+// only see this crate's own feature, while the macro keys on the unified
+// `maybe-async/is_sync` package feature: in graphs where another member
+// (for example rolify-diesel's default `sync`) unifies sync on, the import
+// is present yet unused, so the allow keeps those builds warning-free.
 #[cfg(not(feature = "is_sync"))]
+#[allow(unused_imports)]
 use core::future::Future;
 
 use maybe_async::maybe_async;
