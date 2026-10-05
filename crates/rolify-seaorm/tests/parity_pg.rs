@@ -1,5 +1,5 @@
 //! Postgres parity suite binding - the full Phase 2 portable suite
-//! (frozen twelve-module `parity_suite!`) plus the query_guards
+//! (frozen twelve-module `parity_suite!`) plus the `query_guards`
 //! extension, running against `postgres:17` with readiness waits via
 //! testcontainers.
 //!

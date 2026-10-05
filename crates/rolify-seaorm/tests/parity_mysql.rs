@@ -1,5 +1,5 @@
 //! `MySQL` parity suite binding - the full Phase 2 portable suite
-//! (frozen twelve-module `parity_suite!`) plus the query_guards
+//! (frozen twelve-module `parity_suite!`) plus the `query_guards`
 //! extension, running against `mysql:8.4` (utf8mb4_bin collation) with
 //! readiness waits via testcontainers.
 //!

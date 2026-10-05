@@ -38,7 +38,7 @@
 //!   boundary and never leaks into the SPI or the suite.
 //! - D-03: ladder-only raw cut - only the three gem ladder branches
 //!   (`role_adapter.rb:106-121`) live in raw SQL; everything else uses
-//!   SeaORM `Entity`/`QueryFilter`. Registry-driven finder reads
+//!   `SeaORM` `Entity`/`QueryFilter`. Registry-driven finder reads
 //!   (`holders_where`, `roles_matching`, `resources_find`) join consumer
 //!   tables whose names arrive at runtime, so they stay raw statements by
 //!   construction (same reading the diesel/sqlx adapters take).
