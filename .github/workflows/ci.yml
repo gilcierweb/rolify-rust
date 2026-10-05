@@ -22,20 +22,22 @@ jobs:
         run: cargo fmt --all --check
       # Pitfall 11 after D-08: rolify-diesel's default = ["sync"] unifies
       # rolify-core/is_sync ON for every workspace-wide build, and the
-      # async-only rolify-sqlx cannot compile against the sync-shaped SPI
-      # (Phase 1 D-05). Both check-job clippy variants therefore lint the
-      # default sync graph MINUS rolify-sqlx; the sqlx lib keeps its own
-      # -D warnings gate in the sqlx job (per-engine feature leg).
+      # async-only crates (rolify-sqlx, rolify-seaorm) cannot compile
+      # against the sync-shaped SPI (Phase 1 D-05). Both check-job clippy
+      # variants therefore lint the graph MINUS those two; each async-only
+      # crate keeps its own -D warnings leg in its dedicated job.
       - name: cargo clippy (default)
-        run: cargo clippy --workspace --all-targets --exclude rolify-sqlx -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude rolify-sqlx --exclude rolify-seaorm -- -D warnings
       - name: cargo clippy (is_sync)
         run: cargo clippy --workspace --all-targets --features rolify-core/is_sync --exclude rolify-sqlx --exclude rolify-seaorm -- -D warnings
-      # Same unification constraint for rustdoc: the sqlx docs build in its
-      # own async graph (no rolify-diesel in the dependency closure).
+      # Same unification constraint for rustdoc: the sqlx and seaorm docs
+      # build in their own async graphs (no rolify-diesel in the closure).
       - name: cargo doc
-        run: cargo doc --workspace --no-deps --exclude rolify-sqlx
+        run: cargo doc --workspace --no-deps --exclude rolify-sqlx --exclude rolify-seaorm
       - name: cargo doc (rolify-sqlx)
         run: cargo doc -p rolify-sqlx --no-deps --features postgres,mysql,sqlite
+      - name: cargo doc (rolify-seaorm)
+        run: cargo doc -p rolify-seaorm --no-deps --features postgres,mysql
 
   test:
     name: Test (dual-mode + in-memory suite)
