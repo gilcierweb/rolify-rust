@@ -12,8 +12,10 @@ authorization stack through idiomatic persistence adapters.
 
 > Status: active development. `rolify-core` (pure semantics kernel) and the
 > `rolify-test` in-memory reference store are implemented and tested in both
-> sync and async modes. The four backend adapters and the CLI generator are
-> scaffolded and land per the [roadmap](#roadmap).
+> sync and async modes. The Diesel adapter (sync reference plus the
+> diesel-async rider) and the SQLx adapter are implemented and pass the
+> ported parity suite on containerized Postgres and MySQL. SeaORM, MongoDB,
+> and the CLI generator are scaffolded and land per the [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -31,6 +33,7 @@ authorization stack through idiomatic persistence adapters.
 - [Configuration](#configuration)
 - [Error handling](#error-handling)
 - [Sync and async duality](#sync-and-async-duality)
+- [Async adapters](#async-adapters)
 - [MSRV policy](#msrv-policy)
 - [Roadmap](#roadmap)
 - [Ruby rolify parity](#ruby-rolify-parity)
@@ -99,8 +102,8 @@ Cargo workspace of seven crates (`resolver = "3"`, edition 2024):
 |-----------------|---------------------------------------------------|---------------|
 | `rolify-core`   | Backend-free types, pure kernel, sealed `RoleStore` SPI, `RolifyUser` consumer trait, `RolifyConfig`, `RolifyError` | Implemented (kernel + SPI) |
 | `rolify-test`   | `InMemoryStore` reference implementation plus (later) consumer assertion helpers | Implemented (store) |
-| `rolify-diesel` | Sync-first reference adapter (Diesel 2.3), optional async via diesel-async | Scaffolded (Phase 3) |
-| `rolify-sqlx`   | Async-only adapter, hand-written SQL (SQLx 0.9)   | Scaffolded (Phase 4) |
+| `rolify-diesel` | Sync-first reference adapter (Diesel 2.3), optional async via diesel-async | Implemented (Phase 3 sync + Phase 4 async rider) |
+| `rolify-sqlx`   | Async-only adapter, hand-written SQL (SQLx 0.9)   | Implemented (Phase 4) |
 | `rolify-seaorm` | Async-only adapter (SeaORM 2.0 entities)          | Scaffolded (Phase 5) |
 | `rolify-mongodb`| Async-first adapter mirroring the driver's sync feature (MongoDB driver 3.9) | Scaffolded (Phase 5) |
 | `rolify-cli`    | `rails g rolify` equivalent: emits migrations plus scaffolding per backend | Scaffolded (Phase 6) |
@@ -526,6 +529,74 @@ Rules:
 - Sync SQL users are served by `rolify-diesel`; SQLx and SeaORM stay
   async-only by design.
 
+## Async adapters
+
+Phase 4 delivers the two async persistence paths. Both run the identical
+ported parity suite on containerized Postgres and MySQL, and both are
+CI-enforced on every push (suites, MSRV floors, and the dual-mode
+workspace gates).
+
+### rolify-sqlx (async-only)
+
+One generic store over hand-written SQL with runtime binds; the engine
+features are **additive** (mirroring sqlx itself, D-13), so a single
+build may enable any combination:
+
+```toml
+[dependencies]
+rolify-core = "0.1"
+rolify-sqlx = { version = "0.1", features = ["postgres"] } # or mysql, sqlite, or several at once
+```
+
+```rust
+use rolify_core::config::RolifyConfig;
+use rolify_sqlx::SqlxStore;
+
+let store = SqlxStore::<sqlx::Postgres>::new(&RolifyConfig::builder().build()?);
+```
+
+- `SqlxStore<DB>` satisfies the complete sealed SPI union (`RoleStore`
+  plus `ResourceStore`); constructors mirror the diesel adapter
+  (`new`, `for_holder_table`, `register_resource_table`).
+- Migrations ship as per-engine `sqlx::migrate::Migrator` statics:
+  run `MIGRATIONS_POSTGRES.run(&pool).await` (or `MIGRATIONS_MYSQL` /
+  `MIGRATIONS_SQLITE`) yourself. The crate **never auto-migrates**
+  (D-02, same lock as `rolify-diesel`).
+- There is no sync mode by construction: the crate declares no sync
+  feature of any name and never forwards `rolify-core/is_sync`
+  (Phase 1 D-05).
+
+### rolify-diesel async rider (opt-in)
+
+Sync stays the default for existing consumers (D-08); async is an
+opt-in feature set over the same `DieselStore` type and the same SQL
+templates (mirrored execution):
+
+```toml
+[dependencies]
+rolify-diesel = { version = "0.1", default-features = false, features = ["async", "bb8", "postgres"] }
+```
+
+- `async` pulls `diesel-async` 0.9; `bb8` and `deadpool` are optional
+  pools mirroring diesel-async's own feature names (D-09), neither on
+  by default. Enabling `sync` and `async` together fails compilation
+  with an explanatory `compile_error!`.
+- The full parity suite runs over bb8 (the canonical gate pool);
+  deadpool gets a compile check plus one smoke round trip.
+- Engine features are mode-agnostic: combine `async` + any one engine
+  feature (`postgres`, `mysql`, `sqlite`) plus the pool of your choice.
+
+### Per-crate MSRV floors (D-10)
+
+| Crate | `rust-version` | Covers |
+|-------|----------------|--------|
+| `rolify-diesel` | 1.86 | Both modes: `diesel` 2.3.13 sync and `diesel-async` 0.9 (effectively 1.86 via diesel ~2.3.9) |
+| `rolify-sqlx` | 1.94 | `sqlx` 0.9.0 |
+
+CI checks each floor on every push (`cargo +1.86 check -p rolify-diesel`
+in sync and async mode, `cargo +1.94 check -p rolify-sqlx` with all
+three engines), so a floor break blocks the pipeline before it ships.
+
 ## MSRV policy
 
 Each crate declares the floor its driver requires; the workspace
@@ -554,8 +625,8 @@ exists, then each backend proves itself against the same suite.
 - [x] `InMemoryStore` reference backend (no Docker)
 - [ ] **Phase 1**: Core kernel and trait contracts (in progress)
 - [ ] **Phase 2**: Full role API surface plus ported `shared_examples` harness, green in memory
-- [ ] **Phase 3**: Diesel reference adapter on real Postgres/MySQL (testcontainers); **v1 parity claim completes here**
-- [ ] **Phase 4**: SQLx (async-only) plus diesel-async rider
+- [x] **Phase 3**: Diesel reference adapter on real Postgres/MySQL (testcontainers); **v1 parity claim completes here**
+- [x] **Phase 4**: SQLx (async-only) plus diesel-async rider
 - [ ] **Phase 5**: SeaORM and MongoDB adapters in parallel; four-backend matrix closes
 - [ ] **Phase 6**: `rolify-cli` generator (one canonical schema, per-backend emitters)
 - [ ] **Phase 7**: Consumer test matchers, docs.rs/semver/MSRV gates, published parity matrix
