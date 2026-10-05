@@ -216,10 +216,10 @@ Key decisions:
 - Rust 1.94 or newer for a full-workspace checkout (the highest per-crate
   floor; see [MSRV policy](#msrv-policy)). Managed automatically by
   `rust-toolchain.toml` via rustup.
-- Docker Engine 24+ (daemon only) for adapter integration tests from
-  Phase 3 on: `testcontainers` starts ephemeral Postgres, MySQL, and
-  MongoDB automatically during `cargo test`. No Docker is needed today:
-  the current suite runs with zero containers.
+- Docker Engine 24+ (daemon only) for adapter integration tests (Diesel
+  and SQLx legs): `testcontainers` starts ephemeral Postgres, MySQL, and
+  MongoDB automatically during `cargo test`. The `rolify-core` and
+  `rolify-test` suites alone run with zero containers.
 - Docker Compose v2 is optional: persistent, inspectable databases for
   interactive work (see [Docker and databases](#docker-and-databases)).
 - `cargo-nextest` (optional) for partitioned test runs.
@@ -450,13 +450,14 @@ Migration notes per backend:
 | Unit + doctests, async (default) | `cargo test --workspace` | No |
 | Unit + doctests, sync mode | `cargo test --workspace --features rolify-core/is_sync` | No |
 | Per-crate | `cargo test -p rolify-core` | No |
-| Adapter integration (testcontainers) | `cargo test -p rolify-diesel --features postgres` (per-backend features as they land) | Yes |
+| Adapter integration (testcontainers) | `cargo test -p rolify-diesel --no-default-features --features sync,postgres` / `cargo test -p rolify-sqlx --features postgres` | Yes |
 | Partitioned runs | `cargo nextest run --workspace` | Only for adapter suites |
 
 Conventions:
 
-- Until the Phase 3 adapters land, the entire suite runs with zero Docker;
-  the `Yes` rows above apply to adapter crates as they land.
+- The `rolify-core` and `rolify-test` suites run with zero Docker; the
+  adapter legs (`rolify-diesel`, `rolify-sqlx`) require a running Docker
+  daemon for testcontainers.
 
 - New logic ships with tests; `rolify-core` and `rolify-test` must pass in
   **both** modes.
@@ -623,8 +624,8 @@ exists, then each backend proves itself against the same suite.
 - [x] Pure kernel (`where_`, `strict_engages`) with `:any` ratified
 - [x] `RoleStore` sealed SPI, `RolifyUser` seam, `RolifyConfig`, `RolifyError`
 - [x] `InMemoryStore` reference backend (no Docker)
-- [ ] **Phase 1**: Core kernel and trait contracts (in progress)
-- [ ] **Phase 2**: Full role API surface plus ported `shared_examples` harness, green in memory
+- [x] **Phase 1**: Core kernel and trait contracts
+- [x] **Phase 2**: Full role API surface plus ported `shared_examples` harness, green in memory
 - [x] **Phase 3**: Diesel reference adapter on real Postgres/MySQL (testcontainers); **v1 parity claim completes here**
 - [x] **Phase 4**: SQLx (async-only) plus diesel-async rider
 - [ ] **Phase 5**: SeaORM and MongoDB adapters in parallel; four-backend matrix closes
@@ -673,17 +674,15 @@ every public item.
 
 ## Contributing
 
+Contributions are welcome! Feel free to open issues and pull requests.
+
 1. Pick a roadmap phase and keep changes inside `rolify-rust/`.
 2. Mirror the gem's semantics; cite the gem file and line in comments when
    porting behavior.
 3. Add or extend tests first (both sync and async modes where applicable).
 4. Run the full [quality gates](#quality-gates) suite.
-5. Suggest a Conventional Commits title in English (commits are made
-   manually by the maintainer; automation never commits).
-
-## Contributing
-
-Contributions are welcome! Feel free to open issues and pull requests.
+5. Use Conventional Commits titles in English; commits land atomically per
+   task inside `rolify-rust/` (agent-assisted flow included).
 
 ## Inspiration
 
