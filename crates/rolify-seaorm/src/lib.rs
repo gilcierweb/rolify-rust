@@ -66,6 +66,8 @@ pub mod entity;
 pub mod error;
 pub mod ladder;
 pub mod migration;
+pub mod store;
 
 pub use error::Error;
 pub use migration::Migrator;
+pub use store::SeaormStore;
