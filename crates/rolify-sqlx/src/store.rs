@@ -198,7 +198,7 @@ impl<DB: Database> SqlxStore<DB> {
     /// the count-by-selection design (the SELECT and the DELETE each
     /// count as one statement — RESEARCH Pitfall 5), so the guard
     /// expectations match the diesel backend's two-statement shape, not
-    /// a rows_affected read.
+    /// a `rows_affected` read.
     #[must_use]
     pub fn query_count(&self) -> usize {
         self.query_counter.load(Ordering::Relaxed)
