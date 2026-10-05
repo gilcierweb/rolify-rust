@@ -43,13 +43,15 @@
 //! - [`collection`]: the D-12 type-level seam over the driver's async/sync
 //!   `Collection`/`Database` trees.
 //! - [`index`]: `create_index` ensure for the unique compound.
-//! - `store` (next task): `MongoStore` - the dual-mode store shell carrying
-//!   the validated handle (lands with the SPI seam in Task 2).
+//! - [`store`]: [`MongoStore`] - the dual-mode store shell carrying the
+//!   validated handle; the full SPI lands on it in 05.1-02.
 
 pub mod collection;
 pub mod document;
 mod error;
 pub mod index;
+mod store;
 
 pub use document::{HolderLinkDoc, ObjectId, RoleDoc};
 pub use error::{Error, is_duplicate_key};
+pub use store::MongoStore;

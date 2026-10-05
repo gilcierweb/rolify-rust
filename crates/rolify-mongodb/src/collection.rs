@@ -33,6 +33,13 @@ pub type RoleCollectionHandle = mongodb::Collection<RoleDoc>;
 #[cfg(feature = "sync")]
 pub type RoleCollectionHandle = mongodb::sync::Collection<RoleDoc>;
 
+/// Resolve the typed handle for a collection of `RoleDoc`s by validated
+/// name. Both driver modes expose `Database::collection::<T>(name)` with
+/// the same shape, so this one body serves both cfg arms.
+pub(crate) fn collection_for(database: &DatabaseHandle, name: &str) -> RoleCollectionHandle {
+    database.collection::<RoleDoc>(name)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
