@@ -842,7 +842,7 @@ mod pg_impl {
             let target_owned = match target {
                 RemovalTarget::NameOnly => RemovalTarget::NameOnly,
                 RemovalTarget::TypeSweep(t) => RemovalTarget::TypeSweep(t),
-                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, &id.clone()),
+                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, id),
             };
             let role_table = self.role_table.clone();
             let join_table = self.join_table.clone();
@@ -2316,7 +2316,7 @@ mod mysql_impl {
             let target_owned = match target {
                 RemovalTarget::NameOnly => RemovalTarget::NameOnly,
                 RemovalTarget::TypeSweep(t) => RemovalTarget::TypeSweep(t),
-                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, &id.clone()),
+                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, id),
             };
             let role_table = self.role_table.clone();
             let join_table = self.join_table.clone();
@@ -3783,7 +3783,7 @@ mod sqlite_impl {
             let target_owned = match target {
                 RemovalTarget::NameOnly => RemovalTarget::NameOnly,
                 RemovalTarget::TypeSweep(t) => RemovalTarget::TypeSweep(t),
-                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, &id.clone()),
+                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, id),
             };
             let role_table = self.role_table.clone();
             let join_table = self.join_table.clone();
