@@ -20,12 +20,22 @@ jobs:
           components: rustfmt, clippy
       - name: cargo fmt
         run: cargo fmt --all --check
+      # Pitfall 11 after D-08: rolify-diesel's default = ["sync"] unifies
+      # rolify-core/is_sync ON for every workspace-wide build, and the
+      # async-only rolify-sqlx cannot compile against the sync-shaped SPI
+      # (Phase 1 D-05). Both check-job clippy variants therefore lint the
+      # default sync graph MINUS rolify-sqlx; the sqlx lib keeps its own
+      # -D warnings gate in the sqlx job (per-engine feature leg).
       - name: cargo clippy (default)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude rolify-sqlx -- -D warnings
       - name: cargo clippy (is_sync)
-        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync -- -D warnings
+        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync --exclude rolify-sqlx -- -D warnings
+      # Same unification constraint for rustdoc: the sqlx docs build in its
+      # own async graph (no rolify-diesel in the dependency closure).
       - name: cargo doc
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --exclude rolify-sqlx
+      - name: cargo doc (rolify-sqlx)
+        run: cargo doc -p rolify-sqlx --no-deps --features postgres,mysql,sqlite
 
   test:
     name: Test (dual-mode + in-memory suite)
@@ -33,10 +43,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: cargo test (async default)
-        run: cargo test --workspace
-      - name: cargo test (sync mode)
-        run: cargo test --workspace --features rolify-core/is_sync
+      # Mode gates per Pitfall 11: the bare workspace command cannot stay
+      # green after D-08 flipped rolify-diesel's default to ["sync"] (it
+      # would unify the sync flag onto the async-only rolify-sqlx), so each
+      # mode's workspace gate isolates the member that cannot take it:
+      # - async mode: exclude rolify-diesel (the sync-default member)
+      # - sync mode: exclude rolify-sqlx (the async-only member), with the
+      #   is_sync flag pinning the mode explicitly
+      # Neither mode can silently stop being exercised (04-09, T-04-15).
+      - name: cargo test (workspace async mode, exclude rolify-diesel)
+        run: cargo test --workspace --exclude rolify-diesel
+      - name: cargo test (workspace sync mode, exclude rolify-sqlx)
+        run: cargo test --workspace --features rolify-core/is_sync --exclude rolify-sqlx
       - name: cargo test (rolify-test suite async)
         run: cargo test -p rolify-test --features suite
       - name: cargo test (rolify-test suite sync)
@@ -61,6 +79,95 @@ jobs:
         env:
           # Ensure testcontainers can pull images
           DOCKER_HOST: unix:///var/run/docker.sock
+      # Mode guard (04-05 Task 1, inverted check): the sync+async feature
+      # combination must FAIL compilation. Runs once, on the postgres leg
+      # where libpq is installed so the failure can only be the guard.
+      - name: mode guard (sync+async must fail compilation)
+        if: matrix.backend == 'postgres'
+        run: |
+          if cargo check -p rolify-diesel --no-default-features --features "sync,async,postgres" >/dev/null 2>&1; then
+            echo "GUARD-MISSING: sync+async compiled"; exit 1
+          else
+            echo "GUARD-OK: sync+async rejected at compile time"
+          fi
+      # Per-feature clippy leg (04-09): after the D-08 default flip the two
+      # check-job clippy variants compile only the default sync graph, so
+      # this step is what keeps the rider's cfg(all(async, engine)) library
+      # surface under a -D warnings gate on every push. The mysql leg is
+      # CI-authoritative (libmysqlclient present only on the runner).
+      - name: cargo clippy (rolify-diesel async,bb8,${{ matrix.backend }})
+        run: cargo clippy -p rolify-diesel --no-default-features --features "async,bb8,${{ matrix.backend }}" -- -D warnings
+
+  sqlx:
+    name: SQLx adapter legs (Postgres, MySQL, SQLite)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # sqlx 0.9 is a pure-Rust driver set: no libmysqlclient install step
+      # here (unlike the diesel/rider jobs). Postgres and MySQL run on
+      # testcontainers; SQLite is the hermetic non-gate leg (D-11) and also
+      # runs the drift-guard plus the migrations roundtrip in the same
+      # invocation.
+      - name: cargo test (rolify-sqlx postgres,suite)
+        run: cargo test -p rolify-sqlx --features postgres,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-sqlx mysql,suite)
+        run: cargo test -p rolify-sqlx --features mysql,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-sqlx sqlite,suite)
+        run: cargo test -p rolify-sqlx --features sqlite,suite
+      - name: cargo test (rolify-sqlx executor, postgres)
+        run: cargo test -p rolify-sqlx --features postgres,suite --test executor
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-sqlx concurrency, postgres)
+        run: cargo test -p rolify-sqlx --features postgres,suite --test concurrency
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-sqlx concurrency, mysql)
+        run: cargo test -p rolify-sqlx --features mysql,suite --test concurrency
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      # The sqlx lib is excluded from the check-job workspace variants
+      # (Pitfall 11), so this per-feature leg is its -D warnings gate.
+      - name: cargo clippy (rolify-sqlx all engines)
+        run: cargo clippy -p rolify-sqlx --features postgres,mysql,sqlite -- -D warnings
+
+  rider-async:
+    name: Diesel-async rider legs (Postgres, MySQL, SQLite)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev libmysqlclient-dev libsqlite3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # D-09: bb8 is the canonical gate pool for the full parity suites;
+      # deadpool gets compile-check plus exactly one smoke round trip
+      # (deadpool_smoke step), never the full suite. The mysql leg is
+      # CI-authoritative: it needs libmysqlclient, installed above.
+      - name: cargo test (rolify-diesel async,bb8,postgres,suite)
+        run: cargo test -p rolify-diesel --no-default-features --features async,bb8,postgres,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-diesel async,bb8,mysql,suite)
+        run: cargo test -p rolify-diesel --no-default-features --features async,bb8,mysql,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-diesel async,bb8,sqlite,suite)
+        run: cargo test -p rolify-diesel --no-default-features --features async,bb8,sqlite,suite
+      - name: cargo test (rolify-diesel executor_async, async,bb8,postgres)
+        run: cargo test -p rolify-diesel --no-default-features --features async,bb8,postgres --test executor_async
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo test (rolify-diesel deadpool smoke, async,deadpool,postgres)
+        run: cargo test -p rolify-diesel --no-default-features --features async,deadpool,postgres --test deadpool_smoke
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
 
   msrv:
     name: MSRV check (1.86)
@@ -78,3 +185,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.86
       - name: cargo +1.86 check (rolify-diesel ${{ matrix.backend }})
         run: cargo +1.86 check -p rolify-diesel --no-default-features --features "sync,${{ matrix.backend }}"
+      # D-10: both ratified floors, both modes, check-only on lib targets
+      # (the 03-06 rationale). Both added legs are backend-independent, so
+      # they run once on the postgres matrix leg.
+      - uses: dtolnay/rust-toolchain@1.94
+        if: matrix.backend == 'postgres'
+      - name: cargo +1.94 check (rolify-sqlx)
+        if: matrix.backend == 'postgres'
+        run: cargo +1.94 check -p rolify-sqlx --features postgres,mysql,sqlite
+      - name: cargo +1.86 check (rolify-diesel async,bb8,postgres)
+        if: matrix.backend == 'postgres'
+        run: cargo +1.86 check -p rolify-diesel --no-default-features --features async,bb8,postgres
