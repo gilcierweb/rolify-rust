@@ -1,7 +1,7 @@
-//! Tracer test: end-to-end grant/check/revoke lifecycle on SQLite (local convenience leg).
+//! Tracer test: end-to-end grant/check/revoke lifecycle on `SQLite` (local convenience leg).
 //!
-//! SQLite is a non-parity-gate leg (D-14): it runs locally without Docker for fast feedback.
-//! Concurrency test is excluded (SQLite single-writer, SQLITE_BUSY makes it meaningless).
+//! `SQLite` is a non-parity-gate leg (D-14): it runs locally without Docker for fast feedback.
+//! Concurrency test is excluded (`SQLite` single-writer, `SQLITE_BUSY` makes it meaningless).
 
 #![cfg(all(feature = "sync", feature = "sqlite"))]
 

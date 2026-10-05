@@ -1,12 +1,12 @@
-//! Postgres-backed acceptance tests for ResourceStore and finder SPI members.
+//! Postgres-backed acceptance tests for `ResourceStore` and finder SPI members.
 //!
 //! Tests cover:
 //! - STI class-scope expansion
-//! - String PK (team_code) round-trip
+//! - String PK (`team_code`) round-trip
 //! - Scoped delete + cascade sweep (SC-3)
-//! - holders_where strict vs non-strict
-//! - all_holders full-table semantics
-//! - roles_matching filter matrix
+//! - `holders_where` strict vs non-strict
+//! - `all_holders` full-table semantics
+//! - `roles_matching` filter matrix
 //! - Custom join/role table names (CONF-04)
 
 #![cfg(all(feature = "sync", feature = "postgres"))]

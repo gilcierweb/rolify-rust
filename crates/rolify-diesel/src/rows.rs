@@ -6,7 +6,11 @@
 //! use `SELECT *` — joined tables would produce name clashes (Pitfall 9).
 
 use diesel::deserialize::QueryableByName;
+// Text and the role value types serve the engine-gated row structs only;
+// the inert stub (no engine feature) never names them.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use diesel::sql_types::Text;
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use rolify_core::role::{RoleName, RoleRecord};
 
 /// Row returned by the role-table SELECT projections.
@@ -14,6 +18,9 @@ use rolify_core::role::{RoleName, RoleRecord};
 /// Maps directly to the `roles` table columns plus the sentinel-encoded
 /// scope columns. The `to_record()` method translates the physical
 /// `''` sentinel back to semantic `Option` via `sentinel::from_storage`.
+// Engine-row translation exists only for the engine-gated impl blocks;
+// the inert stub (no engine feature) never constructs these rows.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 #[derive(Debug, Clone, QueryableByName)]
 #[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
 #[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
@@ -27,6 +34,7 @@ pub(crate) struct RoleRow {
     pub resource_id: String,
 }
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 impl RoleRow {
     /// Convert the physical row to a semantic `RoleRecord`.
     ///
@@ -69,6 +77,7 @@ pub struct CountRow {
 }
 
 /// Row for `holders_where` / `all_holders` — holder ids from the join.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 #[derive(Debug, Clone, QueryableByName)]
 #[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
 #[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
@@ -79,6 +88,7 @@ pub(crate) struct HolderIdRow {
 }
 
 /// Row for `resources_find` / `in_list` / `roles_matching` — resource keys from the catalog.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 #[derive(Debug, Clone, QueryableByName)]
 #[cfg_attr(feature = "postgres", diesel(check_for_backend(diesel::pg::Pg)))]
 #[cfg_attr(feature = "mysql", diesel(check_for_backend(diesel::mysql::Mysql)))]
@@ -92,6 +102,7 @@ pub(crate) struct ResourceKeyRow {
     pub resource_id: String,
 }
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 impl ResourceKeyRow {
     #[must_use]
     pub fn to_key(&self) -> rolify_core::store::ResourceKey {
@@ -117,7 +128,9 @@ impl ResourceKeyRow {
     }
 }
 
-#[cfg(test)]
+// The tests construct the engine-gated row structs, so they ride the
+// same any-engine condition.
+#[cfg(all(test, any(feature = "postgres", feature = "mysql", feature = "sqlite")))]
 mod tests {
     use super::*;
     use rolify_core::role::ResourceId;

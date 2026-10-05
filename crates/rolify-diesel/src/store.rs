@@ -6,7 +6,11 @@
 //! checkouts and caller-owned transactions work via `DerefMut`.
 
 use rolify_core::config::{RolifyConfig, RolifyConfigBuilder};
+// The SPI value types below reach SQL only through the engine-gated impl
+// blocks; the inert stub (no engine feature) never names them.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use rolify_core::resource::ResourceRef;
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 use rolify_core::role::{ResourceId, RoleName, SCOPE_SENTINEL};
 use rolify_core::store::Sealed;
 
@@ -123,6 +127,9 @@ impl DieselStore {
         &self.resource_tables
     }
 
+    // Both helpers below serve the engine-gated impl blocks only (sync and
+    // async alike); the inert stub compiles them out.
+    #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
     #[allow(clippy::unused_self)]
     fn scope_to_triple(&self, name: &RoleName, scope: ResourceRef<'_>) -> (String, String, String) {
         let (rt, rid) = match scope {
@@ -134,6 +141,7 @@ impl DieselStore {
     }
 
     /// Build the holder table reference for SQL, defaulting to "users" if not set.
+    #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
     fn holder_table_sql(&self) -> String {
         self.holder_table
             .clone()
@@ -9395,7 +9403,10 @@ mod sqlite_async_impl {
     }
 } // mod sqlite_async_impl
 
-#[cfg(test)]
+// Every test below asserts postgres-flavored identifier quoting, so the
+// module rides the postgres feature; the imports then never dangle in the
+// inert test build.
+#[cfg(all(test, feature = "postgres"))]
 mod tests {
     use super::*;
     use crate::dialect::{placeholder, quote_identifier};

@@ -87,16 +87,16 @@ mod tests {
     #[test]
     fn roundtrip_preserves_semantics() {
         // None → sentinel → None
-        assert_eq!(from_storage(&to_storage(None)), None);
+        assert_eq!(from_storage(to_storage(None)), None);
         // Some → value → Some
         assert_eq!(
-            from_storage(&to_storage(Some("Forum"))),
+            from_storage(to_storage(Some("Forum"))),
             Some("Forum".to_owned())
         );
         // ResourceId roundtrip
         let id = ResourceId::from("123");
         assert_eq!(
-            resource_id_from_storage(&resource_id_to_storage(Some(&id))),
+            resource_id_from_storage(resource_id_to_storage(Some(&id))),
             Some(id)
         );
     }

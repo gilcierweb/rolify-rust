@@ -11,7 +11,7 @@
 //! (savepoint) are fully absorbed on rollback — cross-connection visibility
 //! confirms zero leaked rows.
 //!
-//! Runs on Postgres and MySQL (cfg-gated). SQLite excluded per D-14
+//! Runs on Postgres and `MySQL` (cfg-gated). `SQLite` excluded per D-14
 //! (locking-sensitive acceptance not meaningful on single-writer engine).
 
 #![cfg(all(feature = "sync", any(feature = "postgres", feature = "mysql")))]

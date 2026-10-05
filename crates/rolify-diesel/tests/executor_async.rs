@@ -14,7 +14,7 @@
 //! (SC-3 smoke for the rider): a full grant-then-read round trip runs
 //! inside `tokio::spawn` and the result crosses the `JoinHandle`.
 //!
-//! Runs on Postgres (cfg-gated like the tracer). SQLite is excluded per
+//! Runs on Postgres (cfg-gated like the tracer). `SQLite` is excluded per
 //! D-14: locking-sensitive executor acceptance is not meaningful on a
 //! single-writer engine.
 //!

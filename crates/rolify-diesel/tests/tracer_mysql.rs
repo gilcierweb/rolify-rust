@@ -1,7 +1,7 @@
-//! Tracer test: end-to-end grant/check/revoke lifecycle on real MySQL.
+//! Tracer test: end-to-end grant/check/revoke lifecycle on real `MySQL`.
 //!
-//! Mirrors the Postgres tracer test but runs against MySQL 8.4.
-//! Validates byte-exact role name semantics (utf8mb4_bin collation).
+//! Mirrors the Postgres tracer test but runs against `MySQL` 8.4.
+//! Validates byte-exact role name semantics (`utf8mb4_bin` collation).
 
 #![cfg(all(feature = "sync", feature = "mysql"))]
 

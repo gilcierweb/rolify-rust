@@ -1,8 +1,8 @@
 //! Embedded migrations apply/revert roundtrip test for all engines.
 //!
 //! This test verifies that the canonical migrations for all three engines
-//! embed correctly and apply/revert cleanly on SQLite (the hermetic leg),
-//! Postgres, and MySQL (the parity gate legs per D-14).
+//! embed correctly and apply/revert cleanly on `SQLite` (the hermetic leg),
+//! Postgres, and `MySQL` (the parity gate legs per D-14).
 
 #[cfg(feature = "sqlite")]
 use diesel::sqlite::SqliteConnection;

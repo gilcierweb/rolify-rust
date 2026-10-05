@@ -87,7 +87,7 @@ pub fn placeholder(_index: usize) -> String {
     "?".to_string()
 }
 
-/// Fallback quote_identifier when no backend feature is enabled (inert stub).
+/// Fallback `quote_identifier` when no backend feature is enabled (inert stub).
 /// Returns the name unquoted since this is only used for the inert stub
 /// compilation path where no actual SQL is executed.
 #[cfg(not(any(feature = "postgres", feature = "mysql", feature = "sqlite")))]
@@ -98,6 +98,10 @@ pub fn quote_identifier(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    // The test bodies below are inner-cfg-gated per engine, so the glob
+    // import rides the same condition: present exactly when a body can
+    // use it, absent (like the bodies) in the inert stub build.
+    #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
     use super::*;
 
     #[test]

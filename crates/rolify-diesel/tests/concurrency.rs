@@ -10,7 +10,7 @@
 //!
 //! Each race case runs 3 iterations to smoke out flakiness.
 //!
-//! Runs on Postgres and MySQL (cfg-gated). SQLite excluded per D-14
+//! Runs on Postgres and `MySQL` (cfg-gated). `SQLite` excluded per D-14
 //! (single-writer `SQLITE_BUSY` makes the race meaningless).
 
 #![cfg(all(feature = "sync", any(feature = "postgres", feature = "mysql")))]

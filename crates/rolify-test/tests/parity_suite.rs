@@ -91,7 +91,7 @@ const MODULE_CASE_MINIMUMS: &[(&str, usize)] = &[
 
 /// The wrapper total the thirteen minimums sum to (15 + 28 + 15 + 7 + 4 +
 /// 3 + 9 + 7 + 4 + 10 + 9 + 10 + 2): the structural half of the 02-09 gate
-/// plus the 03-04 query_guards extension.
+/// plus the 03-04 `query_guards` extension.
 const WRAPPER_TOTAL_MINIMUM: usize = 123;
 
 /// Structural closure proof for the 02-09/03-04 phase gate: every suite

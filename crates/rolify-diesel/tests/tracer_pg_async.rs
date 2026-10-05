@@ -4,7 +4,7 @@
 //! This is the Phase 4 tracer slice (Task 2): it exercises the complete
 //! grant/check/remove lifecycle through the public `RoleStore` SPI against
 //! a real Postgres container using diesel-async + bb8. It validates:
-//! - Migrations apply cleanly on async connections (AsyncMigrationHarness)
+//! - Migrations apply cleanly on async connections (`AsyncMigrationHarness`)
 //! - `find_or_create_by` SELECT-first + catch-re-read (D-04)
 //! - `add` idempotent link creation with UNIQUE catch-and-ignore (D-05)
 //! - `remove` transactional with orphan sweep (native async closures, Pitfall 6)
