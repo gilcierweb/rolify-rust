@@ -46,7 +46,7 @@
 //!   vendored `.sql` copies), reproducing the canonical physical schema
 //!   byte-faithfully (sentinel `''`, unique composite, composite indexes,
 //!   FK `role_id` with cascade). Consequence: the Phase 6 CLI needs a
-//!   dedicated SeaORM emitter (the canonical `.sql` files are not reused
+//!   dedicated `SeaORM` emitter (the canonical `.sql` files are not reused
 //!   verbatim).
 //! - D-05: the store is generic over `ConnectionTrait`, so pool,
 //!   loose connection, and caller-owned transaction work uniformly
