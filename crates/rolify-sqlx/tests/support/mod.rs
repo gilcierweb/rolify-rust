@@ -487,16 +487,12 @@ pub async fn insert_team_pg(conn: &mut sqlx::PgConnection, team_code: &str, name
 /// stringified generated id. Static statement (the `type` column name
 /// is quoted per Postgres rules); the STI type travels as a bind.
 #[cfg(feature = "postgres")]
-pub async fn insert_organization_pg(
-    conn: &mut sqlx::PgConnection,
-    type_name: &str,
-) -> ResourceKey {
-    let row =
-        sqlx::query("INSERT INTO organizations (\"type\") VALUES ($1) RETURNING id")
-            .bind(type_name)
-            .fetch_one(conn)
-            .await
-            .expect("insert organization on Postgres");
+pub async fn insert_organization_pg(conn: &mut sqlx::PgConnection, type_name: &str) -> ResourceKey {
+    let row = sqlx::query("INSERT INTO organizations (\"type\") VALUES ($1) RETURNING id")
+        .bind(type_name)
+        .fetch_one(conn)
+        .await
+        .expect("insert organization on Postgres");
     ResourceKey::new(type_name, row.get::<i64, _>(0).to_string())
 }
 
@@ -673,15 +669,15 @@ pub mod sqlx_backend {
 
     use sqlx::Connection;
 
+    #[cfg(feature = "mysql")]
+    use super::{mysql_container, mysql_pool, setup_fixtures_mysql};
     #[cfg(feature = "postgres")]
     use super::{pg_container, pg_pool, setup_fixtures_pg};
     #[cfg(feature = "sqlite")]
     use super::{setup_fixtures_sqlite_conn, sqlite_memory_pool};
-    #[cfg(feature = "mysql")]
-    use super::{mysql_container, mysql_pool, setup_fixtures_mysql};
-    use sqlx::ConnectOptions;
-    use rolify_sqlx::rows::CountRow;
     use rolify_sqlx::SqlxStore;
+    use rolify_sqlx::rows::CountRow;
+    use sqlx::ConnectOptions;
 
     /// Process-wide serializer for tests sharing one database.
     ///
@@ -698,7 +694,8 @@ pub mod sqlx_backend {
         /// Acquire the process-wide suite lock (spins until free).
         #[must_use]
         pub fn acquire() -> Self {
-            static SUITE_SERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            static SUITE_SERIAL: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
             while SUITE_SERIAL.swap(true, std::sync::atomic::Ordering::Acquire) {
                 std::thread::yield_now();
             }
@@ -814,19 +811,28 @@ pub mod sqlx_backend {
         DB: sqlx::Database,
     {
         /// Create a new connection to the test database.
-        fn make_conn() -> impl std::future::Future<Output = <DB as sqlx::Database>::Connection> + Send;
+        fn make_conn()
+        -> impl std::future::Future<Output = <DB as sqlx::Database>::Connection> + Send;
 
         /// Run the embedded migrations on the connection.
-        fn run_migrations(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+        fn run_migrations(
+            conn: &mut <DB as sqlx::Database>::Connection,
+        ) -> impl std::future::Future<Output = ()> + Send;
 
         /// Set up the fixture tables on the connection.
-        fn setup_fixtures(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+        fn setup_fixtures(
+            conn: &mut <DB as sqlx::Database>::Connection,
+        ) -> impl std::future::Future<Output = ()> + Send;
 
         /// Seed the canonical fixture rows.
-        fn seed_canonical_rows(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+        fn seed_canonical_rows(
+            conn: &mut <DB as sqlx::Database>::Connection,
+        ) -> impl std::future::Future<Output = ()> + Send;
 
         /// Reset the role state on the connection.
-        fn reset_roles(conn: &mut <DB as sqlx::Database>::Connection) -> impl std::future::Future<Output = ()> + Send;
+        fn reset_roles(
+            conn: &mut <DB as sqlx::Database>::Connection,
+        ) -> impl std::future::Future<Output = ()> + Send;
 
         /// Get the pool for this engine (for executor tests).
         #[allow(dead_code)]
@@ -844,11 +850,15 @@ pub mod sqlx_backend {
                     .await
                     .expect("Postgres port");
                 let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
-                sqlx::PgConnection::connect(&url).await.expect("Postgres connection")
+                sqlx::PgConnection::connect(&url)
+                    .await
+                    .expect("Postgres connection")
             }
         }
 
-        fn run_migrations(conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn run_migrations(
+            conn: &mut sqlx::PgConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 // Use a pool for migrations (pool implements Acquire)
                 let container = pg_container().await;
@@ -857,12 +867,19 @@ pub mod sqlx_backend {
                     .await
                     .expect("Postgres port");
                 let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
-                let pool = sqlx::PgPool::connect(&url).await.expect("Postgres pool for migrations");
-                rolify_sqlx::MIGRATIONS_POSTGRES.run(&pool).await.expect("Postgres migrations apply");
+                let pool = sqlx::PgPool::connect(&url)
+                    .await
+                    .expect("Postgres pool for migrations");
+                rolify_sqlx::MIGRATIONS_POSTGRES
+                    .run(&pool)
+                    .await
+                    .expect("Postgres migrations apply");
             }
         }
 
-        fn setup_fixtures(_conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn setup_fixtures(
+            _conn: &mut sqlx::PgConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 // Use a pool for fixtures (setup_fixtures_pg expects a pool)
                 let container = pg_container().await;
@@ -871,12 +888,16 @@ pub mod sqlx_backend {
                     .await
                     .expect("Postgres port");
                 let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
-                let pool = sqlx::PgPool::connect(&url).await.expect("Postgres pool for fixtures");
+                let pool = sqlx::PgPool::connect(&url)
+                    .await
+                    .expect("Postgres pool for fixtures");
                 setup_fixtures_pg(&pool).await;
             }
         }
 
-        fn seed_canonical_rows(conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn seed_canonical_rows(
+            conn: &mut sqlx::PgConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 for statement in [
                     "INSERT INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie') ON CONFLICT (id) DO NOTHING",
@@ -893,7 +914,9 @@ pub mod sqlx_backend {
             }
         }
 
-        fn reset_roles(conn: &mut sqlx::PgConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn reset_roles(
+            conn: &mut sqlx::PgConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 sqlx::query("TRUNCATE TABLE users_roles, roles RESTART IDENTITY CASCADE")
                     .execute(&mut *conn)
@@ -902,7 +925,8 @@ pub mod sqlx_backend {
             }
         }
 
-        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::Postgres>>> + Send {
+        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::Postgres>>> + Send
+        {
             async { Some(pg_pool().await) }
         }
     }
@@ -918,11 +942,15 @@ pub mod sqlx_backend {
                     .await
                     .expect("MySQL port");
                 let url = format!("mysql://root@127.0.0.1:{host_port}/test");
-                sqlx::MySqlConnection::connect(&url).await.expect("MySQL connection")
+                sqlx::MySqlConnection::connect(&url)
+                    .await
+                    .expect("MySQL connection")
             }
         }
 
-        fn run_migrations(conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn run_migrations(
+            conn: &mut sqlx::MySqlConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 // Use a pool for migrations (pool implements Acquire)
                 let container = mysql_container().await;
@@ -931,12 +959,19 @@ pub mod sqlx_backend {
                     .await
                     .expect("MySQL port");
                 let url = format!("mysql://root@127.0.0.1:{host_port}/test");
-                let pool = sqlx::MySqlPool::connect(&url).await.expect("MySQL pool for migrations");
-                rolify_sqlx::MIGRATIONS_MYSQL.run(&pool).await.expect("MySQL migrations apply");
+                let pool = sqlx::MySqlPool::connect(&url)
+                    .await
+                    .expect("MySQL pool for migrations");
+                rolify_sqlx::MIGRATIONS_MYSQL
+                    .run(&pool)
+                    .await
+                    .expect("MySQL migrations apply");
             }
         }
 
-        fn setup_fixtures(_conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn setup_fixtures(
+            _conn: &mut sqlx::MySqlConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 // Use a pool for fixtures (setup_fixtures_mysql expects a pool)
                 let container = mysql_container().await;
@@ -945,12 +980,16 @@ pub mod sqlx_backend {
                     .await
                     .expect("MySQL port");
                 let url = format!("mysql://root@127.0.0.1:{host_port}/test");
-                let pool = sqlx::MySqlPool::connect(&url).await.expect("MySQL pool for fixtures");
+                let pool = sqlx::MySqlPool::connect(&url)
+                    .await
+                    .expect("MySQL pool for fixtures");
                 setup_fixtures_mysql(&pool).await;
             }
         }
 
-        fn seed_canonical_rows(conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn seed_canonical_rows(
+            conn: &mut sqlx::MySqlConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 for statement in [
                     "INSERT IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
@@ -967,7 +1006,9 @@ pub mod sqlx_backend {
             }
         }
 
-        fn reset_roles(conn: &mut sqlx::MySqlConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn reset_roles(
+            conn: &mut sqlx::MySqlConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 sqlx::query("DELETE FROM users_roles")
                     .execute(&mut *conn)
@@ -1002,7 +1043,10 @@ pub mod sqlx_backend {
                     .await
                     .expect("SQLite pool for migrations");
                 // Run migrations on the pool
-                rolify_sqlx::MIGRATIONS_SQLITE.run(&pool).await.expect("SQLite migrations apply");
+                rolify_sqlx::MIGRATIONS_SQLITE
+                    .run(&pool)
+                    .await
+                    .expect("SQLite migrations apply");
                 // Now create a direct connection to the same file (migrations already applied)
                 sqlx::SqliteConnection::connect(connect_options.to_url_lossy().as_str())
                     .await
@@ -1010,15 +1054,23 @@ pub mod sqlx_backend {
             }
         }
 
-        fn run_migrations(_conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn run_migrations(
+            _conn: &mut sqlx::SqliteConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async { /* Migrations already run in make_conn */ }
         }
 
-        fn setup_fixtures(conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
-            async { setup_fixtures_sqlite_conn(conn).await; }
+        fn setup_fixtures(
+            conn: &mut sqlx::SqliteConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
+            async {
+                setup_fixtures_sqlite_conn(conn).await;
+            }
         }
 
-        fn seed_canonical_rows(conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn seed_canonical_rows(
+            conn: &mut sqlx::SqliteConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 for statement in [
                     "INSERT OR IGNORE INTO users (id, rolify_type, name) VALUES (1, 'User', 'admin'), (2, 'User', 'moderator'), (3, 'User', 'god'), (4, 'User', 'zombie')",
@@ -1035,7 +1087,9 @@ pub mod sqlx_backend {
             }
         }
 
-        fn reset_roles(conn: &mut sqlx::SqliteConnection) -> impl std::future::Future<Output = ()> + Send {
+        fn reset_roles(
+            conn: &mut sqlx::SqliteConnection,
+        ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 sqlx::query("DELETE FROM users_roles")
                     .execute(&mut *conn)
@@ -1051,7 +1105,8 @@ pub mod sqlx_backend {
             }
         }
 
-        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::Sqlite>>> + Send {
+        fn get_pool() -> impl std::future::Future<Output = Option<sqlx::Pool<sqlx::Sqlite>>> + Send
+        {
             async { Some(sqlite_memory_pool().await) }
         }
     }
@@ -1094,7 +1149,8 @@ pub mod sqlx_backend {
         for<'r> &'r str: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
         for<'r> usize: sqlx::ColumnIndex<<DB as sqlx::Database>::Row>,
         (): SqlxTestEngine<DB>,
-    {}
+    {
+    }
 
     impl<DB> SqlxBackend<DB>
     where
@@ -1303,7 +1359,15 @@ pub mod sqlx_backend {
         fn query_count(&self) -> Option<usize> {
             // Access the store through the Mutex to get the query count
             // without requiring &mut self (query_count on store takes &self)
-            Some(self.subject.engine_cell.lock().unwrap().store_with_conn().0.query_count())
+            Some(
+                self.subject
+                    .engine_cell
+                    .lock()
+                    .unwrap()
+                    .store_with_conn()
+                    .0
+                    .query_count(),
+            )
         }
     }
 }

@@ -46,8 +46,8 @@
 //! with caller-side coverage, mirroring `InMemoryStore::in_list`).
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rolify_core::catalog::RoleCatalogQuery;
 use rolify_core::config::{RolifyConfig, RolifyConfigBuilder};
@@ -725,7 +725,8 @@ where
 
             let affected_sql = sql::select_affected_roles::<DB>(&role_table, &join_table, &target);
             let affected_binds = removal_binds(&holder_text, &name_text, &target);
-            let rows = Self::fetch_rows(&mut *transaction, affected_sql, &affected_binds, &counter).await?;
+            let rows = Self::fetch_rows(&mut *transaction, affected_sql, &affected_binds, &counter)
+                .await?;
             let affected_records = Self::decode_role_rows(&rows)?;
 
             // Count by selection (Pitfall 5): with UNIQUE(user_id,
@@ -735,7 +736,8 @@ where
             let removed_links = affected_records.len();
 
             let delete_sql = sql::delete_links_for_target::<DB>(&join_table, &role_table, &target);
-            Self::execute_statement(&mut *transaction, delete_sql, &affected_binds, &counter).await?;
+            Self::execute_statement(&mut *transaction, delete_sql, &affected_binds, &counter)
+                .await?;
 
             let mut removed_roles = Vec::new();
             if remove_role_if_empty {
@@ -765,14 +767,16 @@ where
                     let link_exists_sql = sql::select_link_exists_for_role::<DB>(&join_table);
                     let link_binds = [BindValue::Integer(role_id)];
                     let remaining =
-                        Self::fetch_rows(&mut *transaction, link_exists_sql, &link_binds, &counter).await?;
+                        Self::fetch_rows(&mut *transaction, link_exists_sql, &link_binds, &counter)
+                            .await?;
                     if !remaining.is_empty() {
                         continue;
                     }
 
                     let orphan_sql = sql::delete_orphan_role::<DB>(&role_table, &join_table);
                     let orphan_binds = [BindValue::Integer(role_id), BindValue::Integer(role_id)];
-                    Self::execute_statement(&mut *transaction, orphan_sql, &orphan_binds, &counter).await?;
+                    Self::execute_statement(&mut *transaction, orphan_sql, &orphan_binds, &counter)
+                        .await?;
                     removed_roles.push(record.clone());
                 }
             }
@@ -994,7 +998,8 @@ where
                     .iter()
                     .map(|&role_id| BindValue::Integer(role_id))
                     .collect();
-                Self::execute_statement(&mut *transaction, delete_sql, &delete_binds, &counter).await?;
+                Self::execute_statement(&mut *transaction, delete_sql, &delete_binds, &counter)
+                    .await?;
             }
 
             transaction.commit().await?;
@@ -1080,7 +1085,8 @@ where
                     type_name,
                 );
                 let name_bind = [BindValue::Text(name_text.clone())];
-                let class_rows = Self::fetch_rows(conn, expansion_sql, &name_bind, &counter).await?;
+                let class_rows =
+                    Self::fetch_rows(conn, expansion_sql, &name_bind, &counter).await?;
                 all_keys.extend(Self::decode_key_rows(&class_rows)?);
             }
 

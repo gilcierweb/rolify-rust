@@ -11,4 +11,7 @@
 
 mod support;
 
-rolify_test::parity_suite!(parity_mysql, crate::support::sqlx_backend::SqlxBackend<sqlx::MySql>);
+rolify_test::parity_suite!(
+    parity_mysql,
+    crate::support::sqlx_backend::SqlxBackend<sqlx::MySql>
+);

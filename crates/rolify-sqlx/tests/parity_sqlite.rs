@@ -13,4 +13,7 @@
 
 mod support;
 
-rolify_test::parity_suite!(parity_sqlite, crate::support::sqlx_backend::SqlxBackend<sqlx::Sqlite>);
+rolify_test::parity_suite!(
+    parity_sqlite,
+    crate::support::sqlx_backend::SqlxBackend<sqlx::Sqlite>
+);

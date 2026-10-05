@@ -11,4 +11,7 @@
 
 mod support;
 
-rolify_test::parity_suite!(parity_pg, crate::support::sqlx_backend::SqlxBackend<sqlx::Postgres>);
+rolify_test::parity_suite!(
+    parity_pg,
+    crate::support::sqlx_backend::SqlxBackend<sqlx::Postgres>
+);
