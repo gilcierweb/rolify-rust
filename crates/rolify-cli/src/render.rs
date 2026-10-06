@@ -4,7 +4,7 @@
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
 use crate::args::Backend;
-use crate::emitters;
+use crate::emitters::sql::render_sql;
 use crate::error::CliError;
 use std::collections::BTreeMap;
 
@@ -42,7 +42,7 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
     };
 
     for engine in engines {
-        let (up_content, down_content) = emitters::render(plan.backend.clone(), plan)?;
+        let (up_content, down_content) = render_sql(plan, engine)?;
 
         let stem = "0000000001_rolify_create_tables";
         let prefix = format!("migrations/{engine}/{stem}");

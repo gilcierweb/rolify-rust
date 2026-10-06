@@ -14,24 +14,28 @@ pub const MYSQL_DOWN: &str = include_str!("../../templates/mysql/down.sql");
 pub const SQLITE_UP: &str = include_str!("../../templates/sqlite/up.sql");
 pub const SQLITE_DOWN: &str = include_str!("../../templates/sqlite/down.sql");
 
-/// Returns the up migration for the given backend.
+/// Returns the up migration for the given engine.
 #[must_use]
-pub fn up(backend: &str) -> &str {
-    match backend {
-        "diesel" | "sqlx" => POSTGRES_UP,
+pub fn up(engine: &str) -> &str {
+    match engine {
+        "postgres" => POSTGRES_UP,
+        "mysql" => MYSQL_UP,
+        "sqlite" => SQLITE_UP,
         "seaorm" => POSTGRES_UP, // SeaORM uses Postgres dialect
         "mongodb" => "",         // MongoDB uses document templates, not SQL
-        _ => panic!("unknown backend: {backend}"),
+        _ => panic!("unknown engine: {engine}"),
     }
 }
 
-/// Returns the down migration for the given backend.
+/// Returns the down migration for the given engine.
 #[must_use]
-pub fn down(backend: &str) -> &str {
-    match backend {
-        "diesel" | "sqlx" => POSTGRES_DOWN,
+pub fn down(engine: &str) -> &str {
+    match engine {
+        "postgres" => POSTGRES_DOWN,
+        "mysql" => MYSQL_DOWN,
+        "sqlite" => SQLITE_DOWN,
         "seaorm" => POSTGRES_DOWN, // SeaORM uses Postgres dialect
         "mongodb" => "",           // MongoDB uses document templates, not SQL
-        _ => panic!("unknown backend: {backend}"),
+        _ => panic!("unknown engine: {engine}"),
     }
 }

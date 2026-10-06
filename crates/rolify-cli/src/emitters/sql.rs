@@ -7,23 +7,24 @@ use crate::render::RenderPlan;
 use crate::templates::{down, up};
 use crate::error::CliError;
 
-/// Renders the SQL migrations for the given plan.
+/// Renders the SQL migrations for the given plan and engine.
 ///
 /// The longest-first replacement rule: replace the join table name (which
 /// contains the roles table name as a substring in the derived case) BEFORE
 /// replacing the roles table name, to avoid partial replacement.
 #[must_use]
-pub fn render_sql(plan: &RenderPlan) -> Result<(String, String), CliError> {
-    let backend = match plan.backend.as_str() {
-        "diesel" => "diesel",
-        "sqlx" => "diesel", // sqlx uses the same PostgreSQL dialect templates
+pub fn render_sql(plan: &RenderPlan, engine: &str) -> Result<(String, String), CliError> {
+    let template_engine = match engine {
+        "postgres" => "postgres",
+        "mysql" => "mysql",
+        "sqlite" => "sqlite",
         _ => return Err(CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unexpected backend for SQL renderer: {}", plan.backend.as_str()),
+            reason: format!("unknown engine for SQL renderer: {}", engine),
         })),
     };
 
-    let up_sql = up(backend);
-    let down_sql = down(backend);
+    let up_sql = up(template_engine);
+    let down_sql = down(template_engine);
 
     // Longest-first: replace join_table before roles_table
     let up_sql = up_sql

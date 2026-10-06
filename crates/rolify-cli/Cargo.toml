@@ -16,9 +16,11 @@ rolify-diesel = { workspace = true, features = ["postgres"] }
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
 testcontainers = "=0.27.3"
-testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["postgres", "mysql", "blocking"] }
+testcontainers-modules = { version = "0.15.0", default-features = false, features = ["postgres", "mysql", "blocking"] }
 rolify-diesel = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true }
+tempfile = "3.17"
+walkdir = "2.5"
 
 [features]
 default = []
