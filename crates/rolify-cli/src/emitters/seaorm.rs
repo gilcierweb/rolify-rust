@@ -1,4 +1,4 @@
-//! SeaORM migration emitter — hand-maintained Rust template (D-16).
+//! `SeaORM` migration emitter - hand-maintained Rust template (D-16).
 //!
 //! Uses raw-SQL migration body via `Statement::from_string` reusing the
 //! vendored canonical SQL strings per engine (RESEARCH Code Examples option a).
@@ -7,21 +7,24 @@
 //! `sea-orm-migration` dev-dep in tests.
 //!
 //! Semantic checklist enforced in tests/drift.rs:
-//! - Unique triple on (name, resource_type, resource_id)
-//! - Both idx_roles_resource and idx_roles_name indexes
+//! - Unique triple on (name, `resource_type`, `resource_id`)
+//! - Both `idx_roles_resource` and `idx_roles_name` indexes
 //! - DEFAULT '' on resource columns
 //! - ON DELETE CASCADE on join foreign key
-//! - Join-first drop order in down()
+//! - Join-first drop order in `down()`
 
 use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates;
 
-/// Renders the SeaORM migration file.
+/// Renders the `SeaORM` migration file.
 ///
 /// Substitutes validated table names with longest-first replacement order
 /// (same rule as SQL renderer). Returns the migration file content.
-#[must_use]
+///
+/// # Errors
+///
+/// Never fails in practice; the error type keeps the emitter contract uniform.
 pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
     let template = templates::seaorm_migration();
 
@@ -38,7 +41,7 @@ pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
     // Extract DROP statements from the ORIGINAL canonical down.sql
     // (before substitution), then substitute with custom names
     let original_down_sql = templates::down("postgres");
-    let (down_join, down_roles) = extract_and_substitute_drop(&original_down_sql, plan);
+    let (down_join, down_roles) = extract_and_substitute_drop(original_down_sql, plan);
 
     // Substitute into template
     let result = template
@@ -105,7 +108,7 @@ mod tests {
         let rendered = render_seaorm(&plan).unwrap();
 
         // Debug: print the rendered output to see what's happening
-        eprintln!("RENDERED OUTPUT:\n{}", rendered);
+        eprintln!("RENDERED OUTPUT:\n{rendered}");
 
         // Verify longest-first: join table replaced before roles table
         assert!(

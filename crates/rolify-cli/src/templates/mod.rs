@@ -29,6 +29,7 @@ pub mod scaffolding {
     pub const README_MONGODB: &str = include_str!("../../templates/scaffolding/README_mongodb.md.txt");
 
     /// Renders the role stub with substitutions.
+    #[must_use] 
     pub fn role_stub(role_name: &str, backend: &str, holder_name: &str) -> String {
         ROLE_STUB
             .replace("{role_name}", role_name)
@@ -37,6 +38,7 @@ pub mod scaffolding {
     }
 
     /// Renders the holder stub with substitutions.
+    #[must_use] 
     pub fn holder_stub(holder_name: &str, backend: &str, role_name: &str) -> String {
         HOLDER_STUB
             .replace("{holder_name}", holder_name)
@@ -45,6 +47,7 @@ pub mod scaffolding {
     }
 
     /// Renders the config example with substitutions.
+    #[must_use] 
     pub fn config_example(
         backend: &str,
         role_name: &str,
@@ -61,6 +64,10 @@ pub mod scaffolding {
     }
 
     /// Returns the README template for the given engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string when the README name is unknown.
     pub fn readme(name: &str) -> Result<&'static str, &'static str> {
         match name {
             "README_diesel" => Ok(README_DIESEL),
@@ -73,32 +80,38 @@ pub mod scaffolding {
 }
 
 /// Returns the up migration for the given engine.
+///
+/// # Panics
+///
+/// Panics when the engine is not one of postgres, mysql, sqlite, seaorm, mongodb.
 #[must_use]
 pub fn up(engine: &str) -> &str {
     match engine {
-        "postgres" => POSTGRES_UP,
+        "postgres" | "seaorm" => POSTGRES_UP, // SeaORM uses the Postgres dialect
         "mysql" => MYSQL_UP,
         "sqlite" => SQLITE_UP,
-        "seaorm" => POSTGRES_UP, // SeaORM uses Postgres dialect
-        "mongodb" => "",         // MongoDB uses document templates, not SQL
+        "mongodb" => "", // MongoDB uses document templates, not SQL
         _ => panic!("unknown engine: {engine}"),
     }
 }
 
 /// Returns the down migration for the given engine.
+///
+/// # Panics
+///
+/// Panics when the engine is not one of postgres, mysql, sqlite, seaorm, mongodb.
 #[must_use]
 pub fn down(engine: &str) -> &str {
     match engine {
-        "postgres" => POSTGRES_DOWN,
+        "postgres" | "seaorm" => POSTGRES_DOWN, // SeaORM uses the Postgres dialect
         "mysql" => MYSQL_DOWN,
         "sqlite" => SQLITE_DOWN,
-        "seaorm" => POSTGRES_DOWN, // SeaORM uses Postgres dialect
-        "mongodb" => "",           // MongoDB uses document templates, not SQL
+        "mongodb" => "", // MongoDB uses document templates, not SQL
         _ => panic!("unknown engine: {engine}"),
     }
 }
 
-/// Returns the SeaORM migration template.
+/// Returns the `SeaORM` migration template.
 #[must_use]
 pub fn seaorm_migration() -> &'static str {
     SEAORM_MIGRATION

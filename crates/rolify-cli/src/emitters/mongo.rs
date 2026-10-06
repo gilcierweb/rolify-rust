@@ -1,10 +1,10 @@
-//! MongoDB role document emitter — doc struct + index notes (D-09).
+//! `MongoDB` role document emitter - doc struct + index notes (D-09).
 //!
 //! Shape strictly from the 05-CONTEXT spec (D-07, D-08):
-//! - Fields: name (String), resource_type (Option<String>), resource_id
-//!   (Option<String>), user_ids (Vec<ObjectId>)
-//! - Unique compound index on (name, resource_type, resource_id)
-//! - Consumer-side role_ids with two-sided HABTM removal semantics
+//! - Fields: name (String), `resource_type` (Option<String>), `resource_id`
+//!   (Option<String>), `user_ids` (Vec<ObjectId>)
+//! - Unique compound index on (name, `resource_type`, `resource_id`)
+//! - Consumer-side `role_ids` with two-sided HABTM removal semantics
 //! - Emptiness checked after removal
 //!
 //! PROVISIONAL: Converges with `rolify-mongodb` `document.rs` when Phase 5
@@ -14,10 +14,13 @@ use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates;
 
-/// Renders the MongoDB role document struct plus index notes.
+/// Renders the `MongoDB` role document struct plus index notes.
 ///
-/// Returns a tuple of (role_doc_content, index_notes_content).
-#[must_use]
+/// Returns a tuple of (`role_doc_content`, `index_notes_content`).
+///
+/// # Errors
+///
+/// Never fails in practice; the error type keeps the emitter contract uniform.
 pub fn render_mongo(plan: &RenderPlan) -> Result<(String, String), CliError> {
     let template = templates::mongo_docs();
 
@@ -33,7 +36,7 @@ pub fn render_mongo(plan: &RenderPlan) -> Result<(String, String), CliError> {
     Ok((role_doc, index_notes))
 }
 
-/// Splits the template into role_doc (before INDEX_NOTES const) and index_notes.
+/// Splits the template into `role_doc` (before `INDEX_NOTES` const) and `index_notes`.
 fn split_template(template: &str) -> (String, String) {
     // Find the start of the INDEX_NOTES const definition
     if let Some(idx) = template.find("pub const INDEX_NOTES:") {
@@ -76,7 +79,7 @@ mod tests {
         let (role_doc, index_notes) = render_mongo(&plan).unwrap();
 
         // Debug output
-        eprintln!("INDEX_NOTES:\n{}", index_notes);
+        eprintln!("INDEX_NOTES:\n{index_notes}");
 
         // Verify field set frozen to 05-CONTEXT spec (Pitfall 8)
         assert!(role_doc.contains("name: String"), "name field missing");

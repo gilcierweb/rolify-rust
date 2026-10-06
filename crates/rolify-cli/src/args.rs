@@ -44,7 +44,7 @@ pub struct GenerateArgs {
     #[arg(long, default_value = "roles")]
     pub roles_table: String,
 
-    /// Join table name (default: derived from holder plural + _ + roles_table)
+    /// Join table name (default: derived from holder plural + _ + `roles_table`)
     #[arg(long)]
     pub join_table: Option<String>,
 }
@@ -58,6 +58,7 @@ pub enum Backend {
 }
 
 impl Backend {
+    #[must_use] 
     pub fn as_str(&self) -> &'static str {
         match self {
             Backend::Diesel => "diesel",

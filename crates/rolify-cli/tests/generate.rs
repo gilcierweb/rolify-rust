@@ -234,7 +234,7 @@ fn init_alias_produces_identical_tree() {
         let mut files = Vec::new();
         for entry in WalkDir::new(dir.join("migrations"))
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
         {
             if entry.file_type().is_file() {
                 let path = entry.path().to_path_buf();
@@ -252,7 +252,7 @@ fn init_alias_produces_identical_tree() {
     assert_eq!(files1.len(), files2.len(), "file count mismatch");
     for ((p1, c1), (p2, c2)) in files1.iter().zip(files2.iter()) {
         assert_eq!(p1, p2, "path mismatch");
-        assert_eq!(c1, c2, "content mismatch for {:?}", p1);
+        assert_eq!(c1, c2, "content mismatch for {p1:?}");
     }
 }
 
@@ -282,20 +282,20 @@ fn diesel_tree_contains_all_engines() {
     // Verify stem and files (D-19, D-22)
     let stem = "0000000001_rolify_create_tables";
     for engine in ["postgres", "mysql", "sqlite"] {
-        assert!(dir.join(format!("migrations/{}/{}", engine, stem)).exists());
+        assert!(dir.join(format!("migrations/{engine}/{stem}")).exists());
         assert!(
-            dir.join(format!("migrations/{}/{}/up.sql", engine, stem))
+            dir.join(format!("migrations/{engine}/{stem}/up.sql"))
                 .exists()
         );
         assert!(
-            dir.join(format!("migrations/{}/{}/down.sql", engine, stem))
+            dir.join(format!("migrations/{engine}/{stem}/down.sql"))
                 .exists()
         );
     }
 
     // Verify down.sql order: join first then roles (D-12)
     for engine in ["postgres", "mysql", "sqlite"] {
-        let down = fs::read_to_string(dir.join(format!("migrations/{}/{}/down.sql", engine, stem)))
+        let down = fs::read_to_string(dir.join(format!("migrations/{engine}/{stem}/down.sql")))
             .unwrap();
         // Find the DROP TABLE statements specifically
         let join_drop = down
@@ -307,8 +307,7 @@ fn diesel_tree_contains_all_engines() {
         // join table should be dropped before roles table
         assert!(
             join_drop < roles_drop,
-            "down.sql should drop join table first for {}",
-            engine
+            "down.sql should drop join table first for {engine}"
         );
     }
 }
@@ -335,24 +334,20 @@ fn diesel_generates_scaffolding_files() {
     // Verify scaffolding files for each engine
     for engine in ["postgres", "mysql", "sqlite"] {
         assert!(
-            dir.join(format!("{}/role_stub.rs", engine)).exists(),
-            "role_stub.rs missing for {}",
-            engine
+            dir.join(format!("{engine}/role_stub.rs")).exists(),
+            "role_stub.rs missing for {engine}"
         );
         assert!(
-            dir.join(format!("{}/holder_stub.rs", engine)).exists(),
-            "holder_stub.rs missing for {}",
-            engine
+            dir.join(format!("{engine}/holder_stub.rs")).exists(),
+            "holder_stub.rs missing for {engine}"
         );
         assert!(
-            dir.join(format!("{}/config_example.rs", engine)).exists(),
-            "config_example.rs missing for {}",
-            engine
+            dir.join(format!("{engine}/config_example.rs")).exists(),
+            "config_example.rs missing for {engine}"
         );
         assert!(
-            dir.join(format!("{}/README.md", engine)).exists(),
-            "README.md missing for {}",
-            engine
+            dir.join(format!("{engine}/README.md")).exists(),
+            "README.md missing for {engine}"
         );
     }
 }
@@ -437,25 +432,24 @@ fn custom_join_table_flows_into_all_outputs() {
     for engine in ["postgres", "mysql", "sqlite"] {
         let up_sql = fs::read_to_string(
             dir.join(format!(
-                "migrations/{}/0000000001_rolify_create_tables/up.sql",
-                engine
+                "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
             ))
         ).unwrap();
 
-        assert!(up_sql.contains("privileges"), "roles table name missing in {} up.sql", engine);
-        assert!(up_sql.contains("customers_privileges"), "join table name missing in {} up.sql", engine);
-        assert!(!up_sql.contains("users_roles"), "default join table should not appear in {} up.sql", engine);
+        assert!(up_sql.contains("privileges"), "roles table name missing in {engine} up.sql");
+        assert!(up_sql.contains("customers_privileges"), "join table name missing in {engine} up.sql");
+        assert!(!up_sql.contains("users_roles"), "default join table should not appear in {engine} up.sql");
     }
 
     // Verify scaffolding config_example has custom names
     for engine in ["postgres", "mysql", "sqlite"] {
-        let config = fs::read_to_string(dir.join(format!("{}/config_example.rs", engine))).unwrap();
-        assert!(config.contains("privileges"), "config missing custom roles table for {}", engine);
-        assert!(config.contains("customers_privileges"), "config missing custom join table for {}", engine);
+        let config = fs::read_to_string(dir.join(format!("{engine}/config_example.rs"))).unwrap();
+        assert!(config.contains("privileges"), "config missing custom roles table for {engine}");
+        assert!(config.contains("customers_privileges"), "config missing custom join table for {engine}");
     }
 }
 
-/// Tests derived join default for Role User equals users_roles.
+/// Tests derived join default for Role User equals `users_roles`.
 #[test]
 fn derived_join_default_for_role_user() {
     let dir = test_temp_dir();
@@ -478,12 +472,11 @@ fn derived_join_default_for_role_user() {
     for engine in ["postgres", "mysql", "sqlite"] {
         let up_sql = fs::read_to_string(
             dir.join(format!(
-                "migrations/{}/0000000001_rolify_create_tables/up.sql",
-                engine
+                "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
             ))
         ).unwrap();
 
-        assert!(up_sql.contains("users_roles"), "default join table should be users_roles for {}", engine);
+        assert!(up_sql.contains("users_roles"), "default join table should be users_roles for {engine}");
     }
 }
 
@@ -528,7 +521,7 @@ fn init_alias_output_identity() {
         let mut files = Vec::new();
         for entry in WalkDir::new(dir)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
         {
             if entry.file_type().is_file() {
                 let path = entry.path().to_path_buf();
@@ -545,8 +538,8 @@ fn init_alias_output_identity() {
 
     assert_eq!(files1.len(), files2.len(), "file count mismatch");
     for ((p1, c1), (p2, c2)) in files1.iter().zip(files2.iter()) {
-        assert_eq!(p1, p2, "path mismatch: {:?} vs {:?}", p1, p2);
-        assert_eq!(c1, c2, "content mismatch for {:?}", p1);
+        assert_eq!(p1, p2, "path mismatch: {p1:?} vs {p2:?}");
+        assert_eq!(c1, c2, "content mismatch for {p1:?}");
     }
 }
 
@@ -615,7 +608,7 @@ fn help_text_is_ascii_only() {
     );
 }
 
-/// Tests that namespaced input without explicit flags still passes validate_identifier or fails with naming error.
+/// Tests that namespaced input without explicit flags still passes `validate_identifier` or fails with naming error.
 #[test]
 fn namespaced_input_validation() {
     let dir = test_temp_dir();
@@ -635,4 +628,82 @@ fn namespaced_input_validation() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("invalid"));
+}
+
+/// Tests that generate --backend sqlx output tree diffs byte-identical
+/// against generate --backend diesel output tree, proving D-11 strict identity
+/// with no second checked-in tree.
+#[test]
+fn sqlx_output_matches_diesel_tree() {
+    let diesel_dir = test_temp_dir();
+    let sqlx_dir = test_temp_dir();
+    let diesel_out = diesel_dir.to_str().unwrap();
+    let sqlx_out = sqlx_dir.to_str().unwrap();
+
+    // Generate with diesel backend
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            diesel_out,
+        ])
+        .assert()
+        .success();
+
+    // Generate with sqlx backend
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "sqlx",
+            "Role",
+            "User",
+            "--out-dir",
+            sqlx_out,
+        ])
+        .assert()
+        .success();
+
+    // Recursively diff the migration trees: they must be byte-identical (D-11).
+    // Scaffolding files (README, stubs, config examples) legitimately carry the
+    // backend name and are out of D-11 scope: the identity claim covers the SQL
+    // migration bytes only.
+    fn collect_migration_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
+        let mut files = Vec::new();
+        for entry in WalkDir::new(dir.join("migrations"))
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if entry.file_type().is_file() {
+                let path = entry.path().to_path_buf();
+                let content = fs::read_to_string(&path).unwrap();
+                files.push((path.strip_prefix(dir).unwrap().to_path_buf(), content));
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
+    }
+
+    let diesel_files = collect_migration_files(&diesel_dir);
+    let sqlx_files = collect_migration_files(&sqlx_dir);
+
+    assert_eq!(
+        diesel_files.len(),
+        sqlx_files.len(),
+        "diesel and sqlx trees must have the same file count"
+    );
+
+    for ((diesel_path, diesel_content), (sqlx_path, sqlx_content)) in
+        diesel_files.iter().zip(sqlx_files.iter())
+    {
+        assert_eq!(diesel_path, sqlx_path, "path mismatch: {diesel_path:?} vs {sqlx_path:?}");
+        assert_eq!(
+            diesel_content, sqlx_content,
+            "content mismatch for {diesel_path:?}: D-11 strict identity violated"
+        );
+    }
 }

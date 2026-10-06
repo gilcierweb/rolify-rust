@@ -10,7 +10,6 @@ clap = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 anyhow = "1.0.104"
 rolify-core = { workspace = true }
-rolify-diesel = { workspace = true, features = ["postgres"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
@@ -21,7 +20,7 @@ rolify-diesel = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true }
 tempfile = "3.17"
 walkdir = "2.5"
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "mysql", "sqlite", "migrate"] }
 sea-orm-migration = "2.0.4"
 
 [features]

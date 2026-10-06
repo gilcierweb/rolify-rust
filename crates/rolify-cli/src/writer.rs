@@ -20,14 +20,20 @@ pub struct WriteOptions {
 /// Writes the rendered plan to disk.
 ///
 /// Returns Ok(()) on success. On collision without --force, returns
-/// CliError::AlreadyExists naming every colliding file.
+/// `CliError::AlreadyExists` naming every colliding file.
+///
+/// # Errors
+///
+/// Returns `CliError::AlreadyExists` on collisions without `--force`,
+/// `CliError::Io` on filesystem failures, and `CliError::Core` never in
+/// practice (kept for contract uniformity).
 pub fn write_plan(
     rendered: &std::collections::BTreeMap<String, Vec<FileEntry>>,
     options: &WriteOptions,
 ) -> Result<(), CliError> {
     // Collect all target paths first
     let mut all_paths = Vec::new();
-    for (_engine, files) in rendered {
+    for files in rendered.values() {
         for file in files {
             all_paths.push(options.out_dir.join(&file.path));
         }
@@ -61,7 +67,7 @@ pub fn write_plan(
     }
 
     // Write all files
-    for (_engine, files) in rendered {
+    for files in rendered.values() {
         for file in files {
             let target_path = options.out_dir.join(&file.path);
             if let Some(parent) = target_path.parent() {

@@ -1,6 +1,6 @@
 //! Pure render: builds the file plan (path + bytes) for mirrored trees.
 //!
-//! No filesystem I/O, no runtime DB access — just path computation and
+//! No filesystem I/O, no runtime DB access - just path computation and
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
 use crate::args::Backend;
@@ -29,10 +29,14 @@ pub struct FileEntry {
 /// Renders all engines for the given plan, returning a map of engine -> files.
 ///
 /// Each engine gets a mirrored tree under migrations/{engine}/ with the
-/// timestamp stem 0000000001_rolify_create_tables containing up.sql and down.sql.
-/// SeaORM gets a single migration file under seaorm/.
-/// Mongo gets role.rs and INDEX_NOTES.md under mongo/.
-/// All backends get scaffolding: role_stub.rs, holder_stub.rs, config_example.rs, README.md
+/// timestamp stem `0000000001_rolify_create_tables` containing up.sql and down.sql.
+/// `SeaORM` gets a single migration file under seaorm/.
+/// Mongo gets role.rs and `INDEX_NOTES.md` under mongo/.
+/// All backends get scaffolding: `role_stub.rs`, `holder_stub.rs`, `config_example.rs`, README.md
+///
+/// # Errors
+///
+/// Returns `CliError::Core` when the backend is unknown or an emitter fails.
 pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>, CliError> {
     let mut result = BTreeMap::new();
 
@@ -173,12 +177,12 @@ fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry
         "seaorm" => "README_seaorm",
         "mongo" => "README_mongodb",
         _ => return Err(CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unknown engine for README: {}", engine),
+            reason: format!("unknown engine for README: {engine}"),
         })),
     };
     let readme_content = readme(readme_name)
         .map_err(|e| CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unknown README template: {}", e),
+            reason: format!("unknown README template: {e}"),
         }))?
         .replace("{role_name}", &plan.role_name)
         .replace("{holder_name}", &plan.holder_name)

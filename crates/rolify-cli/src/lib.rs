@@ -1,17 +1,17 @@
-//! `rolify-cli` — the rolify migration generator.
+//! `rolify-cli` - the rolify migration generator.
 //!
 //! This crate provides the `rolify-cli` binary, which generates rolify migration
-//! files for multiple backends (Diesel, Sqlx, SeaORM, MongoDB) with canonical
+//! files for multiple backends (Diesel, Sqlx, `SeaORM`, `MongoDB`) with canonical
 //! byte-identity to the reference adapter schemas.
 //!
 //! ## Architecture
 //!
 //! - **Compile-time embedding**: SQL templates are embedded via `include_str!`
-//!   at build time — no runtime database access (D-13).
+//!   at build time - no runtime database access (D-13).
 //! - **Pure render**: `render.rs` builds the file plan in memory; `writer.rs`
 //!   handles all filesystem I/O with dry-run and force semantics (D-04, D-22).
 //! - **Single renderer**: Diesel and Sqlx share the same SQL renderer
-//!   (emitters/sql.rs) — D-11 identity by construction.
+//!   (emitters/sql.rs) - D-11 identity by construction.
 //! - **Longest-first replacement**: join table name replaced before roles table
 //!   name to avoid partial replacement (D-14).
 //! - **Validation at boundaries**: all interpolated names pass through
@@ -32,7 +32,7 @@
 //! - D-04: `--out-dir`, `--force`, `--dry-run`
 //! - D-05: `--roles-table` default `roles`, `--join-table` default derived
 //! - D-06: All engines emitted in one run
-//! - D-08: SQLite emitted
+//! - D-08: `SQLite` emitted
 //! - D-11: Single renderer for diesel/sqlx
 //! - D-12: Up + down migrations
 //! - D-13: Canonical home is rolify-diesel; CLI vendors + drift-guards
@@ -40,7 +40,7 @@
 //! - D-15: Drift test extends Phase 4 pattern to CLI
 //! - D-18: Fresh-generate only (no regenerate/upgrade)
 //! - D-19: Delivered timestamp stem `0000000001_rolify_create_tables`
-//! - D-21: Tracer leg — generated Postgres applies + store smoke
+//! - D-21: Tracer leg - generated Postgres applies + store smoke
 //! - D-22: Mirrored trees `migrations/{engine}/{stem}/up.sql|down.sql`
 
 pub mod args;
