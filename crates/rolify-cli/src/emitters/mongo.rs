@@ -78,9 +78,6 @@ mod tests {
 
         let (role_doc, index_notes) = render_mongo(&plan).unwrap();
 
-        // Debug output
-        eprintln!("INDEX_NOTES:\n{index_notes}");
-
         // Verify field set frozen to 05-CONTEXT spec (Pitfall 8)
         assert!(role_doc.contains("name: String"), "name field missing");
         assert!(

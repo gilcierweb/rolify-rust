@@ -1,37 +1,15 @@
-//! Emitter dispatch - single renderer for diesel and sqlx (D-11).
+//! Emitter dispatch for the four backends.
+//!
+//! Diesel and Sqlx share ONE renderer (`sql::render_sql`), so D-11 identity
+//! holds by construction: `render_all` calls it directly per engine. `SeaORM`
+//! and `MongoDB` have their own hand-maintained-template emitters.
 
 pub mod mongo;
 pub mod seaorm;
 pub mod sql;
 
-use crate::args::Backend;
 use crate::error::CliError;
 use crate::render::RenderPlan;
-
-/// Renders the up and down migrations for the given backend and plan.
-///
-/// Diesel and Sqlx share the same SQL renderer (D-11 identity by construction).
-/// This function uses the postgres template as default; the per-engine iteration
-/// happens in `render_all` which calls `render_sql` directly.
-/// `SeaORM` and `MongoDB` have their own emitters.
-///
-/// # Errors
-///
-/// Returns `CliError::Core` when rendering fails for the given backend.
-pub fn render(backend: &Backend, plan: &RenderPlan) -> Result<(String, String), CliError> {
-    match backend {
-        Backend::Diesel | Backend::Sqlx => sql::render_sql(plan, "postgres"),
-        Backend::Seaorm => {
-            let content = seaorm::render_seaorm(plan)?;
-            Ok((content, String::new())) // SeaORM has single file, down is embedded
-        }
-        Backend::Mongodb => Err(CliError::Core(
-            rolify_core::error::RolifyError::InvalidConfig {
-                reason: "MongoDB emitter returns (role_doc, index_notes) tuple, use render_mongo directly".into(),
-            },
-        )),
-    }
-}
 
 /// Renders the `MongoDB` role document and index notes.
 ///

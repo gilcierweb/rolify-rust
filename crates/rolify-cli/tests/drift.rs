@@ -167,7 +167,16 @@ fn seaorm_renderer_semantic_checklist() {
     assert!(rendered.contains("idx_roles_name"), "name index missing");
     assert!(rendered.contains("DEFAULT ''"), "sentinel default missing");
     assert!(rendered.contains("ON DELETE CASCADE"), "FK cascade missing");
-    
+
+    // Raw-string integrity (G1 guard): the SQL is embedded inside r#"..."#,
+    // which never interprets backslash escapes, so a literal backslash-n
+    // sequence would collapse the script into one comment-only line and make
+    // up() a silent no-op at runtime.
+    assert!(
+        !rendered.contains("\\n"),
+        "literal \\n sequences must not appear inside the raw string (raw strings preserve real newlines)"
+    );
+
     // Down drops join first
     let join_pos = rendered.find("users_roles").unwrap();
     let roles_pos = rendered.rfind("roles").unwrap();

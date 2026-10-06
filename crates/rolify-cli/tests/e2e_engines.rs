@@ -251,47 +251,83 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
         "users_roles table should be dropped"
     );
 
-    // DieselStore smoke test against the generated schema (re-create tables)
+    // DieselStore reference-adapter leg (D-21): the rolify-diesel adapter
+    // drives add/has/remove through its real SPI against the schema this
+    // generator produced, on the same container. This proves the generated
+    // schema is interchangeable with the canonical one for the reference
+    // adapter, not just for raw SQL.
     execute_sql_file(&pool, &up_sql)
         .await
         .expect("failed to re-apply up.sql for store smoke");
 
-    // Use rolify-diesel to verify the schema works with the adapter
-    // This is a simplified check - the full suite is in rolify-diesel tests
-    let role_id: i64 = sqlx::query_scalar("INSERT INTO roles (name, resource_type, resource_id) VALUES ('admin', '', '') RETURNING id")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    use diesel::Connection;
+    use rolify_core::config::RolifyConfig;
+    use rolify_core::kernel::RemovalTarget;
+    use rolify_core::query::{ResourceFilter, RoleQuery};
+    use rolify_core::resource::ResourceRef;
+    use rolify_core::role::{ResourceId, RoleName};
+    use rolify_core::store::RoleStore;
+    use rolify_diesel::DieselStore;
 
-    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', $1)")
-        .bind(role_id)
-        .execute(&pool)
-        .await
-        .expect("add role should work");
+    let mut diesel_conn = diesel::pg::PgConnection::establish(&db_url)
+        .expect("diesel connection to the CLI-generated schema");
 
-    let has_role: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM users_roles WHERE user_id = 'user1' AND role_id = $1)",
-    )
-    .bind(role_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(has_role, "has_role should be true after add");
+    let config = RolifyConfig::builder().build().expect("default config builds");
+    let mut store = DieselStore::new(&config);
+    let holder_id = ResourceId::from("user1");
 
-    sqlx::query("DELETE FROM users_roles WHERE user_id = 'user1' AND role_id = $1")
-        .bind(role_id)
-        .execute(&pool)
-        .await
-        .expect("remove role should work");
+    // add_role :admin (gem parity: user.add_role "admin", global scope)
+    let admin_role = store
+        .find_or_create_by(&mut diesel_conn, &RoleName::from("admin"), ResourceRef::Global)
+        .expect("find_or_create_by admin global on generated schema");
+    let added = store
+        .add(&mut diesel_conn, &holder_id, &admin_role)
+        .expect("add admin to user1 on generated schema");
+    assert!(added, "first add creates the link");
 
-    let has_role_after: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM users_roles WHERE user_id = 'user1' AND role_id = $1)",
-    )
-    .bind(role_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!has_role_after, "has_role should be false after remove");
+    // has_role? :admin => true (gem parity: where_ ladder, Global filter)
+    let roles = store
+        .where_(
+            &mut diesel_conn,
+            &holder_id,
+            &RoleQuery {
+                name: &RoleName::from("admin"),
+                filter: ResourceFilter::Global,
+            },
+        )
+        .expect("where_ admin global on generated schema");
+    assert_eq!(
+        roles.len(),
+        1,
+        "user1 should hold exactly the admin role on the generated schema"
+    );
+
+    // remove_role :admin (gem parity: NameOnly sweep, remove_role_if_empty true)
+    store
+        .remove(
+            &mut diesel_conn,
+            &holder_id,
+            &RoleName::from("admin"),
+            RemovalTarget::NameOnly,
+            true,
+        )
+        .expect("remove admin from user1 on generated schema");
+
+    // has_role? :admin => false after removal
+    let roles_after = store
+        .where_(
+            &mut diesel_conn,
+            &holder_id,
+            &RoleQuery {
+                name: &RoleName::from("admin"),
+                filter: ResourceFilter::Global,
+            },
+        )
+        .expect("where_ after removal on generated schema");
+    assert!(
+        roles_after.is_empty(),
+        "user1 should hold no roles after removal on the generated schema"
+    );
 
     println!("Postgres e2e test passed: generated schema applies and holds store smoke");
 }

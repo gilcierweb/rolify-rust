@@ -18,17 +18,31 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Execute the canonical up.sql for the consumer's engine
-        let sql = r#"{{UP_SQL}}"#;
-        let stmt = Statement::from_string(manager.get_database_backend(), sql.to_owned());
-        manager.get_connection().execute(stmt).await.map(|_| ())
+        // Execute the canonical up.sql statements ONE AT A TIME: the Postgres
+        // extended protocol rejects multiple commands inside a single
+        // prepared statement ("cannot insert multiple commands into a
+        // prepared statement"), so the canonical script is split into
+        // individual statements at render time.
+        for statement in [
+{{UP_STATEMENTS}}
+        ] {
+            let stmt = sea_orm::Statement::from_string(
+                manager.get_database_backend(),
+                statement.to_owned(),
+            );
+            manager.get_connection().execute_raw(stmt).await?;
+        }
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Down drops join table first (FK order), then roles (D-10, D-12)
         for statement in ["{{DOWN_JOIN}}", "{{DOWN_ROLES}}"] {
-            let stmt = Statement::from_string(manager.get_database_backend(), statement.to_owned());
-            manager.get_connection().execute(stmt).await.map(|_| ())?;
+            let stmt = sea_orm::Statement::from_string(
+                manager.get_database_backend(),
+                statement.to_owned(),
+            );
+            manager.get_connection().execute_raw(stmt).await?;
         }
         Ok(())
     }

@@ -5,10 +5,10 @@
 //! No BSON-type invention beyond the spec; no camelCase fields.
 //!
 //! Field set (exact):
-//! - `name`: String — role name (byte-exact per gem)
-//! - `resource_type`: Option<String> — explicit null when global/class scope
-//! - `resource_id`: Option<String> — explicit null when global/class scope
-//! - `user_ids`: Vec<ObjectId> — user references (two-sided HABTM)
+//! - `name`: String - role name (byte-exact per gem)
+//! - `resource_type`: Option<String> - explicit null when global/class scope
+//! - `resource_id`: Option<String> - explicit null when global/class scope
+//! - `user_ids`: Vec<ObjectId> - user references (two-sided HABTM)
 //!
 //! Index notes (CLI documents; adapter converges at setup per Phase 5 D-10):
 //! - Unique compound index on (name, resource_type, resource_id) ensured
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// Role document as stored in MongoDB.
 ///
 /// Sentinel nulls (not absent) for resource_type/resource_id when scope is
-/// global or class — matches the gem's Mongoid `''` sentinel strategy
+/// global or class - matches the gem's Mongoid `''` sentinel strategy
 /// translated to MongoDB explicit null (05-CONTEXT D-08).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleDoc {

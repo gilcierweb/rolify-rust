@@ -28,10 +28,9 @@ use crate::templates;
 pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
     let template = templates::seaorm_migration();
 
-    // Get the canonical SQL for the target engine
-    // SeaORM uses the same dialect as the target engine
+    // Get the canonical up SQL (SeaORM raw-SQL path reuses the Postgres dialect
+    // template; engine selection happens at runtime via SchemaManager backend)
     let up_sql = templates::up("postgres");
-    let _down_sql = templates::down("postgres");
 
     // Longest-first replacement: join_table before roles_table
     let up_sql = up_sql
@@ -43,13 +42,51 @@ pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
     let original_down_sql = templates::down("postgres");
     let (down_join, down_roles) = extract_and_substitute_drop(original_down_sql, plan);
 
+    // Split the canonical script into individual statements: the Postgres
+    // extended protocol rejects multiple commands in one prepared statement,
+    // so the emitted migration executes them one at a time (mirrors the
+    // template's for-loop body). Splitting is line-based like the e2e
+    // helper: comments ride along with their following statement, which is
+    // valid SQL.
+    let up_statements = split_statements(&up_sql);
+
+    // Render each statement as a raw-string array element. Raw strings
+    // preserve real newlines and never interpret backslash escapes; the
+    // canonical SQL contains no double quotes, so no `"#` terminator can
+    // appear inside a statement body.
+    let up_elements: Vec<String> = up_statements
+        .iter()
+        .map(|statement| format!("            r#\"{statement}\"#,")) // -> r#"..."#,
+        .collect();
+    let up_array_body = up_elements.join("\n");
+
     // Substitute into template
     let result = template
-        .replace("{{UP_SQL}}", &escape_for_rust_string(&up_sql))
+        .replace("{{UP_STATEMENTS}}", &up_array_body)
         .replace("{{DOWN_JOIN}}", &down_join)
         .replace("{{DOWN_ROLES}}", &down_roles);
 
     Ok(result)
+}
+
+/// Splits a SQL script into individual statements, accumulating lines until
+/// one ends with a semicolon. Comment lines stay attached to the statement
+/// that follows them (valid SQL).
+fn split_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+
+    for line in sql.lines() {
+        current.push_str(line);
+        current.push('\n');
+
+        if line.trim().ends_with(';') {
+            statements.push(current.trim().to_owned());
+            current.clear();
+        }
+    }
+
+    statements
 }
 
 /// Extracts a DROP TABLE IF EXISTS statement for the given table from the SQL
@@ -80,15 +117,6 @@ fn extract_and_substitute_drop(sql: &str, plan: &RenderPlan) -> (String, String)
     (down_join, down_roles)
 }
 
-/// Escapes a string for inclusion in a Rust string literal.
-fn escape_for_rust_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,9 +134,6 @@ mod tests {
         };
 
         let rendered = render_seaorm(&plan).unwrap();
-
-        // Debug: print the rendered output to see what's happening
-        eprintln!("RENDERED OUTPUT:\n{rendered}");
 
         // Verify longest-first: join table replaced before roles table
         assert!(

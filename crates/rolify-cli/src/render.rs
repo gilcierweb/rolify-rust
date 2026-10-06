@@ -145,45 +145,24 @@ fn render_scaffolding(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntr
 
 /// Generates scaffolding files for a specific engine.
 fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry>, CliError> {
-    let mut files = Vec::new();
-
-    // Role stub
-    files.push(FileEntry {
-        path: format!("{engine}/role_stub.rs"),
-        content: role_stub(&plan.role_name, plan.backend.as_str(), &plan.holder_name),
-    });
-
-    // Holder stub
-    files.push(FileEntry {
-        path: format!("{engine}/holder_stub.rs"),
-        content: holder_stub(&plan.holder_name, plan.backend.as_str(), &plan.role_name),
-    });
-
-    // Config example
-    files.push(FileEntry {
-        path: format!("{engine}/config_example.rs"),
-        content: config_example(
-            plan.backend.as_str(),
-            &plan.role_name,
-            &plan.holder_name,
-            &plan.roles_table,
-            &plan.join_table,
-        ),
-    });
-
-    // README
     let readme_name = match engine {
         "postgres" | "mysql" | "sqlite" => "README_diesel",
         "seaorm" => "README_seaorm",
         "mongo" => "README_mongodb",
-        _ => return Err(CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unknown engine for README: {engine}"),
-        })),
+        _ => {
+            return Err(CliError::Core(
+                rolify_core::error::RolifyError::InvalidConfig {
+                    reason: format!("unknown engine for README: {engine}"),
+                },
+            ));
+        }
     };
     let readme_content = readme(readme_name)
-        .map_err(|e| CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unknown README template: {e}"),
-        }))?
+        .map_err(|error| {
+            CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
+                reason: format!("unknown README template: {error}"),
+            })
+        })?
         .replace("{role_name}", &plan.role_name)
         .replace("{holder_name}", &plan.holder_name)
         .replace("{backend}", plan.backend.as_str());
