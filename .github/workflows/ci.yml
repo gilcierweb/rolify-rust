@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Cold crates.io downloads occasionally die on transient runner network
+  # errors (broken pipe mid-transfer); raise cargo's per-download retry
+  # ceiling above the default 3 to absorb them.
+  CARGO_NET_RETRY: "10"
 
 jobs:
   check:
