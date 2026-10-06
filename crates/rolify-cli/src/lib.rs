@@ -53,4 +53,4 @@ pub mod writer;
 pub use args::{Backend, Cli, Command, GenerateArgs};
 pub use error::CliError;
 pub use render::{FileEntry, RenderPlan, render_all};
-pub use writer::{write_plan, WriteOptions};
+pub use writer::{WriteOptions, write_plan};
