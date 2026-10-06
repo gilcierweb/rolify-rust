@@ -14,7 +14,7 @@
 use mongodb::IndexModel;
 use mongodb::options::IndexOptions;
 
-use crate::collection::RoleCollectionHandle;
+use crate::collection::CollectionHandle;
 use crate::error::Error;
 
 /// Unique keys of the roles index. Defined here once so the document
@@ -48,7 +48,7 @@ pub fn role_index_model() -> IndexModel {
 /// Returns [`Error::Mongo`] when the server rejects the index (conflicting
 /// existing index, permission failure, connection error).
 #[cfg(not(feature = "sync"))]
-pub async fn ensure_role_index(collection: &RoleCollectionHandle) -> Result<(), Error> {
+pub async fn ensure_role_index(collection: &CollectionHandle) -> Result<(), Error> {
     collection.create_index(role_index_model()).await?;
     Ok(())
 }
@@ -62,7 +62,7 @@ pub async fn ensure_role_index(collection: &RoleCollectionHandle) -> Result<(), 
 ///
 /// Returns [`Error::Mongo`] when the server rejects the index.
 #[cfg(feature = "sync")]
-pub fn ensure_role_index(collection: &RoleCollectionHandle) -> Result<(), Error> {
+pub fn ensure_role_index(collection: &CollectionHandle) -> Result<(), Error> {
     collection.create_index(role_index_model()).run()?;
     Ok(())
 }
