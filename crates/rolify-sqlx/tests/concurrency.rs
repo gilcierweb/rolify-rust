@@ -19,6 +19,14 @@
 //!   `find_or_create_by` violation resolves through the re-SELECT
 //!   path (both tasks observe the SAME record), and the loser's `add`
 //!   pair violation resolves through catch-and-ignore (`Ok(false)`).
+//! - InnoDB deadlock victims are a retryable race outcome, not a
+//!   store bug: when both grants hit the engine in the same instant
+//!   MySQL can pick one task as the victim (error 1213, SQLSTATE
+//!   40001) and documents client-side retry as the contract. The
+//!   racing grant retries the whole pass within a bounded budget; the
+//!   victim re-enters through the SELECT-first leg and the UNIQUE
+//!   arbiter keeps the one-row/one-link guarantees intact across
+//!   retries, so the assertions never change.
 //! - The contested grant is the full `add_role` shape through the
 //!   public store members: `find_or_create_by` followed by `add`.
 //! - Three iterations per scope kind (global, class, instance) smoke
@@ -357,6 +365,51 @@ mod mysql_race {
             .get::<i64, _>(0)
     }
 
+    /// Bound for the victim-retry loop in [`contested_grant`]: one
+    /// deadlock is a normal race outcome, two in the same iteration
+    /// would already be extraordinary, five exhausts any plausible
+    /// interleaving.
+    const DEADLOCK_RETRIES: usize = 5;
+
+    /// Which grant step an error escaped from (kept for panic context).
+    #[derive(Debug)]
+    enum GrantStep {
+        FindOrCreate,
+        Add,
+    }
+
+    /// One full contested grant pass through the public store members
+    /// (`find_or_create_by` then `add`), with the step preserved so the
+    /// caller can classify the failure.
+    async fn run_grant(
+        conn: &mut sqlx::MySqlConnection,
+        store: &mut SqlxStore<sqlx::MySql>,
+        role_name: &str,
+        scope: &ScopeKind,
+        holder: &ResourceId,
+    ) -> Result<GrantOutcome, (GrantStep, rolify_sqlx::Error)> {
+        let record = store
+            .find_or_create_by(conn, &RoleName::from(role_name), scope.to_resource_ref())
+            .await
+            .map_err(|error| (GrantStep::FindOrCreate, error))?;
+        let added = store
+            .add(conn, holder, &record)
+            .await
+            .map_err(|error| (GrantStep::Add, error))?;
+        Ok(GrantOutcome { record, added })
+    }
+
+    /// Match the InnoDB deadlock victim signal: the native error 1213
+    /// surfaces as SQLSTATE 40001 through `DatabaseError::code()`.
+    fn is_deadlock_victim(error: &rolify_sqlx::Error) -> bool {
+        match error {
+            rolify_sqlx::Error::Sqlx(sqlx::Error::Database(database_error)) => {
+                database_error.code().as_deref() == Some("40001")
+            }
+            _ => false,
+        }
+    }
+
     /// One racing task: acquire a pool checkout, rendezvous on the
     /// barrier, then run the contested grant (the `add_role` shape:
     /// `find_or_create_by` followed by `add`) through the public
@@ -367,6 +420,11 @@ mod mysql_race {
     /// the barrier sits immediately before the grant. The store calls
     /// take reborrows of the inner connection (sqlx 0.9 deleted the
     /// wrapper Executor impls, RESEARCH Pitfall 4).
+    ///
+    /// A deadlock victim (1213) retries the whole pass: the barrier
+    /// rendezvous has already happened, the retry needs no new
+    /// synchronization, and the UNIQUE arbiter keeps the outcome
+    /// assertions valid no matter which pass wins.
     async fn contested_grant(
         pool: sqlx::MySqlPool,
         barrier: Arc<tokio::sync::Barrier>,
@@ -380,19 +438,22 @@ mod mysql_race {
             .expect("pool checkout for the racing task on MySQL");
         let mut store = SqlxStore::new(&RolifyConfig::default());
         barrier.wait().await;
-        let record = store
-            .find_or_create_by(
-                &mut *checkout,
-                &RoleName::from(role_name.as_str()),
-                scope.to_resource_ref(),
-            )
-            .await
-            .expect("concurrent find_or_create_by on MySQL");
-        let added = store
-            .add(&mut *checkout, &holder, &record)
-            .await
-            .expect("concurrent add on MySQL");
-        GrantOutcome { record, added }
+        let mut retries_left = DEADLOCK_RETRIES;
+        loop {
+            match run_grant(&mut *checkout, &mut store, &role_name, &scope, &holder).await {
+                Ok(outcome) => return outcome,
+                Err((_step, error)) if is_deadlock_victim(&error) => {
+                    retries_left -= 1;
+                    assert!(
+                        retries_left > 0,
+                        "the contested grant stayed deadlocked after {DEADLOCK_RETRIES} retries"
+                    );
+                }
+                Err((step, error)) => {
+                    panic!("contested grant on MySQL, {step:?} step: {error}");
+                }
+            }
+        }
     }
 
     /// The grant race matrix on the MySQL container: every scope kind,
