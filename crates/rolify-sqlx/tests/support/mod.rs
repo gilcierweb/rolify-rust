@@ -677,7 +677,6 @@ pub mod sqlx_backend {
     use super::{setup_fixtures_sqlite_conn, sqlite_memory_pool};
     use rolify_sqlx::SqlxStore;
     use rolify_sqlx::rows::CountRow;
-    use sqlx::ConnectOptions;
 
     /// Process-wide serializer for tests sharing one database.
     ///
@@ -806,7 +805,7 @@ pub mod sqlx_backend {
     /// Trait for engine-specific test operations.
     /// Implemented per concrete engine to provide the operations that differ
     /// between Postgres, MySQL, and SQLite.
-    trait SqlxTestEngine<DB>
+    pub(crate) trait SqlxTestEngine<DB>
     where
         DB: sqlx::Database,
     {
@@ -857,7 +856,7 @@ pub mod sqlx_backend {
         }
 
         fn run_migrations(
-            conn: &mut sqlx::PgConnection,
+            _conn: &mut sqlx::PgConnection,
         ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 // Use a pool for migrations (pool implements Acquire)
@@ -949,7 +948,7 @@ pub mod sqlx_backend {
         }
 
         fn run_migrations(
-            conn: &mut sqlx::MySqlConnection,
+            _conn: &mut sqlx::MySqlConnection,
         ) -> impl std::future::Future<Output = ()> + Send {
             async {
                 // Use a pool for migrations (pool implements Acquire)
