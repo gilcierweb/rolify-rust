@@ -370,9 +370,17 @@ mod mysql_concurrency {
     }
 
     fn reset_roles(conn: &mut MysqlConnection) {
-        diesel::sql_query("TRUNCATE TABLE users_roles, roles")
+        // MySQL: TRUNCATE is single-table only and refuses `roles` while
+        // the users_roles FK references it (error 1701, even with the
+        // child table empty; verified against mysql:8.4), so the reset
+        // uses FK-ordered DELETEs instead of the Postgres multi-table
+        // TRUNCATE. No assertion depends on AUTO_INCREMENT state.
+        diesel::sql_query("DELETE FROM users_roles")
             .execute(conn)
-            .expect("truncate roles");
+            .expect("clear users_roles");
+        diesel::sql_query("DELETE FROM roles")
+            .execute(conn)
+            .expect("clear roles");
     }
 
     fn insert_holder(
