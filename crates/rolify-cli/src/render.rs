@@ -6,6 +6,7 @@
 use crate::args::Backend;
 use crate::emitters::{render_mongo, seaorm::render_seaorm, sql::render_sql};
 use crate::error::CliError;
+use crate::templates::scaffolding::{config_example, holder_stub, role_stub, readme};
 use std::collections::BTreeMap;
 
 /// Input plan for rendering.
@@ -31,7 +32,25 @@ pub struct FileEntry {
 /// timestamp stem 0000000001_rolify_create_tables containing up.sql and down.sql.
 /// SeaORM gets a single migration file under seaorm/.
 /// Mongo gets role.rs and INDEX_NOTES.md under mongo/.
+/// All backends get scaffolding: role_stub.rs, holder_stub.rs, config_example.rs, README.md
 pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>, CliError> {
+    let mut result = BTreeMap::new();
+
+    // Render main migration files
+    let migration_files = render_migrations(plan)?;
+    result.extend(migration_files);
+
+    // Render scaffolding files for all backends
+    let scaffolding_files = render_scaffolding(plan)?;
+    for (engine, files) in scaffolding_files {
+        result.entry(engine).or_default().extend(files);
+    }
+
+    Ok(result)
+}
+
+/// Renders migration files for the given backend.
+fn render_migrations(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>, CliError> {
     let mut result = BTreeMap::new();
 
     match plan.backend.as_str() {
@@ -54,9 +73,7 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
                     },
                 ];
 
-                // Sort for deterministic output
                 files.sort_by(|a, b| a.path.cmp(&b.path));
-
                 result.insert(engine.to_string(), files);
             }
         }
@@ -95,4 +112,103 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
     }
 
     Ok(result)
+}
+
+/// Renders scaffolding files (stubs, config example, README) for all backends.
+fn render_scaffolding(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>, CliError> {
+    let mut result = BTreeMap::new();
+
+    let engines = match plan.backend.as_str() {
+        "diesel" | "sqlx" => vec!["postgres", "mysql", "sqlite"],
+        "seaorm" => vec!["seaorm"],
+        "mongodb" => vec!["mongo"],
+        _ => {
+            return Err(CliError::Core(
+                rolify_core::error::RolifyError::InvalidConfig {
+                    reason: format!("unknown backend: {}", plan.backend.as_str()),
+                },
+            ));
+        }
+    };
+
+    for engine in engines {
+        let scaffolding = generate_scaffolding(plan, engine)?;
+        result.insert(engine.to_string(), scaffolding);
+    }
+
+    Ok(result)
+}
+
+/// Generates scaffolding files for a specific engine.
+fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry>, CliError> {
+    let mut files = Vec::new();
+
+    // Role stub
+    files.push(FileEntry {
+        path: format!("{engine}/role_stub.rs"),
+        content: role_stub(&plan.role_name, plan.backend.as_str(), &plan.holder_name),
+    });
+
+    // Holder stub
+    files.push(FileEntry {
+        path: format!("{engine}/holder_stub.rs"),
+        content: holder_stub(&plan.holder_name, plan.backend.as_str(), &plan.role_name),
+    });
+
+    // Config example
+    files.push(FileEntry {
+        path: format!("{engine}/config_example.rs"),
+        content: config_example(
+            plan.backend.as_str(),
+            &plan.role_name,
+            &plan.holder_name,
+            &plan.roles_table,
+            &plan.join_table,
+        ),
+    });
+
+    // README
+    let readme_name = match engine {
+        "postgres" | "mysql" | "sqlite" => "README_diesel",
+        "seaorm" => "README_seaorm",
+        "mongo" => "README_mongodb",
+        _ => return Err(CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
+            reason: format!("unknown engine for README: {}", engine),
+        })),
+    };
+    let readme_content = readme(readme_name)
+        .map_err(|e| CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
+            reason: format!("unknown README template: {}", e),
+        }))?
+        .replace("{role_name}", &plan.role_name)
+        .replace("{holder_name}", &plan.holder_name)
+        .replace("{backend}", plan.backend.as_str());
+
+    let mut files = vec![
+        FileEntry {
+            path: format!("{engine}/role_stub.rs"),
+            content: role_stub(&plan.role_name, plan.backend.as_str(), &plan.holder_name),
+        },
+        FileEntry {
+            path: format!("{engine}/holder_stub.rs"),
+            content: holder_stub(&plan.holder_name, plan.backend.as_str(), &plan.role_name),
+        },
+        FileEntry {
+            path: format!("{engine}/config_example.rs"),
+            content: config_example(
+                plan.backend.as_str(),
+                &plan.role_name,
+                &plan.holder_name,
+                &plan.roles_table,
+                &plan.join_table,
+            ),
+        },
+        FileEntry {
+            path: format!("{engine}/README.md"),
+            content: readme_content,
+        },
+    ];
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
 }

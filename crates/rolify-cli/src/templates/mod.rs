@@ -18,6 +18,60 @@ pub const SQLITE_DOWN: &str = include_str!("../../templates/sqlite/down.sql");
 pub const SEAORM_MIGRATION: &str = include_str!("../../templates/seaorm_migration.rs.txt");
 pub const MONGO_DOCS: &str = include_str!("../../templates/mongo_docs.rs.txt");
 
+// Scaffolding templates (D-20)
+pub mod scaffolding {
+    pub const ROLE_STUB: &str = include_str!("../../templates/scaffolding/role_stub.rs.txt");
+    pub const HOLDER_STUB: &str = include_str!("../../templates/scaffolding/holder_stub.rs.txt");
+    pub const CONFIG_EXAMPLE: &str = include_str!("../../templates/scaffolding/config_example.rs.txt");
+    pub const README_DIESEL: &str = include_str!("../../templates/scaffolding/README_diesel.md.txt");
+    pub const README_SQLX: &str = include_str!("../../templates/scaffolding/README_sqlx.md.txt");
+    pub const README_SEAORM: &str = include_str!("../../templates/scaffolding/README_seaorm.md.txt");
+    pub const README_MONGODB: &str = include_str!("../../templates/scaffolding/README_mongodb.md.txt");
+
+    /// Renders the role stub with substitutions.
+    pub fn role_stub(role_name: &str, backend: &str, holder_name: &str) -> String {
+        ROLE_STUB
+            .replace("{role_name}", role_name)
+            .replace("{backend}", backend)
+            .replace("{holder_name}", holder_name)
+    }
+
+    /// Renders the holder stub with substitutions.
+    pub fn holder_stub(holder_name: &str, backend: &str, role_name: &str) -> String {
+        HOLDER_STUB
+            .replace("{holder_name}", holder_name)
+            .replace("{backend}", backend)
+            .replace("{role_name}", role_name)
+    }
+
+    /// Renders the config example with substitutions.
+    pub fn config_example(
+        backend: &str,
+        role_name: &str,
+        holder_name: &str,
+        roles_table: &str,
+        join_table: &str,
+    ) -> String {
+        CONFIG_EXAMPLE
+            .replace("{backend}", backend)
+            .replace("{role_name}", role_name)
+            .replace("{holder_name}", holder_name)
+            .replace("{roles_table}", roles_table)
+            .replace("{join_table}", join_table)
+    }
+
+    /// Returns the README template for the given engine.
+    pub fn readme(name: &str) -> Result<&'static str, &'static str> {
+        match name {
+            "README_diesel" => Ok(README_DIESEL),
+            "README_sqlx" => Ok(README_SQLX),
+            "README_seaorm" => Ok(README_SEAORM),
+            "README_mongodb" => Ok(README_MONGODB),
+            _ => Err("unknown README template"),
+        }
+    }
+}
+
 /// Returns the up migration for the given engine.
 #[must_use]
 pub fn up(engine: &str) -> &str {

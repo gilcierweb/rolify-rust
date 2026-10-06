@@ -17,6 +17,9 @@ fn main() -> Result<()> {
             // Validate identifiers before any rendering
             rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.roles_table)?;
             rolify_core::config::RolifyConfigBuilder::validate_identifier(&join_table)?;
+            // Also validate role_name and holder_name (they become table name fragments)
+            rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.role_name)?;
+            rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.holder_name)?;
 
             let plan = RenderPlan {
                 backend: args.backend,

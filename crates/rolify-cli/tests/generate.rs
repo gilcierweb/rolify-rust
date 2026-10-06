@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use std::path::PathBuf;
+use walkdir::WalkDir;
 
 /// Path to the rolify-cli binary.
 fn rolify_cli() -> Command {
@@ -231,7 +232,7 @@ fn init_alias_produces_identical_tree() {
     // Compare trees recursively - they should be identical
     fn collect_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
         let mut files = Vec::new();
-        for entry in walkdir::WalkDir::new(dir.join("migrations"))
+        for entry in WalkDir::new(dir.join("migrations"))
             .into_iter()
             .filter_map(|e| e.ok())
         {
@@ -310,4 +311,328 @@ fn diesel_tree_contains_all_engines() {
             engine
         );
     }
+}
+
+/// Tests that scaffolding files are generated for diesel backend.
+#[test]
+fn diesel_generates_scaffolding_files() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // Verify scaffolding files for each engine
+    for engine in ["postgres", "mysql", "sqlite"] {
+        assert!(
+            dir.join(format!("{}/role_stub.rs", engine)).exists(),
+            "role_stub.rs missing for {}",
+            engine
+        );
+        assert!(
+            dir.join(format!("{}/holder_stub.rs", engine)).exists(),
+            "holder_stub.rs missing for {}",
+            engine
+        );
+        assert!(
+            dir.join(format!("{}/config_example.rs", engine)).exists(),
+            "config_example.rs missing for {}",
+            engine
+        );
+        assert!(
+            dir.join(format!("{}/README.md", engine)).exists(),
+            "README.md missing for {}",
+            engine
+        );
+    }
+}
+
+/// Tests that scaffolding files are generated for seaorm backend.
+#[test]
+fn seaorm_generates_scaffolding_files() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "seaorm",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // Verify scaffolding files for seaorm
+    assert!(dir.join("seaorm/role_stub.rs").exists());
+    assert!(dir.join("seaorm/holder_stub.rs").exists());
+    assert!(dir.join("seaorm/config_example.rs").exists());
+    assert!(dir.join("seaorm/README.md").exists());
+}
+
+/// Tests that scaffolding files are generated for mongodb backend.
+#[test]
+fn mongodb_generates_scaffolding_files() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "mongodb",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // Verify scaffolding files for mongo
+    assert!(dir.join("mongo/role_stub.rs").exists());
+    assert!(dir.join("mongo/holder_stub.rs").exists());
+    assert!(dir.join("mongo/config_example.rs").exists());
+    assert!(dir.join("mongo/README.md").exists());
+    assert!(dir.join("mongo/INDEX_NOTES.md").exists());
+}
+
+/// Tests that custom join table flows into all emitters (D-05 friends).
+#[test]
+fn custom_join_table_flows_into_all_outputs() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Privilege",
+            "Customer",
+            "--roles-table",
+            "privileges",
+            "--join-table",
+            "customers_privileges",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // Verify SQL files have custom names
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let up_sql = fs::read_to_string(
+            dir.join(format!(
+                "migrations/{}/0000000001_rolify_create_tables/up.sql",
+                engine
+            ))
+        ).unwrap();
+
+        assert!(up_sql.contains("privileges"), "roles table name missing in {} up.sql", engine);
+        assert!(up_sql.contains("customers_privileges"), "join table name missing in {} up.sql", engine);
+        assert!(!up_sql.contains("users_roles"), "default join table should not appear in {} up.sql", engine);
+    }
+
+    // Verify scaffolding config_example has custom names
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let config = fs::read_to_string(dir.join(format!("{}/config_example.rs", engine))).unwrap();
+        assert!(config.contains("privileges"), "config missing custom roles table for {}", engine);
+        assert!(config.contains("customers_privileges"), "config missing custom join table for {}", engine);
+    }
+}
+
+/// Tests derived join default for Role User equals users_roles.
+#[test]
+fn derived_join_default_for_role_user() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // Verify default join table is users_roles
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let up_sql = fs::read_to_string(
+            dir.join(format!(
+                "migrations/{}/0000000001_rolify_create_tables/up.sql",
+                engine
+            ))
+        ).unwrap();
+
+        assert!(up_sql.contains("users_roles"), "default join table should be users_roles for {}", engine);
+    }
+}
+
+/// Tests init alias output diff against generate output exits 0.
+#[test]
+fn init_alias_output_identity() {
+    let dir1 = test_temp_dir();
+    let dir2 = test_temp_dir();
+    let out_dir1 = dir1.to_str().unwrap();
+    let out_dir2 = dir2.to_str().unwrap();
+
+    // Generate with 'generate'
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir1,
+        ])
+        .assert()
+        .success();
+
+    // Generate with 'init' alias
+    rolify_cli()
+        .args([
+            "init",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir2,
+        ])
+        .assert()
+        .success();
+
+    // Compare all files recursively
+    fn collect_all_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
+        let mut files = Vec::new();
+        for entry in WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_file() {
+                let path = entry.path().to_path_buf();
+                let content = fs::read_to_string(&path).unwrap();
+                files.push((path.strip_prefix(dir).unwrap().to_path_buf(), content));
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
+    }
+
+    let files1 = collect_all_files(&dir1);
+    let files2 = collect_all_files(&dir2);
+
+    assert_eq!(files1.len(), files2.len(), "file count mismatch");
+    for ((p1, c1), (p2, c2)) in files1.iter().zip(files2.iter()) {
+        assert_eq!(p1, p2, "path mismatch: {:?} vs {:?}", p1, p2);
+        assert_eq!(c1, c2, "content mismatch for {:?}", p1);
+    }
+}
+
+/// Tests that dry-run prints file plan to stdout with out-dir absent.
+#[test]
+fn dry_run_prints_plan_and_no_files() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"))
+        .stdout(predicate::str::contains("migrations/postgres"))
+        .stdout(predicate::str::contains("migrations/mysql"))
+        .stdout(predicate::str::contains("migrations/sqlite"));
+
+    // Verify no files were created
+    assert!(
+        !dir.join("migrations").exists(),
+        "dry-run should not create directories"
+    );
+    assert!(
+        !dir.join("postgres").exists(),
+        "dry-run should not create scaffolding dirs"
+    );
+}
+
+/// Tests that help text stays English ASCII with no em-dash sequence.
+#[test]
+fn help_text_is_ascii_only() {
+    let output = rolify_cli()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let help_text = String::from_utf8(output).unwrap();
+    
+    // Verify no em-dash (U+2014) or en-dash (U+2013)
+    assert!(
+        !help_text.contains('\u{2014}'),
+        "help text contains em-dash"
+    );
+    assert!(
+        !help_text.contains('\u{2013}'),
+        "help text contains en-dash"
+    );
+    
+    // Verify ASCII only
+    assert!(
+        help_text.is_ascii(),
+        "help text contains non-ASCII characters"
+    );
+}
+
+/// Tests that namespaced input without explicit flags still passes validate_identifier or fails with naming error.
+#[test]
+fn namespaced_input_validation() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    // Namespaced role name should fail validation (contains ::)
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Admin::Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid"));
 }
