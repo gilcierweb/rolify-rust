@@ -470,16 +470,23 @@ impl RoleStore for MongoStore {
                 ));
             };
             let holder_key = holder.as_str().to_owned();
-            if document.user_ids.iter().any(|known| known == &holder_key) {
-                return Ok(false);
-            }
-            // D-08 fixed write order: role side first, consumer side second.
-            update_docs(
+            // Link-guard dedupe (level 2, gem `unless include?`): the
+            // atomic filter `{_id, user_ids: {$ne: holder}}` makes the
+            // SERVER the arbiter - a racing loser matches nothing and
+            // reads back `matched_count == 0` (D-14, Pitfall 5).
+            let created = update_one_doc(
                 &roles,
-                doc! { FIELDS_ID: document.id },
+                doc! {
+                    FIELDS_ID: document.id,
+                    FIELDS_USER_IDS: { "$ne": holder_key.clone() },
+                },
                 doc! { "$addToSet": { FIELDS_USER_IDS: holder_key.clone() } },
             )
-            .await?;
+            .await?
+            .matched_count
+                == 1;
+            // D-08 fixed write order: role side first, consumer side
+            // second (idempotent regardless of outcome).
             if let Some(holders) = holders {
                 update_docs(
                     &holders,
@@ -488,7 +495,7 @@ impl RoleStore for MongoStore {
                 )
                 .await?;
             }
-            Ok(true)
+            Ok(created)
         }
     }
 

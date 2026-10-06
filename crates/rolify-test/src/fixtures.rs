@@ -432,6 +432,65 @@ impl Default for FixtureResources {
     }
 }
 
+/// Mongo fixture identity map (Phase 05.1): each `(collection, ids)` pair
+/// is what the `MongoDB` adapter's test support seeds as documents with a
+/// stringified `resource_id` field. Identities mirror the SQL fixture
+/// populations 1:1 (forums 1-3, groups 1-2, teams with string `team_code`
+/// PKs, organization and company id 1), extending the D-06
+/// DDLs-in-suite principle to documents: same keys, same counts, only the
+/// physical shape changes (documents, no tables).
+///
+/// Scope fields are NOT seeded here: the adapter's document layer owns
+/// writing `resource_type`/`resource_id` as explicit null on role
+/// documents (D-07).
+#[must_use]
+#[cfg(feature = "suite")]
+pub fn mongo_resource_identities() -> Vec<(&'static str, Vec<ResourceId>)> {
+    let resources = FixtureResources::new();
+    let ids = |which: &[FixtureResource]| -> Vec<ResourceId> {
+        which
+            .iter()
+            .map(|which| resources.key(*which).resource_id)
+            .collect()
+    };
+    vec![
+        (
+            "forums",
+            ids(&[
+                FixtureResource::ForumFirst,
+                FixtureResource::ForumSecond,
+                FixtureResource::ForumLast,
+            ]),
+        ),
+        (
+            "groups",
+            ids(&[FixtureResource::GroupFirst, FixtureResource::GroupLast]),
+        ),
+        (
+            "teams",
+            ids(&[FixtureResource::TeamFirst, FixtureResource::TeamLast]),
+        ),
+        ("organizations", ids(&[FixtureResource::Organization])),
+        ("companies", ids(&[FixtureResource::Company])),
+    ]
+}
+
+/// The Mongo holder collection for a fixture class `rolify_type` (the
+/// gem's `user_cname` mapping): `User`/`StrictUser` share `users`,
+/// `Customer` uses `customers`, `Admin::Moderator` uses `moderators`.
+/// Returns `None` for unknown classes so adapters' test support fails
+/// loudly at their own call site.
+#[must_use]
+#[cfg(feature = "suite")]
+pub fn mongo_holder_collection(rolify_type: &str) -> Option<&'static str> {
+    match rolify_type {
+        "User" | "StrictUser" => Some("users"),
+        "Customer" => Some("customers"),
+        "Admin::Moderator" => Some("moderators"),
+        _ => None,
+    }
+}
+
 /// Fixture holder identities in `data.rb:5-8` creation order: `user_class`
 /// `.first` is "admin", `.last` is "zombie"; the logins are the
 /// `shared_contexts.rb` lookup keys.

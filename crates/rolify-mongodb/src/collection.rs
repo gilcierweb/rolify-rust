@@ -148,6 +148,38 @@ pub fn insert_doc(
     Ok(outcome.inserted_id)
 }
 
+/// Upsert-aware set: create the document when missing, patch it
+/// otherwise. Fixture seeding runs this once per identity on a shared
+/// container, so the `$set` re-application on re-run is by design.
+///
+/// # Errors
+///
+/// Returns the adapter `Error` when the update fails.
+#[cfg(not(feature = "sync"))]
+pub async fn set_doc(
+    collection: &CollectionHandle,
+    filter: Document,
+    patch: Document,
+) -> Result<(), crate::error::Error> {
+    collection.update_many(filter, patch).upsert(true).await?;
+    Ok(())
+}
+
+/// Sync arm of [`set_doc`].
+///
+/// # Errors
+///
+/// Returns the adapter `Error` when the update fails.
+#[cfg(feature = "sync")]
+pub fn set_doc(
+    collection: &CollectionHandle,
+    filter: Document,
+    patch: Document,
+) -> Result<(), crate::error::Error> {
+    collection.update_many(filter, patch).upsert(true).run()?;
+    Ok(())
+}
+
 /// Apply an update document to every match.
 ///
 /// # Errors
