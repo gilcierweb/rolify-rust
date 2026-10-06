@@ -52,6 +52,12 @@
 //! holds `mongodb::sync` handles and every SPI method runs synchronously:
 //! the driver offloads onto its own internal runtime, tokio stays linked,
 //! and this crate never calls `block_on` nor spawns a runtime.
+//! The full ported parity suite runs identically in both modes (D-13):
+//!
+//! ```text
+//! cargo test -p rolify-mongodb --features suite                                            # async
+//! cargo test -p rolify-mongodb --features suite,rolify-mongodb/sync,rolify-core/is_sync    # sync
+//! ```
 //!
 //! ```text
 //! let client = mongodb::sync::Client::with_uri_str("mongodb://...")?;

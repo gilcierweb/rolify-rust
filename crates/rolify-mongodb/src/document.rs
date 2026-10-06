@@ -46,7 +46,8 @@ mod fields {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RoleDoc {
-    /// Driver-generated document id (`ObjectId`), distinct from `resource_id`.
+    /// Driver-generated document id (`ObjectId`), distinct from `resource_id`."
+    #[cfg_attr(feature = "serde", serde(rename = "_id"))]
     pub id: ObjectId,
     /// Role name, byte-exact (CORE-01; no normalization).
     pub name: String,
@@ -255,5 +256,41 @@ mod tests {
         };
         assert_eq!(link.role_ids.len(), 2);
         assert!(link.role_ids.contains(&first));
+    }
+
+    /// QUAL-03/D-07 axis: with the `serde` feature the derives round-trip
+    /// `resource_id` as a BSON string (or explicit null) while `_id` stays
+    /// an ObjectId - RESEARCH Q3 on the serde axis.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_roundtrip_keeps_nulls_and_objectId() {
+        let mut doc = RoleDoc::from_record(&RoleRecord::for_instance("viewer", "Team", "team-7"));
+        doc.user_ids = vec!["1".to_owned()];
+        let serialized = bson::to_document(&doc).expect("serialize");
+        assert_eq!(
+            serialized.get(fields::RESOURCE_TYPE),
+            Some(&Bson::String("Team".to_owned()))
+        );
+        assert_eq!(
+            serialized.get(fields::RESOURCE_ID),
+            Some(&Bson::String("team-7".to_owned()))
+        );
+        assert!(matches!(
+            serialized.get(fields::ID),
+            Some(Bson::ObjectId(_))
+        ));
+        let class_doc = RoleDoc::from_record(&RoleRecord::for_class("manager", "Forum"));
+        let class_serialized = bson::to_document(&class_doc).expect("serialize class doc");
+        assert_eq!(
+            class_serialized.get(fields::RESOURCE_ID),
+            Some(&Bson::Null),
+            "absent scope persists as explicit null (serde axis)"
+        );
+        assert!(matches!(
+            class_serialized.get(fields::ID),
+            Some(Bson::ObjectId(_))
+        ));
+        let decoded: RoleDoc = bson::from_document(class_serialized).expect("deserialize");
+        assert_eq!(decoded.to_record(), class_doc.to_record());
     }
 }
