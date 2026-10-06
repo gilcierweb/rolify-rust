@@ -36,9 +36,13 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
         "diesel" | "sqlx" => vec!["postgres", "mysql", "sqlite"],
         "seaorm" => vec!["seaorm"],
         "mongodb" => vec!["mongo"],
-        _ => return Err(CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unknown backend: {}", plan.backend.as_str()),
-        })),
+        _ => {
+            return Err(CliError::Core(
+                rolify_core::error::RolifyError::InvalidConfig {
+                    reason: format!("unknown backend: {}", plan.backend.as_str()),
+                },
+            ));
+        }
     };
 
     for engine in engines {

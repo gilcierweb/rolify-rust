@@ -1,8 +1,8 @@
+use anyhow::Result;
 use clap::Parser;
 use rolify_cli::args::{Cli, Command};
-use rolify_cli::render::{render_all, RenderPlan};
-use rolify_cli::writer::{write_plan, WriteOptions};
-use anyhow::Result;
+use rolify_cli::render::{RenderPlan, render_all};
+use rolify_cli::writer::{WriteOptions, write_plan};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
@@ -10,9 +10,9 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Generate(args) => {
-            let join_table = args.join_table.unwrap_or_else(|| {
-                format!("{}_roles", args.holder_name.to_lowercase() + "s")
-            });
+            let join_table = args
+                .join_table
+                .unwrap_or_else(|| format!("{}_roles", args.holder_name.to_lowercase() + "s"));
 
             // Validate identifiers before any rendering
             rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.roles_table)?;

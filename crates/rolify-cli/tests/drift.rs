@@ -1,5 +1,5 @@
-use rolify_cli::render::{render_all, RenderPlan};
 use rolify_cli::args::Backend;
+use rolify_cli::render::{RenderPlan, render_all};
 use std::fs;
 
 /// Reads the canonical diesel migration file for the given engine and file.
@@ -30,8 +30,11 @@ fn renderer_matches_canonical_default_names() {
             join_table: "users_roles".to_string(),
         };
 
-        let rendered = render_all(&plan).unwrap_or_else(|e| panic!("render failed for {}: {:?}", engine, e));
-        let files = rendered.get(engine).unwrap_or_else(|| panic!("no files for engine: {}", engine));
+        let rendered =
+            render_all(&plan).unwrap_or_else(|e| panic!("render failed for {}: {:?}", engine, e));
+        let files = rendered
+            .get(engine)
+            .unwrap_or_else(|| panic!("no files for engine: {}", engine));
 
         // Find up.sql and down.sql
         let up_file = files.iter().find(|f| f.path.ends_with("up.sql")).unwrap();
@@ -71,14 +74,32 @@ fn renderer_custom_names_longest_first() {
     let content = &up_file.content;
 
     // Verify longest-first replacement: join table replaced before roles table
-    assert!(content.contains("customers_privileges"), "join table name not found");
+    assert!(
+        content.contains("customers_privileges"),
+        "join table name not found"
+    );
     assert!(content.contains("privileges"), "roles table name not found");
-    assert!(content.contains("privileges_triple_unique"), "roles unique constraint not renamed");
-    assert!(content.contains("idx_privileges_resource"), "roles resource index not renamed");
-    assert!(content.contains("customers_privileges_pair_unique"), "join unique constraint not renamed");
+    assert!(
+        content.contains("privileges_triple_unique"),
+        "roles unique constraint not renamed"
+    );
+    assert!(
+        content.contains("idx_privileges_resource"),
+        "roles resource index not renamed"
+    );
+    assert!(
+        content.contains("customers_privileges_pair_unique"),
+        "join unique constraint not renamed"
+    );
     // Ensure no partial replacement (e.g., "users_privileges" would be wrong)
-    assert!(!content.contains("users_privileges"), "partial replacement detected");
-    assert!(!content.contains("customers_roles"), "partial replacement detected");
+    assert!(
+        !content.contains("users_privileges"),
+        "partial replacement detected"
+    );
+    assert!(
+        !content.contains("customers_roles"),
+        "partial replacement detected"
+    );
 }
 
 /// Tests that malicious identifiers are rejected by validate_identifier.

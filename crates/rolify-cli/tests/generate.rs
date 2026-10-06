@@ -11,8 +11,7 @@ fn rolify_cli() -> Command {
 /// Creates a temporary directory in a safe location to avoid /tmp quota issues.
 fn test_temp_dir() -> PathBuf {
     // Use a subdirectory of the project's target dir to avoid /tmp quota issues
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-workspace");
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-workspace");
     fs::create_dir_all(&base).unwrap();
     let dir = tempfile::Builder::new()
         .prefix("rolify-cli-test-")
@@ -57,17 +56,43 @@ fn generate_accepts_positional_role_user() {
     let out_dir = dir.to_str().unwrap();
 
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
         .assert()
         .success();
 
     // Verify the mirrored tree structure
-    assert!(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql").exists());
-    assert!(dir.join("migrations/postgres/0000000001_rolify_create_tables/down.sql").exists());
-    assert!(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql").exists());
-    assert!(dir.join("migrations/mysql/0000000001_rolify_create_tables/down.sql").exists());
-    assert!(dir.join("migrations/sqlite/0000000001_rolify_create_tables/up.sql").exists());
-    assert!(dir.join("migrations/sqlite/0000000001_rolify_create_tables/down.sql").exists());
+    assert!(
+        dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql")
+            .exists()
+    );
+    assert!(
+        dir.join("migrations/postgres/0000000001_rolify_create_tables/down.sql")
+            .exists()
+    );
+    assert!(
+        dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql")
+            .exists()
+    );
+    assert!(
+        dir.join("migrations/mysql/0000000001_rolify_create_tables/down.sql")
+            .exists()
+    );
+    assert!(
+        dir.join("migrations/sqlite/0000000001_rolify_create_tables/up.sql")
+            .exists()
+    );
+    assert!(
+        dir.join("migrations/sqlite/0000000001_rolify_create_tables/down.sql")
+            .exists()
+    );
 }
 
 #[test]
@@ -76,13 +101,25 @@ fn dry_run_creates_no_files() {
     let out_dir = dir.to_str().unwrap();
 
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir, "--dry-run"])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+            "--dry-run",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("DRY RUN"));
 
     // Verify no files were created
-    assert!(!dir.join("migrations").exists(), "dry-run should not create directories");
+    assert!(
+        !dir.join("migrations").exists(),
+        "dry-run should not create directories"
+    );
 }
 
 #[test]
@@ -92,13 +129,29 @@ fn second_run_without_force_fails_naming_collision() {
 
     // First run
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
         .assert()
         .success();
 
     // Second run without --force should fail
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"))
@@ -112,13 +165,30 @@ fn force_overwrites_existing() {
 
     // First run
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
         .assert()
         .success();
 
     // Second run with --force should succeed
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir, "--force"])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+            "--force",
+        ])
         .assert()
         .success();
 }
@@ -132,20 +202,39 @@ fn init_alias_produces_identical_tree() {
 
     // Generate with 'generate'
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir1])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir1,
+        ])
         .assert()
         .success();
 
     // Generate with 'init' alias
     rolify_cli()
-        .args(["init", "--backend", "diesel", "Role", "User", "--out-dir", out_dir2])
+        .args([
+            "init",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir2,
+        ])
         .assert()
         .success();
 
     // Compare trees recursively - they should be identical
     fn collect_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
         let mut files = Vec::new();
-        for entry in walkdir::WalkDir::new(dir.join("migrations")).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(dir.join("migrations"))
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if entry.file_type().is_file() {
                 let path = entry.path().to_path_buf();
                 let content = fs::read_to_string(&path).unwrap();
@@ -172,7 +261,15 @@ fn diesel_tree_contains_all_engines() {
     let out_dir = dir.to_str().unwrap();
 
     rolify_cli()
-        .args(["generate", "--backend", "diesel", "Role", "User", "--out-dir", out_dir])
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
         .assert()
         .success();
 
@@ -185,19 +282,32 @@ fn diesel_tree_contains_all_engines() {
     let stem = "0000000001_rolify_create_tables";
     for engine in ["postgres", "mysql", "sqlite"] {
         assert!(dir.join(format!("migrations/{}/{}", engine, stem)).exists());
-        assert!(dir.join(format!("migrations/{}/{}/up.sql", engine, stem)).exists());
-        assert!(dir.join(format!("migrations/{}/{}/down.sql", engine, stem)).exists());
+        assert!(
+            dir.join(format!("migrations/{}/{}/up.sql", engine, stem))
+                .exists()
+        );
+        assert!(
+            dir.join(format!("migrations/{}/{}/down.sql", engine, stem))
+                .exists()
+        );
     }
 
     // Verify down.sql order: join first then roles (D-12)
     for engine in ["postgres", "mysql", "sqlite"] {
-        let down = fs::read_to_string(
-            dir.join(format!("migrations/{}/{}/down.sql", engine, stem))
-        ).unwrap();
+        let down = fs::read_to_string(dir.join(format!("migrations/{}/{}/down.sql", engine, stem)))
+            .unwrap();
         // Find the DROP TABLE statements specifically
-        let join_drop = down.find("DROP TABLE IF EXISTS users_roles").unwrap_or(usize::MAX);
-        let roles_drop = down.find("DROP TABLE IF EXISTS roles").unwrap_or(usize::MAX);
+        let join_drop = down
+            .find("DROP TABLE IF EXISTS users_roles")
+            .unwrap_or(usize::MAX);
+        let roles_drop = down
+            .find("DROP TABLE IF EXISTS roles")
+            .unwrap_or(usize::MAX);
         // join table should be dropped before roles table
-        assert!(join_drop < roles_drop, "down.sql should drop join table first for {}", engine);
+        assert!(
+            join_drop < roles_drop,
+            "down.sql should drop join table first for {}",
+            engine
+        );
     }
 }

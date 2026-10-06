@@ -53,7 +53,10 @@ mod tests {
             name: "admin".into(),
         };
         let err: CliError = core_err.into();
-        assert!(matches!(err, CliError::Core(RolifyError::RoleNotFound { .. })));
+        assert!(matches!(
+            err,
+            CliError::Core(RolifyError::RoleNotFound { .. })
+        ));
     }
 
     #[test]

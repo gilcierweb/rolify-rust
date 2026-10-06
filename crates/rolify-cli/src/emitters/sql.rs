@@ -3,9 +3,9 @@
 //! Uses ordered string replacement: join table stem first (longest-first rule),
 //! then roles table stem. Names are already validated by validate_identifier.
 
+use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates::{down, up};
-use crate::error::CliError;
 
 /// Renders the SQL migrations for the given plan and engine.
 ///
@@ -18,9 +18,13 @@ pub fn render_sql(plan: &RenderPlan, engine: &str) -> Result<(String, String), C
         "postgres" => "postgres",
         "mysql" => "mysql",
         "sqlite" => "sqlite",
-        _ => return Err(CliError::Core(rolify_core::error::RolifyError::InvalidConfig {
-            reason: format!("unknown engine for SQL renderer: {}", engine),
-        })),
+        _ => {
+            return Err(CliError::Core(
+                rolify_core::error::RolifyError::InvalidConfig {
+                    reason: format!("unknown engine for SQL renderer: {}", engine),
+                },
+            ));
+        }
     };
 
     let up_sql = up(template_engine);
