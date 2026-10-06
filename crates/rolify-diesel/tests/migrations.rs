@@ -389,8 +389,12 @@ mod mysql_migrations {
             "UNIQUE constraint roles_triple_unique exists on MySQL"
         );
 
+        // information_schema.statistics lists one row per indexed COLUMN
+        // (SEQ_IN_INDEX), so the two-column idx_roles_resource matches
+        // twice; DISTINCT collapses to one row per index name and keeps
+        // the existence assertions below at exactly one row.
         let idx_resource: Vec<IndexNameRow> = diesel::sql_query(
-            "SELECT INDEX_NAME AS index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_resource'"
+            "SELECT DISTINCT INDEX_NAME AS index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_resource'"
         )
         .load(&mut conn)
         .expect("query index");
@@ -401,7 +405,7 @@ mod mysql_migrations {
         );
 
         let idx_name: Vec<IndexNameRow> = diesel::sql_query(
-            "SELECT INDEX_NAME AS index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_name'"
+            "SELECT DISTINCT INDEX_NAME AS index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_name'"
         )
         .load(&mut conn)
         .expect("query index");
