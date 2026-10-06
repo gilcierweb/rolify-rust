@@ -942,6 +942,22 @@ mod tests {
             .database("rolify_test_shell")
     }
 
+    /// D-12 compile proof: in `sync` builds the seam resolves to
+    /// `mongodb::sync` handles and `ensure_indexes` is a sync fn (not
+    /// `async`), so this pointer type-checks ONLY under the feature flip.
+    #[cfg(feature = "sync")]
+    #[test]
+    fn sync_seam_makes_store_calls_sync() {
+        let store = MongoStore::new(&database(), &RolifyConfig::default());
+        // The coercion itself is the assertion (an `async` signature would
+        // not fit a sync fn pointer); read the binding so it stays
+        // side-effectful.
+        let probe: fn(&MongoStore) -> Result<(), Error> = MongoStore::ensure_indexes;
+        assert!(size_of_val(&probe) > 0);
+        assert_eq!(store.role_collection(), "roles");
+        assert_eq!(store.query_count(), 0);
+    }
+
     #[test]
     fn store_constructs_from_config_with_defaults() {
         let config = RolifyConfig::default();

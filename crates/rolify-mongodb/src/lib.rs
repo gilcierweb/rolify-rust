@@ -45,6 +45,21 @@
 //! - [`index`]: `create_index` ensure for the unique compound.
 //! - [`store`]: [`MongoStore`] - the dual-mode store shell carrying the
 //!   validated handle; the full SPI lands on it in 05.1-02.
+//!
+//! ## Sync mode (D-11 shipped now, D-12 same-store shape)
+//!
+//! Enable with `features = ["sync"]`. The same `MongoStore` type then
+//! holds `mongodb::sync` handles and every SPI method runs synchronously:
+//! the driver offloads onto its own internal runtime, tokio stays linked,
+//! and this crate never calls `block_on` nor spawns a runtime.
+//!
+//! ```text
+//! let client = mongodb::sync::Client::with_uri_str("mongodb://...")?;
+//! let database = client.database("app");
+//! let store = MongoStore::new(&database, &RolifyConfig::default())
+//!     .for_holder_collection("users");
+//! store.ensure_indexes()?;            // sync in sync builds
+//! ```
 
 pub mod collection;
 pub mod document;
