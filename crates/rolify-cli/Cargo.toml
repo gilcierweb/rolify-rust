@@ -5,5 +5,23 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+anyhow = "1.0.104"
+rolify-core = { workspace = true }
+rolify-diesel = { workspace = true, features = ["postgres"] }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+testcontainers = "=0.27.3"
+testcontainers-modules = { version = "=0.15.0", default-features = false, features = ["postgres", "mysql", "blocking"] }
+rolify-diesel = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true }
+
+[features]
+default = []
+
 [lints]
 workspace = true
