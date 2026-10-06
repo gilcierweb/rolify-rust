@@ -290,9 +290,14 @@ mod mysql_migrations {
         conn.run_pending_migrations(MIGRATIONS)
             .expect("migrations apply cleanly on MySQL");
 
-        // Verify tables exist by querying information_schema
+        // Verify tables exist by querying information_schema. MySQL 8's data
+        // dictionary reports information_schema result labels under the
+        // DEFINED (uppercase) column names even when the query spells them
+        // lowercase, and diesel's QueryableByName matches struct fields
+        // byte-exactly, so every selected column below carries an explicit
+        // lowercase alias (verified against mysql:8.4).
         let tables: Vec<TableNameRow> = diesel::sql_query(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name IN ('roles', 'users_roles')"
+            "SELECT TABLE_NAME AS table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name IN ('roles', 'users_roles')"
         )
         .load(&mut conn)
         .expect("query information_schema");
@@ -360,7 +365,7 @@ mod mysql_migrations {
         );
 
         let collations: Vec<CollationRow> = diesel::sql_query(
-            "SELECT column_name, collation_name FROM information_schema.columns WHERE table_schema = 'test' AND table_name = 'roles' AND column_name IN ('name', 'resource_type', 'resource_id')"
+            "SELECT COLUMN_NAME AS column_name, COLLATION_NAME AS collation_name FROM information_schema.columns WHERE table_schema = 'test' AND table_name = 'roles' AND column_name IN ('name', 'resource_type', 'resource_id')"
         )
         .load(&mut conn)
         .expect("query collation");
@@ -374,7 +379,7 @@ mod mysql_migrations {
         }
 
         let constraint_name: Vec<ConstraintNameRow> = diesel::sql_query(
-            "SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema = 'test' AND table_name = 'roles' AND constraint_type = 'UNIQUE' AND constraint_name = 'roles_triple_unique'"
+            "SELECT CONSTRAINT_NAME AS constraint_name FROM information_schema.table_constraints WHERE table_schema = 'test' AND table_name = 'roles' AND constraint_type = 'UNIQUE' AND constraint_name = 'roles_triple_unique'"
         )
         .load(&mut conn)
         .expect("query constraint name");
@@ -385,7 +390,7 @@ mod mysql_migrations {
         );
 
         let idx_resource: Vec<IndexNameRow> = diesel::sql_query(
-            "SELECT index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_resource'"
+            "SELECT INDEX_NAME AS index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_resource'"
         )
         .load(&mut conn)
         .expect("query index");
@@ -396,7 +401,7 @@ mod mysql_migrations {
         );
 
         let idx_name: Vec<IndexNameRow> = diesel::sql_query(
-            "SELECT index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_name'"
+            "SELECT INDEX_NAME AS index_name FROM information_schema.statistics WHERE table_schema = 'test' AND table_name = 'roles' AND index_name = 'idx_roles_name'"
         )
         .load(&mut conn)
         .expect("query index");
@@ -406,7 +411,7 @@ mod mysql_migrations {
             .expect("migrations revert cleanly on MySQL");
 
         let tables_after: Vec<TableNameRow> = diesel::sql_query(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name IN ('roles', 'users_roles')"
+            "SELECT TABLE_NAME AS table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name IN ('roles', 'users_roles')"
         )
         .load(&mut conn)
         .expect("query information_schema after revert");
@@ -415,7 +420,7 @@ mod mysql_migrations {
         conn.run_pending_migrations(MIGRATIONS)
             .expect("migrations re-apply cleanly on MySQL");
         let tables_reapply: Vec<TableNameRow> = diesel::sql_query(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name IN ('roles', 'users_roles')"
+            "SELECT TABLE_NAME AS table_name FROM information_schema.tables WHERE table_schema = 'test' AND table_name IN ('roles', 'users_roles')"
         )
         .load(&mut conn)
         .expect("query information_schema after re-apply");
