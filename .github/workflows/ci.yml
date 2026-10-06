@@ -245,7 +245,7 @@ jobs:
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
 
-msrv:
+  msrv:
     name: MSRV check (1.86)
     runs-on: ubuntu-24.04
     strategy:
