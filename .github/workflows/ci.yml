@@ -26,18 +26,36 @@ jobs:
       # against the sync-shaped SPI (Phase 1 D-05). Both check-job clippy
       # variants therefore lint the graph MINUS those two; each async-only
       # crate keeps its own -D warnings leg in its dedicated job.
+      # The dual-mode rolify-mongodb diverges from the other side of the
+      # same Pitfall: maybe-async's mode is ONE flag for the whole build
+      # graph (the macro crate's own is_sync feature unifies across every
+      # consumer), while the crate's cfg arms key off its local `sync`
+      # feature. A default-features rolify-mongodb (async arms) cannot
+      # compile inside any graph that unifies the macro into sync mode,
+      # so the default variant excludes it and it keeps a dedicated
+      # default clippy leg below; the is_sync variant pins its sync mode
+      # explicitly via rolify-mongodb/sync so the crate stays linted in
+      # BOTH modes.
       - name: cargo clippy (default)
-        run: cargo clippy --workspace --all-targets --exclude rolify-sqlx --exclude rolify-seaorm -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude rolify-sqlx --exclude rolify-seaorm --exclude rolify-mongodb -- -D warnings
       - name: cargo clippy (is_sync)
-        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync --exclude rolify-sqlx --exclude rolify-seaorm -- -D warnings
+        run: cargo clippy --workspace --all-targets --features rolify-core/is_sync,rolify-mongodb/sync --exclude rolify-sqlx --exclude rolify-seaorm -- -D warnings
+      # rolify-mongodb's default (async) clippy gate; the sync mode is
+      # covered by the is_sync variant above through the pinned feature.
+      - name: cargo clippy (rolify-mongodb default)
+        run: cargo clippy -p rolify-mongodb --all-targets -- -D warnings
       # Same unification constraint for rustdoc: the sqlx and seaorm docs
-      # build in their own async graphs (no rolify-diesel in the closure).
+      # build in their own async graphs (no rolify-diesel in the closure),
+      # and rolify-mongodb joins them for the same Pitfall-11 reason (its
+      # default async arms cannot build in the sync-unified default graph).
       - name: cargo doc
-        run: cargo doc --workspace --no-deps --exclude rolify-sqlx --exclude rolify-seaorm
+        run: cargo doc --workspace --no-deps --exclude rolify-sqlx --exclude rolify-seaorm --exclude rolify-mongodb
       - name: cargo doc (rolify-sqlx)
         run: cargo doc -p rolify-sqlx --no-deps --features postgres,mysql,sqlite
       - name: cargo doc (rolify-seaorm)
         run: cargo doc -p rolify-seaorm --no-deps --features postgres,mysql
+      - name: cargo doc (rolify-mongodb)
+        run: cargo doc -p rolify-mongodb --no-deps
 
   test:
     name: Test (dual-mode + in-memory suite)
@@ -52,11 +70,16 @@ jobs:
       # - async mode: exclude rolify-diesel (the sync-default member)
       # - sync mode: exclude rolify-sqlx (the async-only member), with the
       #   is_sync flag pinning the mode explicitly
+      # rolify-mongodb rides both gates: maybe-async's mode is global to
+      # the build graph, so the sync leg pins rolify-mongodb/sync to keep
+      # the crate's cfg arms aligned with the macro mode. The async leg
+      # needs no pin: excluding rolify-diesel leaves no is_sync unifier
+      # in the graph.
       # Neither mode can silently stop being exercised (04-09, T-04-15).
       - name: cargo test (workspace async mode, exclude rolify-diesel)
         run: cargo test --workspace --exclude rolify-diesel
       - name: cargo test (workspace sync mode, exclude rolify-sqlx and rolify-seaorm)
-        run: cargo test --workspace --features rolify-core/is_sync --exclude rolify-sqlx --exclude rolify-seaorm
+        run: cargo test --workspace --features rolify-core/is_sync,rolify-mongodb/sync --exclude rolify-sqlx --exclude rolify-seaorm
       - name: cargo test (rolify-test suite async)
         run: cargo test -p rolify-test --features suite
       - name: cargo test (rolify-test suite sync)
