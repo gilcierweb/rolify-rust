@@ -21,6 +21,7 @@ rolify-diesel = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true }
 tempfile = "3.17"
 walkdir = "2.5"
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "migrate"] }
 
 [features]
 default = []
