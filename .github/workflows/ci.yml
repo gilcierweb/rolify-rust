@@ -189,6 +189,29 @@ jobs:
       - name: cargo +1.94 check (rolify-seaorm)
         run: cargo +1.94 check -p rolify-seaorm --features postgres,mysql
 
+  mongodb:
+    name: MongoDB adapter legs (async + sync)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # D-17: mongodb adapter is dual-mode (async default, sync opt-in).
+      # The parity suite runs the full twelve modules in BOTH modes (D-13).
+      # Async mode: default feature set (async mongodb driver).
+      - name: cargo test (rolify-mongodb async,suite)
+        run: cargo test -p rolify-mongodb --features suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      # Sync mode: full suite under core is_sync + mongodb sync (D-13).
+      - name: cargo test (rolify-mongodb sync,suite)
+        run: cargo test -p rolify-mongodb --features sync,rolify-core/is_sync,suite
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+      - name: cargo clippy (rolify-mongodb async)
+        run: cargo clippy -p rolify-mongodb --all-targets -- -D warnings
+      - name: cargo clippy (rolify-mongodb sync)
+        run: cargo clippy -p rolify-mongodb --all-targets --features sync -- -D warnings
+
   rider-async:
     name: Diesel-async rider legs (Postgres, MySQL, SQLite)
     runs-on: ubuntu-24.04
@@ -222,7 +245,7 @@ jobs:
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
 
-  msrv:
+msrv:
     name: MSRV check (1.86)
     runs-on: ubuntu-24.04
     strategy:
@@ -242,10 +265,16 @@ jobs:
       # (the 03-06 rationale). Both added legs are backend-independent, so
       # they run once on the postgres matrix leg.
       - uses: dtolnay/rust-toolchain@1.94
-        if: matrix.backend == 'postgres'
       - name: cargo +1.94 check (rolify-sqlx)
         if: matrix.backend == 'postgres'
         run: cargo +1.94 check -p rolify-sqlx --features postgres,mysql,sqlite
       - name: cargo +1.86 check (rolify-diesel async,bb8,postgres)
         if: matrix.backend == 'postgres'
         run: cargo +1.86 check -p rolify-diesel --no-default-features --features async,bb8,postgres
+      # D-10 phase 05.1 floor: 1.88 for rolify-mongodb (mongodb 3.9.1).
+      # Both sync and async mode check-only on lib targets.
+      - uses: dtolnay/rust-toolchain@1.88
+      - name: cargo +1.88 check (rolify-mongodb async)
+        run: cargo +1.88 check -p rolify-mongodb
+      - name: cargo +1.88 check (rolify-mongodb sync)
+        run: cargo +1.88 check -p rolify-mongodb --features sync
