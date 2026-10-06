@@ -4,7 +4,7 @@
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
 use crate::args::Backend;
-use crate::emitters::sql::render_sql;
+use crate::emitters::{render_mongo, seaorm::render_seaorm, sql::render_sql};
 use crate::error::CliError;
 use std::collections::BTreeMap;
 
@@ -29,13 +29,62 @@ pub struct FileEntry {
 ///
 /// Each engine gets a mirrored tree under migrations/{engine}/ with the
 /// timestamp stem 0000000001_rolify_create_tables containing up.sql and down.sql.
+/// SeaORM gets a single migration file under seaorm/.
+/// Mongo gets role.rs and INDEX_NOTES.md under mongo/.
 pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>, CliError> {
     let mut result = BTreeMap::new();
 
-    let engines = match plan.backend.as_str() {
-        "diesel" | "sqlx" => vec!["postgres", "mysql", "sqlite"],
-        "seaorm" => vec!["seaorm"],
-        "mongodb" => vec!["mongo"],
+    match plan.backend.as_str() {
+        "diesel" | "sqlx" => {
+            let engines = vec!["postgres", "mysql", "sqlite"];
+            for engine in engines {
+                let (up_content, down_content) = render_sql(plan, engine)?;
+
+                let stem = "0000000001_rolify_create_tables";
+                let prefix = format!("migrations/{engine}/{stem}");
+
+                let mut files = vec![
+                    FileEntry {
+                        path: format!("{prefix}/up.sql"),
+                        content: up_content,
+                    },
+                    FileEntry {
+                        path: format!("{prefix}/down.sql"),
+                        content: down_content,
+                    },
+                ];
+
+                // Sort for deterministic output
+                files.sort_by(|a, b| a.path.cmp(&b.path));
+
+                result.insert(engine.to_string(), files);
+            }
+        }
+        "seaorm" => {
+            let content = render_seaorm(plan)?;
+            let stem = "0000000001_rolify_create_tables";
+            let mut files = vec![FileEntry {
+                path: format!("seaorm/{stem}.rs"),
+                content,
+            }];
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            result.insert("seaorm".to_string(), files);
+        }
+        "mongodb" => {
+            let (role_doc, index_notes) = render_mongo(plan)?;
+            let mut files = vec![
+                FileEntry {
+                    path: "mongo/role.rs".to_string(),
+                    content: role_doc,
+                },
+                FileEntry {
+                    path: "mongo/INDEX_NOTES.md".to_string(),
+                    content: index_notes,
+                },
+            ];
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            result.insert("mongo".to_string(), files);
+        }
         _ => {
             return Err(CliError::Core(
                 rolify_core::error::RolifyError::InvalidConfig {
@@ -43,29 +92,6 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
                 },
             ));
         }
-    };
-
-    for engine in engines {
-        let (up_content, down_content) = render_sql(plan, engine)?;
-
-        let stem = "0000000001_rolify_create_tables";
-        let prefix = format!("migrations/{engine}/{stem}");
-
-        let mut files = vec![
-            FileEntry {
-                path: format!("{prefix}/up.sql"),
-                content: up_content,
-            },
-            FileEntry {
-                path: format!("{prefix}/down.sql"),
-                content: down_content,
-            },
-        ];
-
-        // Sort for deterministic output
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-
-        result.insert(engine.to_string(), files);
     }
 
     Ok(result)

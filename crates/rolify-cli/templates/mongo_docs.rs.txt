@@ -1,0 +1,69 @@
+//! MongoDB role document template for rolify.
+//!
+//! PROVISIONAL: Converges with `rolify-mongodb` `document.rs` when Phase 5
+//! executes (D-17). Shape frozen to the 05-CONTEXT spec (D-07, D-08).
+//! No BSON-type invention beyond the spec; no camelCase fields.
+//!
+//! Field set (exact):
+//! - `name`: String — role name (byte-exact per gem)
+//! - `resource_type`: Option<String> — explicit null when global/class scope
+//! - `resource_id`: Option<String> — explicit null when global/class scope
+//! - `user_ids`: Vec<ObjectId> — user references (two-sided HABTM)
+//!
+//! Index notes (CLI documents; adapter converges at setup per Phase 5 D-10):
+//! - Unique compound index on (name, resource_type, resource_id) ensured
+//!   idempotently at store setup
+//! - Consumer document gains `role_ids` (two-sided HABTM); removal updates
+//!   BOTH sides with `$pull`/`$addToSet`; emptiness checked AFTER removal
+//!
+//! Table name references (substituted at generate time):
+//! - Roles table: roles
+//! - Join table: users_roles
+
+use mongodb::bson::oid::ObjectId;
+use serde::{Deserialize, Serialize};
+
+/// Role document as stored in MongoDB.
+///
+/// Sentinel nulls (not absent) for resource_type/resource_id when scope is
+/// global or class — matches the gem's Mongoid `''` sentinel strategy
+/// translated to MongoDB explicit null (05-CONTEXT D-08).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoleDoc {
+    #[serde(rename = "_id")]
+    pub id: ObjectId,
+
+    pub name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_type: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
+
+    #[serde(default)]
+    pub user_ids: Vec<ObjectId>,
+}
+
+/// Consumer-side role IDs for two-sided HABTM.
+///
+/// When a role is removed, BOTH sides are updated with `$pull`/`$addToSet`.
+/// Emptiness is checked AFTER removal (if user_ids becomes empty, the role
+/// document may be removed per `remove_role_if_empty` config).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumerRoleIds {
+    #[serde(default)]
+    pub role_ids: Vec<ObjectId>,
+}
+
+/// Index setup notes (CLI documents; adapter executes at startup).
+///
+/// The unique compound index on (name, resource_type, resource_id) must be
+/// created idempotently at store initialization. The adapter (rolify-mongodb)
+/// owns this convergence per Phase 5 D-10.
+
+pub const INDEX_NOTES: &str = r#"
+Unique compound index: (name: 1, resource_type: 1, resource_id: 1)
+  - Ensured idempotently at store setup
+  - Deduplicates identically to the SQL sentinel '' strategy
+"#;

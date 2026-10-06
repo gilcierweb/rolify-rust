@@ -1,0 +1,35 @@
+//! SeaORM migration template for rolify schema.
+//!
+//! This template is hand-maintained (D-16) and mirrors the canonical schema
+//! from the vendored SQL templates. The raw-SQL approach (option a per
+//! 06-RESEARCH.md Code Examples) reuses the exact canonical strings per engine
+//! selected at runtime via the SchemaManager's database backend.
+//!
+//! CONVERGENCE NOTE (D-16): This template is the second maintained source.
+//! The semantic checklist in tests/drift.rs keeps it honest against the
+//! canonical SQL. When Phase 5 executes, cross-crate comparison will promote
+//! this to a three-way gate.
+
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Execute the canonical up.sql for the consumer's engine
+        let sql = r#"{{UP_SQL}}"#;
+        let stmt = Statement::from_string(manager.get_database_backend(), sql.to_owned());
+        manager.get_connection().execute(stmt).await.map(|_| ())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Down drops join table first (FK order), then roles (D-10, D-12)
+        for statement in ["{{DOWN_JOIN}}", "{{DOWN_ROLES}}"] {
+            let stmt = Statement::from_string(manager.get_database_backend(), statement.to_owned());
+            manager.get_connection().execute(stmt).await.map(|_| ())?;
+        }
+        Ok(())
+    }
+}

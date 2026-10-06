@@ -14,6 +14,10 @@ pub const MYSQL_DOWN: &str = include_str!("../../templates/mysql/down.sql");
 pub const SQLITE_UP: &str = include_str!("../../templates/sqlite/up.sql");
 pub const SQLITE_DOWN: &str = include_str!("../../templates/sqlite/down.sql");
 
+// Hand-maintained templates for SeaORM and Mongo (D-16, D-17)
+pub const SEAORM_MIGRATION: &str = include_str!("../../templates/seaorm_migration.rs.txt");
+pub const MONGO_DOCS: &str = include_str!("../../templates/mongo_docs.rs.txt");
+
 /// Returns the up migration for the given engine.
 #[must_use]
 pub fn up(engine: &str) -> &str {
@@ -38,4 +42,16 @@ pub fn down(engine: &str) -> &str {
         "mongodb" => "",           // MongoDB uses document templates, not SQL
         _ => panic!("unknown engine: {engine}"),
     }
+}
+
+/// Returns the SeaORM migration template.
+#[must_use]
+pub fn seaorm_migration() -> &'static str {
+    SEAORM_MIGRATION
+}
+
+/// Returns the Mongo docs template.
+#[must_use]
+pub fn mongo_docs() -> &'static str {
+    MONGO_DOCS
 }
