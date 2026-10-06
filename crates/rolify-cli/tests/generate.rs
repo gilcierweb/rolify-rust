@@ -10,7 +10,9 @@ fn rolify_cli() -> Command {
 
 /// Creates a temporary directory in a safe location to avoid /tmp quota issues.
 fn test_temp_dir() -> PathBuf {
-    let base = PathBuf::from("/home/gilcierweb/tmp/rolify-test");
+    // Use a subdirectory of the project's target dir to avoid /tmp quota issues
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-workspace");
     fs::create_dir_all(&base).unwrap();
     let dir = tempfile::Builder::new()
         .prefix("rolify-cli-test-")
