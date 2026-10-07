@@ -534,6 +534,52 @@ mod tests {
     }
 
     #[test]
+    fn roles_matching_instance_only_none_excludes_class_rows() {
+        let _container = pg_container();
+        let mut conn = pg_conn();
+        // Serialized with the other tests sharing this database.
+        let _serial = crate::support::SuiteGuard::acquire();
+        run_migrations(&mut conn);
+        setup_fixtures(&mut conn);
+        reset_roles(&mut conn);
+        reset_fixtures(&mut conn);
+
+        let mut store = make_store();
+        let holder1 = ResourceId::from(1_i64);
+        insert_holder(&mut conn, "users", "User", "holder1");
+        let forum_key = insert_resource(&mut conn, "forums", "Test Forum");
+
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            let class_row = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("curator"),
+                    ResourceRef::Class("Forum"),
+                )
+                .unwrap();
+            store.add(conn, &holder1, &class_row).unwrap();
+            let instance_row = store
+                .find_or_create_by(
+                    conn,
+                    &RoleName::from("editor"),
+                    ResourceRef::Instance("Forum", &forum_key.resource_id),
+                )
+                .unwrap();
+            store.add(conn, &holder1, &instance_row).unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        // instance_only(None) is the catalog scope's documented "every
+        // instance row in types" query: the class curator row stays out,
+        // the instance editor row stays in.
+        let query = RoleCatalogQuery::for_types(&["Forum"]).instance_only(None);
+        let results = store.roles_matching(&mut conn, &query).unwrap();
+        assert_eq!(results.len(), 1, "class rows must stay out");
+        assert!(results[0].is_instance_scoped_to("Forum", &forum_key.resource_id));
+    }
+
+    #[test]
     fn scoped_delete_removes_only_instance_bound_rows() {
         let _container = pg_container();
         let mut conn = pg_conn();

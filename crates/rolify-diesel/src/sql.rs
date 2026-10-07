@@ -613,8 +613,10 @@ mod backend_sql {
                         (format!("AND role_row.resource_id = {ph}"), start_index + 1)
                     }
                     None => {
-                        // Every instance row in types — no additional filter
-                        (String::new(), start_index)
+                        // Every instance row in types: instance rows
+                        // carry a non-sentinel resource_id, so exclude
+                        // the class rows the base WHERE lets through.
+                        ("AND role_row.resource_id != ''".to_owned(), start_index)
                     }
                 }
             }
@@ -639,6 +641,18 @@ mod backend_sql {
         use crate::dialect::{placeholder, quote_identifier};
         use rolify_core::query::{ResourceFilter, RoleQuery};
         use rolify_core::role::{ResourceId, RoleName};
+
+        #[test]
+        fn roles_matching_scope_filter_instance_only_none_keeps_instance_rows() {
+            let (fragment, next) = roles_matching_scope_filter(
+                &rolify_core::catalog::CatalogScope::InstanceOnly { resource_id: None },
+                7,
+            );
+            // Every instance row in types: the class rows carry the
+            // sentinel resource_id and stay out, without a bind spent.
+            assert_eq!(fragment, "AND role_row.resource_id != ''");
+            assert_eq!(next, 7);
+        }
 
         #[test]
         fn build_ladder_global_one_disjunct() {

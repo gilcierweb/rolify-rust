@@ -675,7 +675,8 @@ pub(crate) fn roles_matching_name_filter<DB: Database>(start_index: usize) -> (S
 /// - `ClassAndInstance`: no extra condition (globals already excluded)
 /// - `ClassOnly`: `resource_id` equals the sentinel (class rows only)
 /// - `InstanceOnly(Some)`: `resource_id` equals the instance id
-/// - `InstanceOnly(None)`: every instance row within `types`
+/// - `InstanceOnly(None)`: every instance row within `types` (the
+///   non-sentinel `resource_id` condition; class rows stay out)
 #[must_use]
 pub(crate) fn roles_matching_scope_filter<DB: Database>(
     scope: &CatalogScope<'_>,
@@ -698,7 +699,13 @@ pub(crate) fn roles_matching_scope_filter<DB: Database>(
                 ),
                 start_index + 1,
             ),
-            None => (String::new(), start_index),
+            None => (
+                // Every instance row in types: instance rows carry a
+                // non-sentinel resource_id, so exclude the class rows
+                // the base WHERE lets through.
+                "AND role_row.resource_id != ''".to_owned(),
+                start_index,
+            ),
         },
     }
 }
@@ -725,6 +732,27 @@ mod tests {
     use super::*;
     use crate::dialect::quote_identifier;
     use rolify_core::role::{ResourceId, RoleName};
+
+    #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+    #[test]
+    fn roles_matching_scope_filter_instance_only_none_keeps_instance_rows() {
+        // The fragment carries no placeholder, so any compiled Database
+        // type instantiates the probe; pick the first enabled engine.
+        #[cfg(feature = "postgres")]
+        type ProbeDb = sqlx::Postgres;
+        #[cfg(all(not(feature = "postgres"), feature = "mysql"))]
+        type ProbeDb = sqlx::MySql;
+        #[cfg(all(not(any(feature = "postgres", feature = "mysql")), feature = "sqlite"))]
+        type ProbeDb = sqlx::Sqlite;
+        let (fragment, next) = roles_matching_scope_filter::<ProbeDb>(
+            &CatalogScope::InstanceOnly { resource_id: None },
+            7,
+        );
+        // Every instance row in types: the class rows carry the
+        // sentinel resource_id and stay out, without a bind spent.
+        assert_eq!(fragment, "AND role_row.resource_id != ''");
+        assert_eq!(next, 7);
+    }
 
     fn assert_ladder_bind_counts<DB: Database>() {
         let admin = RoleName::from("admin");

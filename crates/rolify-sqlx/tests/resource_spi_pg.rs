@@ -574,4 +574,52 @@ mod tests {
             ],
         );
     }
+
+    /// `instance_only(None)` is the catalog scope's documented "every
+    /// instance row in types" query: class rows stay out, instance rows
+    /// stay in (the None corner of the scope filter, pinned against the
+    /// same reference semantics as the diesel acceptance file and the
+    /// in-memory grid).
+    #[tokio::test]
+    async fn roles_matching_instance_only_none_excludes_class_rows() {
+        let (_serial, _pool, mut engine) = boot().await;
+
+        let mut seed = pg_conn().await;
+        let forum_first = insert_resource_pg(&mut seed, "forums", "Forum", "forum-first").await;
+        let forum_second = insert_resource_pg(&mut seed, "forums", "Forum", "forum-second").await;
+
+        let (_, mut admin) = seat_user("admin").await;
+        admin
+            .add_role(&RoleName::from("moderator"), ResourceRef::Class("Forum"))
+            .await
+            .expect("admin: class moderator on Forum");
+        admin
+            .add_role(
+                &RoleName::from("editor"),
+                ResourceRef::Instance("Forum", &forum_first.resource_id),
+            )
+            .await
+            .expect("admin: instance editor on Forum first");
+        admin
+            .add_role(
+                &RoleName::from("reviewer"),
+                ResourceRef::Instance("Forum", &forum_second.resource_id),
+            )
+            .await
+            .expect("admin: instance reviewer on Forum second");
+
+        let query = RoleCatalogQuery::for_types(&["Forum"]).instance_only(None);
+        let (store, conn) = engine.store_with_conn();
+        let rows = store
+            .roles_matching(conn, &query)
+            .await
+            .expect("instance_only(None) catalog read");
+        assert_record_set(
+            &rows,
+            &[
+                RoleRecord::for_instance("editor", "Forum", forum_first.resource_id.as_str()),
+                RoleRecord::for_instance("reviewer", "Forum", forum_second.resource_id.as_str()),
+            ],
+        );
+    }
 }

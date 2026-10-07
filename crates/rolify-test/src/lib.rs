@@ -382,6 +382,11 @@ impl RoleStore for InMemoryStore {
                     CatalogScope::InstanceOnly { resource_id } => {
                         match (&row.resource_id, resource_id) {
                             (Some(row_id), Some(wanted)) if row_id == *wanted => {}
+                            // `None` is the documented "every instance
+                            // row in types" query: any instance row
+                            // matches, class rows fall through to the
+                            // reject arm below.
+                            (Some(_), None) => {}
                             _ => return false,
                         }
                     }

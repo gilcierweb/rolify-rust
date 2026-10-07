@@ -7,6 +7,7 @@
 //! maybe-async in async shape against a sync core - run the workspace form).
 
 use pretty_assertions::assert_eq;
+use rolify_core::catalog::RoleCatalogQuery;
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
@@ -349,5 +350,43 @@ async fn resource_store_fixture_registry() {
         found.len(),
         3,
         "gem `in` applies no resource_type condition"
+    );
+}
+
+/// `instance_only(None)` is the catalog scope's documented "every
+/// instance row in types" query: class rows stay out, instance rows
+/// stay in. The reference store defines the expected behavior for every
+/// adapter (the SQL adapters store class rows as the sentinel
+/// `resource_id`, the in-memory model as `Option::None`), so this pins
+/// the corner before any adapter suite case tries to rely on it.
+#[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+async fn roles_matching_instance_only_none_keeps_instance_rows_only() {
+    let mut store = InMemoryStore::new();
+    let holder = ResourceId::from(1_i64);
+    let forum_one = ResourceKey::new("Forum", 1_i64);
+    store.register_resource(forum_one.clone());
+
+    let manager = RoleName::from("manager");
+    let row_class = store
+        .find_or_create_by(&mut (), &manager, ResourceRef::Class("Forum"))
+        .await
+        .unwrap();
+    let row_instance = store
+        .find_or_create_by(
+            &mut (),
+            &manager,
+            ResourceRef::Instance("Forum", &ResourceId::from(1_i64)),
+        )
+        .await
+        .unwrap();
+    store.add(&mut (), &holder, &row_class).await.unwrap();
+    store.add(&mut (), &holder, &row_instance).await.unwrap();
+
+    let query = RoleCatalogQuery::for_types(&["Forum"]).instance_only(None);
+    let results = store.roles_matching(&mut (), &query).await.unwrap();
+    assert_eq!(results.len(), 1, "class rows must stay out");
+    assert!(
+        results[0].is_instance_scoped_to("Forum", &ResourceId::from(1_i64)),
+        "the instance row must stay in"
     );
 }
