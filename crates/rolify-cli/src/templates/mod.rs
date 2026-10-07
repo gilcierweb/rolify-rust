@@ -22,14 +22,18 @@ pub const MONGO_DOCS: &str = include_str!("../../templates/mongo_docs.rs.txt");
 pub mod scaffolding {
     pub const ROLE_STUB: &str = include_str!("../../templates/scaffolding/role_stub.rs.txt");
     pub const HOLDER_STUB: &str = include_str!("../../templates/scaffolding/holder_stub.rs.txt");
-    pub const CONFIG_EXAMPLE: &str = include_str!("../../templates/scaffolding/config_example.rs.txt");
-    pub const README_DIESEL: &str = include_str!("../../templates/scaffolding/README_diesel.md.txt");
+    pub const CONFIG_EXAMPLE: &str =
+        include_str!("../../templates/scaffolding/config_example.rs.txt");
+    pub const README_DIESEL: &str =
+        include_str!("../../templates/scaffolding/README_diesel.md.txt");
     pub const README_SQLX: &str = include_str!("../../templates/scaffolding/README_sqlx.md.txt");
-    pub const README_SEAORM: &str = include_str!("../../templates/scaffolding/README_seaorm.md.txt");
-    pub const README_MONGODB: &str = include_str!("../../templates/scaffolding/README_mongodb.md.txt");
+    pub const README_SEAORM: &str =
+        include_str!("../../templates/scaffolding/README_seaorm.md.txt");
+    pub const README_MONGODB: &str =
+        include_str!("../../templates/scaffolding/README_mongodb.md.txt");
 
     /// Renders the role stub with substitutions.
-    #[must_use] 
+    #[must_use]
     pub fn role_stub(role_name: &str, backend: &str, holder_name: &str) -> String {
         ROLE_STUB
             .replace("{role_name}", role_name)
@@ -38,7 +42,7 @@ pub mod scaffolding {
     }
 
     /// Renders the holder stub with substitutions.
-    #[must_use] 
+    #[must_use]
     pub fn holder_stub(holder_name: &str, backend: &str, role_name: &str) -> String {
         HOLDER_STUB
             .replace("{holder_name}", holder_name)
@@ -47,7 +51,7 @@ pub mod scaffolding {
     }
 
     /// Renders the config example with substitutions.
-    #[must_use] 
+    #[must_use]
     pub fn config_example(
         backend: &str,
         role_name: &str,

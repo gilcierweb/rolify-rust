@@ -69,7 +69,10 @@ CREATE TABLE roles (
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Down drops join table first (FK order), then roles (D-10, D-12)
-        for statement in ["DROP TABLE IF EXISTS users_roles;", "DROP TABLE IF EXISTS roles;"] {
+        for statement in [
+            "DROP TABLE IF EXISTS users_roles;",
+            "DROP TABLE IF EXISTS roles;",
+        ] {
             let stmt = sea_orm::Statement::from_string(
                 manager.get_database_backend(),
                 statement.to_owned(),

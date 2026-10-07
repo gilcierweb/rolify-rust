@@ -272,13 +272,19 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
     let mut diesel_conn = diesel::pg::PgConnection::establish(&db_url)
         .expect("diesel connection to the CLI-generated schema");
 
-    let config = RolifyConfig::builder().build().expect("default config builds");
+    let config = RolifyConfig::builder()
+        .build()
+        .expect("default config builds");
     let mut store = DieselStore::new(&config);
     let holder_id = ResourceId::from("user1");
 
     // add_role :admin (gem parity: user.add_role "admin", global scope)
     let admin_role = store
-        .find_or_create_by(&mut diesel_conn, &RoleName::from("admin"), ResourceRef::Global)
+        .find_or_create_by(
+            &mut diesel_conn,
+            &RoleName::from("admin"),
+            ResourceRef::Global,
+        )
         .expect("find_or_create_by admin global on generated schema");
     let added = store
         .add(&mut diesel_conn, &holder_id, &admin_role)
@@ -487,10 +493,9 @@ async fn generated_mysql_schema_roundtrip() {
     assert_eq!(join_count, 0, "join rows should cascade to zero");
 
     // Verify down.sql reverts both tables
-    let down_sql = fs::read_to_string(
-        dir.join("migrations/mysql/0000000001_rolify_create_tables/down.sql"),
-    )
-    .unwrap();
+    let down_sql =
+        fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/down.sql"))
+            .unwrap();
 
     execute_mysql_sql_file(&pool, &down_sql)
         .await
@@ -599,12 +604,11 @@ async fn generated_sqlite_schema_roundtrip() {
     assert_eq!(users_roles_count, 1, "users_roles table should exist");
 
     // Verify unique triple constraint via sqlite_master (table definition carries it)
-    let roles_table_sql: String = sqlx::query_scalar(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'roles'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let roles_table_sql: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'roles'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(
         roles_table_sql.contains("roles_triple_unique"),
         "roles_triple_unique missing in table definition: {roles_table_sql}"
@@ -698,10 +702,9 @@ async fn generated_sqlite_schema_roundtrip() {
     assert_eq!(join_count, 0, "join rows should cascade to zero");
 
     // Verify down.sql reverts both tables
-    let down_sql = fs::read_to_string(
-        dir.join("migrations/sqlite/0000000001_rolify_create_tables/down.sql"),
-    )
-    .unwrap();
+    let down_sql =
+        fs::read_to_string(dir.join("migrations/sqlite/0000000001_rolify_create_tables/down.sql"))
+            .unwrap();
 
     execute_sqlite_sql_file(&pool, &down_sql)
         .await
@@ -837,10 +840,12 @@ async fn generated_custom_names_schema_applies() {
     );
 
     // Verify renamed constraint live: duplicate privilege insert errors on privileges_triple_unique
-    sqlx::query("INSERT INTO privileges (name, resource_type, resource_id) VALUES ('admin', '', '')")
-        .execute(&pool)
-        .await
-        .expect("first privilege insert should succeed");
+    sqlx::query(
+        "INSERT INTO privileges (name, resource_type, resource_id) VALUES ('admin', '', '')",
+    )
+    .execute(&pool)
+    .await
+    .expect("first privilege insert should succeed");
 
     let duplicate_privilege = sqlx::query(
         "INSERT INTO privileges (name, resource_type, resource_id) VALUES ('admin', '', '')",
@@ -859,8 +864,12 @@ async fn generated_custom_names_schema_applies() {
     .unwrap();
 
     assert!(
-        down_sql.find("DROP TABLE IF EXISTS customers_privileges").unwrap_or(usize::MAX)
-            < down_sql.find("DROP TABLE IF EXISTS privileges").unwrap_or(usize::MAX),
+        down_sql
+            .find("DROP TABLE IF EXISTS customers_privileges")
+            .unwrap_or(usize::MAX)
+            < down_sql
+                .find("DROP TABLE IF EXISTS privileges")
+                .unwrap_or(usize::MAX),
         "down.sql should drop customers_privileges before privileges"
     );
 
@@ -874,7 +883,10 @@ async fn generated_custom_names_schema_applies() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(privileges_after_down, 0, "privileges table should be dropped");
+    assert_eq!(
+        privileges_after_down, 0,
+        "privileges table should be dropped"
+    );
 
     println!("Custom names Postgres e2e test passed");
 }
@@ -965,10 +977,12 @@ async fn generated_custom_names_sqlite_applies() {
     );
 
     // Verify renamed constraint live: duplicate privilege insert errors
-    sqlx::query("INSERT INTO privileges (name, resource_type, resource_id) VALUES ('admin', '', '')")
-        .execute(&pool)
-        .await
-        .expect("first privilege insert should succeed");
+    sqlx::query(
+        "INSERT INTO privileges (name, resource_type, resource_id) VALUES ('admin', '', '')",
+    )
+    .execute(&pool)
+    .await
+    .expect("first privilege insert should succeed");
 
     let duplicate_privilege = sqlx::query(
         "INSERT INTO privileges (name, resource_type, resource_id) VALUES ('admin', '', '')",
@@ -981,14 +995,17 @@ async fn generated_custom_names_sqlite_applies() {
     );
 
     // Verify down drops customers_privileges first
-    let down_sql = fs::read_to_string(
-        dir.join("migrations/sqlite/0000000001_rolify_create_tables/down.sql"),
-    )
-    .unwrap();
+    let down_sql =
+        fs::read_to_string(dir.join("migrations/sqlite/0000000001_rolify_create_tables/down.sql"))
+            .unwrap();
 
     assert!(
-        down_sql.find("DROP TABLE IF EXISTS customers_privileges").unwrap_or(usize::MAX)
-            < down_sql.find("DROP TABLE IF EXISTS privileges").unwrap_or(usize::MAX),
+        down_sql
+            .find("DROP TABLE IF EXISTS customers_privileges")
+            .unwrap_or(usize::MAX)
+            < down_sql
+                .find("DROP TABLE IF EXISTS privileges")
+                .unwrap_or(usize::MAX),
         "down.sql should drop customers_privileges before privileges"
     );
 
@@ -1010,7 +1027,10 @@ async fn generated_custom_names_sqlite_applies() {
     .await
     .unwrap();
 
-    assert_eq!(privileges_after_down, 0, "privileges table should be dropped");
+    assert_eq!(
+        privileges_after_down, 0,
+        "privileges table should be dropped"
+    );
     assert_eq!(
         customers_privileges_after_down, 0,
         "customers_privileges table should be dropped"

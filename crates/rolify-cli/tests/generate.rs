@@ -295,8 +295,8 @@ fn diesel_tree_contains_all_engines() {
 
     // Verify down.sql order: join first then roles (D-12)
     for engine in ["postgres", "mysql", "sqlite"] {
-        let down = fs::read_to_string(dir.join(format!("migrations/{engine}/{stem}/down.sql")))
-            .unwrap();
+        let down =
+            fs::read_to_string(dir.join(format!("migrations/{engine}/{stem}/down.sql"))).unwrap();
         // Find the DROP TABLE statements specifically
         let join_drop = down
             .find("DROP TABLE IF EXISTS users_roles")
@@ -430,22 +430,36 @@ fn custom_join_table_flows_into_all_outputs() {
 
     // Verify SQL files have custom names
     for engine in ["postgres", "mysql", "sqlite"] {
-        let up_sql = fs::read_to_string(
-            dir.join(format!(
-                "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
-            ))
-        ).unwrap();
+        let up_sql = fs::read_to_string(dir.join(format!(
+            "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
+        )))
+        .unwrap();
 
-        assert!(up_sql.contains("privileges"), "roles table name missing in {engine} up.sql");
-        assert!(up_sql.contains("customers_privileges"), "join table name missing in {engine} up.sql");
-        assert!(!up_sql.contains("users_roles"), "default join table should not appear in {engine} up.sql");
+        assert!(
+            up_sql.contains("privileges"),
+            "roles table name missing in {engine} up.sql"
+        );
+        assert!(
+            up_sql.contains("customers_privileges"),
+            "join table name missing in {engine} up.sql"
+        );
+        assert!(
+            !up_sql.contains("users_roles"),
+            "default join table should not appear in {engine} up.sql"
+        );
     }
 
     // Verify scaffolding config_example has custom names
     for engine in ["postgres", "mysql", "sqlite"] {
         let config = fs::read_to_string(dir.join(format!("{engine}/config_example.rs"))).unwrap();
-        assert!(config.contains("privileges"), "config missing custom roles table for {engine}");
-        assert!(config.contains("customers_privileges"), "config missing custom join table for {engine}");
+        assert!(
+            config.contains("privileges"),
+            "config missing custom roles table for {engine}"
+        );
+        assert!(
+            config.contains("customers_privileges"),
+            "config missing custom join table for {engine}"
+        );
     }
 }
 
@@ -470,13 +484,15 @@ fn derived_join_default_for_role_user() {
 
     // Verify default join table is users_roles
     for engine in ["postgres", "mysql", "sqlite"] {
-        let up_sql = fs::read_to_string(
-            dir.join(format!(
-                "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
-            ))
-        ).unwrap();
+        let up_sql = fs::read_to_string(dir.join(format!(
+            "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
+        )))
+        .unwrap();
 
-        assert!(up_sql.contains("users_roles"), "default join table should be users_roles for {engine}");
+        assert!(
+            up_sql.contains("users_roles"),
+            "default join table should be users_roles for {engine}"
+        );
     }
 }
 
@@ -590,7 +606,7 @@ fn help_text_is_ascii_only() {
         .clone();
 
     let help_text = String::from_utf8(output).unwrap();
-    
+
     // Verify no em-dash (U+2014) or en-dash (U+2013)
     assert!(
         !help_text.contains('\u{2014}'),
@@ -600,7 +616,7 @@ fn help_text_is_ascii_only() {
         !help_text.contains('\u{2013}'),
         "help text contains en-dash"
     );
-    
+
     // Verify ASCII only
     assert!(
         help_text.is_ascii(),
@@ -700,7 +716,10 @@ fn sqlx_output_matches_diesel_tree() {
     for ((diesel_path, diesel_content), (sqlx_path, sqlx_content)) in
         diesel_files.iter().zip(sqlx_files.iter())
     {
-        assert_eq!(diesel_path, sqlx_path, "path mismatch: {diesel_path:?} vs {sqlx_path:?}");
+        assert_eq!(
+            diesel_path, sqlx_path,
+            "path mismatch: {diesel_path:?} vs {sqlx_path:?}"
+        );
         assert_eq!(
             diesel_content, sqlx_content,
             "content mismatch for {diesel_path:?}: D-11 strict identity violated"

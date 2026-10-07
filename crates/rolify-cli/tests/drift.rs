@@ -1,6 +1,6 @@
 use rolify_cli::args::Backend;
+use rolify_cli::emitters::{mongo::render_mongo, seaorm::render_seaorm};
 use rolify_cli::render::{RenderPlan, render_all};
-use rolify_cli::emitters::{seaorm::render_seaorm, mongo::render_mongo};
 use std::fs;
 
 /// Reads the canonical diesel migration file for the given engine and file.
@@ -121,10 +121,7 @@ fn seaorm_renderer_matches_snapshot() {
     let rendered = render_seaorm(&plan).unwrap();
     let expected = read_expected_snapshot("seaorm_migration.rs");
 
-    assert_eq!(
-        rendered, expected,
-        "SeaORM migration snapshot mismatch"
-    );
+    assert_eq!(rendered, expected, "SeaORM migration snapshot mismatch");
 }
 
 /// Tests `SeaORM` custom names substitution (longest-first rule).
@@ -141,11 +138,26 @@ fn seaorm_renderer_custom_names_longest_first() {
     let rendered = render_seaorm(&plan).unwrap();
 
     // Verify longest-first replacement: join table replaced before roles table
-    assert!(rendered.contains("customers_privileges"), "join table name not found");
-    assert!(rendered.contains("privileges"), "roles table name not found");
-    assert!(!rendered.contains("users_roles"), "default join table should not appear");
-    assert!(!rendered.contains("users_privileges"), "partial replacement detected");
-    assert!(!rendered.contains("customers_roles"), "partial replacement detected");
+    assert!(
+        rendered.contains("customers_privileges"),
+        "join table name not found"
+    );
+    assert!(
+        rendered.contains("privileges"),
+        "roles table name not found"
+    );
+    assert!(
+        !rendered.contains("users_roles"),
+        "default join table should not appear"
+    );
+    assert!(
+        !rendered.contains("users_privileges"),
+        "partial replacement detected"
+    );
+    assert!(
+        !rendered.contains("customers_roles"),
+        "partial replacement detected"
+    );
 }
 
 /// Tests `SeaORM` semantic checklist (Pitfall 7).
@@ -162,8 +174,14 @@ fn seaorm_renderer_semantic_checklist() {
     let rendered = render_seaorm(&plan).unwrap();
 
     // Semantic checklist (Pitfall 7)
-    assert!(rendered.contains("roles_triple_unique"), "unique triple missing");
-    assert!(rendered.contains("idx_roles_resource"), "resource index missing");
+    assert!(
+        rendered.contains("roles_triple_unique"),
+        "unique triple missing"
+    );
+    assert!(
+        rendered.contains("idx_roles_resource"),
+        "resource index missing"
+    );
     assert!(rendered.contains("idx_roles_name"), "name index missing");
     assert!(rendered.contains("DEFAULT ''"), "sentinel default missing");
     assert!(rendered.contains("ON DELETE CASCADE"), "FK cascade missing");
@@ -199,11 +217,8 @@ fn mongo_renderer_matches_snapshot() {
 
     // Reconstruct the full template from rendered parts
     let reconstructed = format!("{role_doc}{index_notes}");
-    
-    assert_eq!(
-        reconstructed, expected,
-        "Mongo template snapshot mismatch"
-    );
+
+    assert_eq!(reconstructed, expected, "Mongo template snapshot mismatch");
 }
 
 /// Tests Mongo custom names substitution.
@@ -220,9 +235,18 @@ fn mongo_renderer_custom_names_substitution() {
     let (role_doc, _) = render_mongo(&plan).unwrap();
 
     // Table name substitution in comments/documentation
-    assert!(role_doc.contains("privileges"), "roles table name not substituted");
-    assert!(role_doc.contains("customers_privileges"), "join table name not substituted");
-    assert!(!role_doc.contains("users_roles"), "default join table should not appear");
+    assert!(
+        role_doc.contains("privileges"),
+        "roles table name not substituted"
+    );
+    assert!(
+        role_doc.contains("customers_privileges"),
+        "join table name not substituted"
+    );
+    assert!(
+        !role_doc.contains("users_roles"),
+        "default join table should not appear"
+    );
 }
 
 /// Tests that malicious identifiers are rejected by `validate_identifier`.
@@ -295,13 +319,28 @@ fn custom_names_postgres_matches_snapshots() {
 
     // Explicit renamed-identifier assertions (T-06-06)
     let content = &up_file.content;
-    assert!(content.contains("privileges_triple_unique"), "renamed triple unique missing");
-    assert!(content.contains("idx_privileges_resource"), "renamed resource index missing");
-    assert!(content.contains("idx_privileges_name"), "renamed name index missing");
+    assert!(
+        content.contains("privileges_triple_unique"),
+        "renamed triple unique missing"
+    );
+    assert!(
+        content.contains("idx_privileges_resource"),
+        "renamed resource index missing"
+    );
+    assert!(
+        content.contains("idx_privileges_name"),
+        "renamed name index missing"
+    );
     assert!(
         content.contains("customers_privileges_pair_unique"),
         "renamed join pair unique missing"
     );
-    assert!(!content.contains("users_privileges"), "partial replacement detected");
-    assert!(!content.contains("customers_roles"), "partial replacement detected");
+    assert!(
+        !content.contains("users_privileges"),
+        "partial replacement detected"
+    );
+    assert!(
+        !content.contains("customers_roles"),
+        "partial replacement detected"
+    );
 }

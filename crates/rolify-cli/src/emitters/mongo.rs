@@ -41,9 +41,9 @@ fn split_template(template: &str) -> (String, String) {
     // Find the start of the INDEX_NOTES const definition
     if let Some(idx) = template.find("pub const INDEX_NOTES:") {
         // Include any preceding blank line in the role_doc
-        let role_doc_end = if idx > 0 && &template[idx-1..idx] == "\n" {
+        let role_doc_end = if idx > 0 && &template[idx - 1..idx] == "\n" {
             // Check if there's a blank line before (two newlines)
-            if idx > 1 && &template[idx-2..idx] == "\n\n" {
+            if idx > 1 && &template[idx - 2..idx] == "\n\n" {
                 idx - 1 // Include the blank line
             } else {
                 idx

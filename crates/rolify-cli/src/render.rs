@@ -6,7 +6,7 @@
 use crate::args::Backend;
 use crate::emitters::{render_mongo, seaorm::render_seaorm, sql::render_sql};
 use crate::error::CliError;
-use crate::templates::scaffolding::{config_example, holder_stub, role_stub, readme};
+use crate::templates::scaffolding::{config_example, holder_stub, readme, role_stub};
 use std::collections::BTreeMap;
 
 /// Input plan for rendering.
