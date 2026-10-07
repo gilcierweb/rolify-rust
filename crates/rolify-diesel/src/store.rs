@@ -9520,8 +9520,6 @@ mod sqlite_async_impl {
 #[cfg(all(test, feature = "postgres"))]
 mod tests {
     use super::*;
-    use crate::dialect::{placeholder, quote_identifier};
-    use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::role::{ResourceId, RoleName};
 
     #[cfg(feature = "postgres")]
@@ -9586,13 +9584,13 @@ mod store_tests {
     #[test]
     #[should_panic(expected = "role table name must pass validation")]
     fn with_tables_rejects_role_table_quote_breakout() {
-        DieselStore::with_tables("x\"; DROP TABLE users; --", "users_roles");
+        let _ = DieselStore::with_tables("x\"; DROP TABLE users; --", "users_roles");
     }
 
     #[test]
     #[should_panic(expected = "join table name must pass validation")]
     fn with_tables_rejects_join_table_quote_breakout() {
-        DieselStore::with_tables("roles", "links\"; DELETE FROM roles WHERE 1=1; --");
+        let _ = DieselStore::with_tables("roles", "links\"; DELETE FROM roles WHERE 1=1; --");
     }
 
     #[test]
