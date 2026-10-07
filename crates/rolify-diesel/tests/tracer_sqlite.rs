@@ -7,19 +7,19 @@
 
 mod support;
 
-use diesel::Connection;
 use diesel::RunQueryDsl;
 use diesel_migrations::MigrationHarness;
 use rolify_core::config::RolifyConfig;
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
-use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::store::RoleStore;
 use rolify_diesel::rows::CountRow;
 use rolify_diesel::{DieselStore, MIGRATIONS};
 
 use crate::support::{reset_roles, setup_fixtures, sqlite_conn};
 
+#[allow(clippy::too_many_lines)] // linear grant → check → revoke lifecycle tracer
 #[test]
 fn tracer_grant_check_revoke_lifecycle() {
     let mut conn = sqlite_conn();

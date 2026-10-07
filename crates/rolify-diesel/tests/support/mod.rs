@@ -1,10 +1,15 @@
 //! Test support for `rolify-diesel` integration tests.
-//!
+
+// Shared toolbox pattern (how the harness modules work): every integration
+// binary compiles this module, but each uses a feature-dependent subset of
+// it. Per-item cfg gates mirror how the sqlx support module is used.
+#![allow(dead_code, unused_imports, clippy::doc_markdown)]
+
 //! Provides:
-//! - Postgres testcontainer bootstrap (postgres:17, SyncRunner, built-in readiness)
-//! - MySQL testcontainer bootstrap (mysql:8.4, SyncRunner, built-in readiness)
-//! - SQLite in-memory connection helper
-//! - Shared OnceLock container per test binary
+//! - Postgres testcontainer bootstrap (`postgres:17`, `SyncRunner`, built-in readiness)
+//! - `MySQL` testcontainer bootstrap (`mysql:8.4`, `SyncRunner`, built-in readiness)
+//! - `SQLite` in-memory connection helper
+//! - Shared `OnceLock` container per test binary
 //! - Schema bootstrap (run migrations + fixture tables)
 //! - Query counting instrumentation hook (TEST-05)
 //! - Multi-pair fixture setup (mirrors `rolify/spec/support/schema.rb`)
@@ -24,10 +29,8 @@ use rolify_diesel::rows::IdRow;
 
 #[cfg(feature = "postgres")]
 use diesel::pg::PgConnection;
-#[cfg(feature = "postgres")]
-use testcontainers::runners::AsyncRunner;
 #[cfg(any(feature = "postgres", feature = "mysql"))]
-use testcontainers::{ImageExt, runners::SyncRunner};
+use testcontainers::ImageExt;
 #[cfg(feature = "postgres")]
 use testcontainers_modules::postgres;
 
@@ -86,15 +89,15 @@ impl Drop for SuiteGuard {
     }
 }
 
-/// Shared Postgres container per test binary (SyncRunner).
+/// Shared Postgres container per test binary (`SyncRunner`).
 #[cfg(feature = "postgres")]
 static PG_CONTAINER: OnceLock<testcontainers::Container<postgres::Postgres>> = OnceLock::new();
 
-/// Shared MySQL container per test binary (SyncRunner).
+/// Shared MySQL container per test binary (`SyncRunner`).
 #[cfg(feature = "mysql")]
 static MYSQL_CONTAINER: OnceLock<testcontainers::Container<mysql::Mysql>> = OnceLock::new();
 
-/// Get or start the shared Postgres container (SyncRunner).
+/// Get or start the shared Postgres container (`SyncRunner`).
 #[cfg(feature = "postgres")]
 pub fn pg_container() -> &'static testcontainers::Container<postgres::Postgres> {
     PG_CONTAINER.get_or_init(|| {
@@ -105,7 +108,7 @@ pub fn pg_container() -> &'static testcontainers::Container<postgres::Postgres> 
     })
 }
 
-/// Get or start the shared Postgres container (AsyncRunner).
+/// Get or start the shared Postgres container (`AsyncRunner`).
 #[cfg(feature = "postgres")]
 static PG_CONTAINER_ASYNC: OnceCell<testcontainers::ContainerAsync<postgres::Postgres>> =
     OnceCell::const_new();
@@ -133,7 +136,7 @@ pub async fn pg_container_port() -> u16 {
         .expect("Postgres port mapping")
 }
 
-/// Get or start the shared MySQL container.
+/// Get or start the shared `MySQL` container.
 #[cfg(feature = "mysql")]
 pub fn mysql_container() -> &'static testcontainers::Container<mysql::Mysql> {
     MYSQL_CONTAINER.get_or_init(|| {
@@ -186,9 +189,9 @@ where
         .expect("embedded migrations apply cleanly");
 }
 
-/// Reset role state (truncate roles + users_roles) for test isolation.
+/// Reset role state (truncate roles + `users_roles`) for test isolation.
 ///
-/// Uses TRUNCATE ... CASCADE on Postgres/MySQL, DELETE on SQLite.
+/// Uses TRUNCATE ... CASCADE on Postgres/`MySQL`, DELETE on `SQLite`.
 /// Does NOT touch fixture tables (users, customers, forums, etc.).
 pub fn reset_roles(conn: &mut Conn) {
     #[cfg(feature = "postgres")]
@@ -234,15 +237,15 @@ pub fn reset_roles(conn: &mut Conn) {
 /// and signature are unchanged, so every call site keeps working.
 ///
 /// Creates:
-/// - `users` (id BIGSERIAL/INTEGER PK, rolify_type VARCHAR, name VARCHAR)
-/// - `customers` (id BIGSERIAL/INTEGER PK, rolify_type VARCHAR, name VARCHAR)
+/// - `users` (id BIGSERIAL/INTEGER PK, `rolify_type` VARCHAR, name VARCHAR)
+/// - `customers` (id BIGSERIAL/INTEGER PK, `rolify_type` VARCHAR, name VARCHAR)
 /// - `forums` (id BIGSERIAL/INTEGER PK, name VARCHAR)
 /// - `groups` (id BIGSERIAL/INTEGER PK, name VARCHAR)
-/// - `teams` (team_code VARCHAR PK — string PK per schema.rb)
-/// - `organizations` (id BIGSERIAL/INTEGER PK, type VARCHAR — STI family)
+/// - `teams` (`team_code` VARCHAR PK — string PK per schema.rb)
+/// - `organizations` (id BIGSERIAL/INTEGER PK, type VARCHAR — `STI` family)
 /// - `rights` (id BIGSERIAL/INTEGER PK, name VARCHAR — for custom pairs)
-/// - `moderators_rights` (custom join: moderator_id + right_id)
-/// - `admin_rights` (custom join: admin_id + right_id)
+/// - `moderators_rights` (custom join: `moderator_id` + `right_id`)
+/// - `admin_rights` (custom join: `admin_id` + `right_id`)
 ///
 /// These are the consumer tables the suite expects. The store's
 /// `holder_table` for the default pair is `users`.
@@ -269,7 +272,7 @@ pub fn setup_fixtures(conn: &mut Conn) {
 
 /// Reset consumer fixture tables for test isolation.
 ///
-/// TRUNCATEs (Postgres/MySQL) or DELETEs (SQLite) the nine fixture
+/// TRUNCATEs (Postgres/`MySQL`) or DELETEs (`SQLite`) the nine fixture
 /// tables `setup_fixtures` creates. Role state is NOT touched (use
 /// `reset_roles` for that). Fixture tables carry no foreign keys, so
 /// no CASCADE is needed. Identity sequences restart where the engine
@@ -330,9 +333,8 @@ pub fn insert_holder(conn: &mut Conn, table: &str, holder_type: &str, name: &str
     #[cfg(feature = "postgres")]
     {
         // Use RETURNING id in the INSERT (works for integer PK tables like forums, groups, etc.)
-        let row: IdRow = diesel::sql_query(&format!(
-            "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
-            table
+        let row: IdRow = diesel::sql_query(format!(
+            "INSERT INTO {table} (rolify_type, name) VALUES ($1, $2) RETURNING id"
         ))
         .bind::<diesel::sql_types::Text, _>(holder_type)
         .bind::<diesel::sql_types::Text, _>(name)
@@ -358,9 +360,8 @@ pub fn insert_holder(conn: &mut Conn, table: &str, holder_type: &str, name: &str
     }
     #[cfg(feature = "sqlite")]
     {
-        diesel::sql_query(&format!(
-            "INSERT INTO {} (rolify_type, name) VALUES (?, ?)",
-            table
+        diesel::sql_query(format!(
+            "INSERT INTO {table} (rolify_type, name) VALUES (?, ?)",
         ))
         .bind::<diesel::sql_types::Text, _>(holder_type)
         .bind::<diesel::sql_types::Text, _>(name)
@@ -383,9 +384,8 @@ pub fn insert_resource(
     #[cfg(feature = "postgres")]
     {
         // Use RETURNING id in the INSERT (works for integer PK tables like forums, groups, etc.)
-        let row: IdRow = diesel::sql_query(&format!(
-            "INSERT INTO {} (name) VALUES ($1) RETURNING id",
-            table
+        let row: IdRow = diesel::sql_query(format!(
+            "INSERT INTO {table} (name) VALUES ($1) RETURNING id"
         ))
         .bind::<diesel::sql_types::Text, _>(name)
         .get_result(conn)
@@ -394,7 +394,7 @@ pub fn insert_resource(
     }
     #[cfg(feature = "mysql")]
     {
-        diesel::sql_query(&format!("INSERT INTO {} (name) VALUES (?)", table))
+        diesel::sql_query(format!("INSERT INTO {table} (name) VALUES (?)"))
             .bind::<diesel::sql_types::Text, _>(name)
             .execute(conn)
             .expect("insert resource");
@@ -405,7 +405,7 @@ pub fn insert_resource(
     }
     #[cfg(feature = "sqlite")]
     {
-        diesel::sql_query(&format!("INSERT INTO {} (name) VALUES (?)", table))
+        diesel::sql_query(format!("INSERT INTO {table} (name) VALUES (?)"))
             .bind::<diesel::sql_types::Text, _>(name)
             .execute(conn)
             .expect("insert resource");
@@ -977,9 +977,8 @@ pub mod async_support {
         holder_type: &str,
         name: &str,
     ) -> ResourceId {
-        let row: rolify_diesel::rows::IdRow = diesel::sql_query(&format!(
-            "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
-            table
+        let row: rolify_diesel::rows::IdRow = diesel::sql_query(format!(
+            "INSERT INTO {table} (rolify_type, name) VALUES ($1, $2) RETURNING id"
         ))
         .bind::<diesel::sql_types::Text, _>(holder_type)
         .bind::<diesel::sql_types::Text, _>(name)
@@ -995,9 +994,8 @@ pub mod async_support {
         table: &str,
         name: &str,
     ) -> rolify_core::store::ResourceKey {
-        let row: rolify_diesel::rows::IdRow = diesel::sql_query(&format!(
-            "INSERT INTO {} (name) VALUES ($1) RETURNING id",
-            table
+        let row: rolify_diesel::rows::IdRow = diesel::sql_query(format!(
+            "INSERT INTO {table} (name) VALUES ($1) RETURNING id"
         ))
         .bind::<diesel::sql_types::Text, _>(name)
         .get_result(conn)
@@ -1142,7 +1140,7 @@ pub mod async_mysql_support {
         table: &str,
         name: &str,
     ) -> rolify_core::store::ResourceKey {
-        diesel::sql_query(&format!("INSERT INTO {} (name) VALUES (?)", table))
+        diesel::sql_query(format!("INSERT INTO {table} (name) VALUES (?)"))
             .bind::<diesel::sql_types::Text, _>(name)
             .execute(conn)
             .await
@@ -1288,7 +1286,7 @@ pub mod async_sqlite_support {
         table: &str,
         name: &str,
     ) -> rolify_core::store::ResourceKey {
-        diesel::sql_query(&format!("INSERT INTO {} (name) VALUES (?)", table))
+        diesel::sql_query(format!("INSERT INTO {table} (name) VALUES (?)"))
             .bind::<diesel::sql_types::Text, _>(name)
             .execute(conn)
             .await

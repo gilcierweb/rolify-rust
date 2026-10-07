@@ -139,8 +139,8 @@ mod tests {
     fn role_row_to_record_global() {
         let row = RoleRow {
             name: "admin".into(),
-            resource_type: "".into(),
-            resource_id: "".into(),
+            resource_type: String::new(),
+            resource_id: String::new(),
         };
         let record = row.to_record();
         assert!(record.is_global());
@@ -152,7 +152,7 @@ mod tests {
         let row = RoleRow {
             name: "manager".into(),
             resource_type: "Forum".into(),
-            resource_id: "".into(),
+            resource_id: String::new(),
         };
         let record = row.to_record();
         assert!(record.is_class_scoped_to("Forum"));

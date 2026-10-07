@@ -45,6 +45,7 @@ async fn checkout(pool: &AsyncPgPool) -> AsyncPgPooledConn<'_> {
     pool_ref.get().await.expect("pool checkout")
 }
 
+#[allow(clippy::too_many_lines)] // linear grant → check → revoke lifecycle tracer
 #[tokio::test(flavor = "multi_thread")]
 async fn tracer_grant_check_revoke_lifecycle() {
     // 1. Start container and get bb8 pool

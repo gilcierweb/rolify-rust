@@ -37,6 +37,7 @@ use crate::support::async_support::{
     run_migrations_async_direct, setup_fixtures_async,
 };
 
+#[allow(clippy::too_many_lines)] // linear 4-leg executor matrix
 #[tokio::test(flavor = "multi_thread")]
 async fn executor_uniformity_bare_pool_tx_commit_rollback() {
     run_migrations_async_direct().await;
@@ -87,16 +88,16 @@ async fn executor_uniformity_bare_pool_tx_commit_rollback() {
     // --- LEG 2: bb8 pool checkout (reborrow of the inner connection) ---
     let pool = pg_pool_async().await;
     let mut pooled = pool.get().await.expect("pool checkout");
-    setup_fixtures_async(&mut *pooled).await;
-    reset_roles_async(&mut *pooled).await;
+    setup_fixtures_async(&mut pooled).await;
+    reset_roles_async(&mut pooled).await;
 
     let mut store_pooled = DieselStore::new(&config);
     let user_id_pooled =
-        insert_holder_async(&mut *pooled, "users", "User", "executor_user_pooled").await;
+        insert_holder_async(&mut pooled, "users", "User", "executor_user_pooled").await;
 
     let manager = store_pooled
         .find_or_create_by(
-            &mut *pooled,
+            &mut pooled,
             &RoleName::from("manager"),
             ResourceRef::Class("Forum"),
         )
@@ -104,7 +105,7 @@ async fn executor_uniformity_bare_pool_tx_commit_rollback() {
         .expect("pooled: find_or_create_by class manager");
     assert!(manager.is_class_scoped_to("Forum"));
     let added = store_pooled
-        .add(&mut *pooled, &user_id_pooled, &manager)
+        .add(&mut pooled, &user_id_pooled, &manager)
         .await
         .expect("pooled: add class manager");
     assert!(added, "pooled: first add creates link");
@@ -124,7 +125,7 @@ async fn executor_uniformity_bare_pool_tx_commit_rollback() {
         .expect("pooled: where_ verify");
     assert_eq!(roles.len(), 1, "pooled: role visible cross-connection");
     assert!(roles[0].is_class_scoped_to("Forum"));
-    reset_roles_async(&mut *pooled).await;
+    reset_roles_async(&mut pooled).await;
 
     // --- LEG 3: Caller-owned transaction (commit, mid-flight read) ---
     let mut tx_conn = pg_conn_async().await;

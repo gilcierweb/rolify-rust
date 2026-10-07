@@ -19,13 +19,13 @@ mod tests {
     use diesel::Connection;
     use diesel::RunQueryDsl;
     use pretty_assertions::assert_eq;
-    use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
+    use rolify_core::catalog::RoleCatalogQuery;
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName, RoleRecord};
     use rolify_core::store::{ResourceKey, ResourceStore, RoleStore};
+    use rolify_diesel::DieselStore;
     use rolify_diesel::rows::IdRow;
-    use rolify_diesel::{DieselStore, MIGRATIONS};
 
     use crate::support::{
         insert_holder, insert_resource, pg_conn, pg_container, reset_fixtures, reset_roles,
@@ -372,7 +372,10 @@ mod tests {
                 false,
             )
             .unwrap();
-        let non_strict_ids: HashSet<_> = non_strict.iter().map(|id| id.as_str()).collect();
+        let non_strict_ids: HashSet<_> = non_strict
+            .iter()
+            .map(rolify_core::role::ResourceId::as_str)
+            .collect();
         assert_eq!(non_strict.len(), 2);
         assert!(non_strict_ids.contains("1"));
         assert!(non_strict_ids.contains("2"));
@@ -389,7 +392,10 @@ mod tests {
                 true,
             )
             .unwrap();
-        let strict_ids: HashSet<_> = strict.iter().map(|id| id.as_str()).collect();
+        let strict_ids: HashSet<_> = strict
+            .iter()
+            .map(rolify_core::role::ResourceId::as_str)
+            .collect();
         assert_eq!(strict.len(), 1);
         assert!(strict_ids.contains("2"));
         assert!(!strict_ids.contains("1"));
@@ -427,7 +433,10 @@ mod tests {
 
         // all_holders should return all users including never-rolified
         let all = store.all_holders(&mut conn, &["User"]).unwrap();
-        let all_ids: HashSet<_> = all.iter().map(|id| id.as_str()).collect();
+        let all_ids: HashSet<_> = all
+            .iter()
+            .map(rolify_core::role::ResourceId::as_str)
+            .collect();
 
         // Should have at least 3 users (original + 2 never_rolified)
         assert!(all.len() >= 3);
@@ -708,7 +717,7 @@ mod tests {
         let in_results = custom_store
             .in_list(
                 &mut conn,
-                &[forum_key.clone()],
+                std::slice::from_ref(&forum_key),
                 &holder,
                 &[RoleName::from("moderator")],
             )

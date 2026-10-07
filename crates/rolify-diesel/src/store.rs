@@ -222,7 +222,9 @@ fn split_where_any_batches<'batches, 'data>(
 
 #[cfg(all(feature = "postgres", feature = "sync"))]
 mod pg_impl {
-    use super::*;
+    use super::{
+        DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL, split_where_any_batches,
+    };
     use diesel::Connection;
     use diesel::RunQueryDsl;
     use diesel::pg::PgConnection;
@@ -261,8 +263,8 @@ mod pg_impl {
             .bind::<Text, _>(resource_type)
             .bind::<Text, _>(resource_id);
         match insert_q.execute(conn) {
-            Ok(_) => {}
-            Err(diesel::result::Error::DatabaseError(
+            Ok(_)
+            | Err(diesel::result::Error::DatabaseError(
                 diesel::result::DatabaseErrorKind::UniqueViolation,
                 _,
             )) => {}
@@ -413,6 +415,7 @@ mod pg_impl {
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
+        #[allow(clippy::too_many_lines)] // typed bind ladder enumerates bind chains by arity
         fn where_any(
             &self,
             conn: &mut Self::Conn,
@@ -449,22 +452,22 @@ mod pg_impl {
                     match &query.filter {
                         rolify_core::query::ResourceFilter::Global => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                         }
                         rolify_core::query::ResourceFilter::Class(type_name) => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
                         }
                         rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
                             all_values.push(resource_id.as_str().to_owned());
                         }
@@ -857,25 +860,27 @@ mod pg_impl {
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
+            // `?` cannot replace this match: the fn returns a future,
+            // so the error arm must wrap the error in one.
+            #[allow(clippy::question_mark)]
             let role_record =
-                match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
+                match find_or_create_by_triple(conn, &self.role_table, &role.name, rt, rid) {
                     Ok(r) => r,
                     Err(e) => return async move { Err(e) },
                 };
 
+            // Same future-returning-fn shape as `add`: `?` cannot
+            // produce the early-returned future.
+            #[allow(clippy::question_mark)]
             let role_id = match get_role_id(
                 conn,
                 &self.role_table,
                 &role_record.name,
-                role_record
-                    .resource_type
-                    .as_ref()
-                    .map(|s| s.as_str())
-                    .unwrap_or_default(),
+                role_record.resource_type.as_deref().unwrap_or_default(),
                 role_record
                     .resource_id
                     .as_ref()
-                    .map(|r| r.as_str())
+                    .map(ResourceId::as_str)
                     .unwrap_or_default(),
             ) {
                 Ok(id) => id,
@@ -906,11 +911,7 @@ mod pg_impl {
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
             let holder_id = holder.as_str().to_owned();
             let name_owned = name.as_str().to_owned();
-            let target_owned = match target {
-                RemovalTarget::NameOnly => RemovalTarget::NameOnly,
-                RemovalTarget::TypeSweep(t) => RemovalTarget::TypeSweep(t),
-                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, id),
-            };
+            let target_owned = target;
             let role_table = self.role_table.clone();
             let join_table = self.join_table.clone();
 
@@ -980,13 +981,10 @@ mod pg_impl {
                                 conn,
                                 &role_table,
                                 &role.name,
-                                role.resource_type
-                                    .as_ref()
-                                    .map(|s| s.as_str())
-                                    .unwrap_or_default(),
+                                role.resource_type.as_deref().unwrap_or_default(),
                                 role.resource_id
                                     .as_ref()
-                                    .map(|r| r.as_str())
+                                    .map(ResourceId::as_str)
                                     .unwrap_or_default(),
                             )?;
                             let sweep_sql =
@@ -1037,6 +1035,15 @@ mod pg_impl {
             holder: &ResourceId,
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+            #[derive(diesel::deserialize::QueryableByName)]
+            #[allow(dead_code)]
+            struct ExistsRow {
+                // Named exactly like the `AS dummy` projection: by-name
+                // decoding matches on it (an underscore prefix broke the
+                // match and made `exists` always false).
+                #[diesel(sql_type = diesel::sql_types::Integer)]
+                dummy: i32,
+            }
             let holder_id = holder.as_str();
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
@@ -1054,15 +1061,6 @@ mod pg_impl {
                 scope_cond = scope_cond,
                 holder_ph = placeholder(1),
             );
-            #[derive(diesel::deserialize::QueryableByName)]
-            #[allow(dead_code)]
-            struct ExistsRow {
-                // Named exactly like the `AS dummy` projection: by-name
-                // decoding matches on it (an underscore prefix broke the
-                // match and made `exists` always false).
-                #[diesel(sql_type = diesel::sql_types::Integer)]
-                dummy: i32,
-            }
             let q = diesel::sql_query(sql).bind::<Text, _>(holder_id);
             let found = q.get_result::<ExistsRow>(conn).is_ok();
             async move { Ok(found) }
@@ -1088,6 +1086,7 @@ mod pg_impl {
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
+        #[allow(clippy::too_many_lines)] // per-arity typed bind dispatch for the holder finder
         fn holders_where(
             &self,
             conn: &mut Self::Conn,
@@ -1119,7 +1118,7 @@ mod pg_impl {
 
             let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> =
-                (1..1 + holder_types.len()).map(placeholder).collect();
+                (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -1150,13 +1149,13 @@ mod pg_impl {
                 match &query.filter {
                     rolify_core::query::ResourceFilter::Global => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Class(type_name) => {
                         all_values.push(name.to_owned());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         all_values.push(name.to_owned());
@@ -1171,22 +1170,22 @@ mod pg_impl {
                 match &query.filter {
                     rolify_core::query::ResourceFilter::Global => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Class(type_name) => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
                         all_values.push(resource_id.as_str().to_owned());
                     }
@@ -1313,15 +1312,12 @@ mod pg_impl {
 
             let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> =
-                (1..1 + holder_types.len()).map(placeholder).collect();
+                (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
                 "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
-                holder_table = holder_table,
-                type_filter = type_filter,
             );
-
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
@@ -1357,6 +1353,7 @@ mod pg_impl {
             }
         }
 
+        #[allow(clippy::too_many_lines)] // catalog filter composition with per-arity typed binds
         fn roles_matching(
             &self,
             conn: &mut Self::Conn,
@@ -1395,7 +1392,7 @@ mod pg_impl {
                 .replace("{scope_filter}", &scope_filter)
                 .replace("{holder_filter}", &holder_filter);
 
-            let mut type_vals: Vec<&str> = query.types.iter().map(|s| *s).collect();
+            let mut type_vals: Vec<&str> = query.types.to_vec();
             if let Some(name) = query.name {
                 type_vals.push(name.as_str());
             }
@@ -1503,7 +1500,7 @@ mod pg_impl {
             let mut all_keys: Vec<ResourceKey> = Vec::new();
 
             // 1. Instance-scoped roles: direct query on roles table
-            let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> = (1..=types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
             let name_ph = placeholder(type_placeholders.len() + 1);
 
@@ -1573,6 +1570,7 @@ mod pg_impl {
             async move { Ok(all_keys) }
         }
 
+        #[allow(clippy::too_many_lines)] // typed bind ladder for the candidate coverage read
         fn in_list(
             &self,
             conn: &mut Self::Conn,
@@ -1590,7 +1588,7 @@ mod pg_impl {
             // scopeless (global/class) row, with no resource-type check.
             // Candidate keys (not row keys) are returned, so scopeless
             // covering rows never reach `to_key`.
-            let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
+            let name_placeholders: Vec<String> = (2..=names.len() + 1).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
 
             let sql = format!(
@@ -1702,7 +1700,9 @@ mod pg_impl {
 
 #[cfg(all(feature = "mysql", feature = "sync"))]
 mod mysql_impl {
-    use super::*;
+    use super::{
+        DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL, split_where_any_batches,
+    };
     use diesel::Connection;
     use diesel::RunQueryDsl;
     use diesel::mysql::MysqlConnection;
@@ -1741,8 +1741,8 @@ mod mysql_impl {
             .bind::<Text, _>(resource_type)
             .bind::<Text, _>(resource_id);
         match insert_q.execute(conn) {
-            Ok(_) => {}
-            Err(diesel::result::Error::DatabaseError(
+            Ok(_)
+            | Err(diesel::result::Error::DatabaseError(
                 diesel::result::DatabaseErrorKind::UniqueViolation,
                 _,
             )) => {}
@@ -1891,6 +1891,7 @@ mod mysql_impl {
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
+        #[allow(clippy::too_many_lines)] // typed bind ladder enumerates bind chains by arity
         fn where_any(
             &self,
             conn: &mut Self::Conn,
@@ -1927,22 +1928,22 @@ mod mysql_impl {
                     match &query.filter {
                         rolify_core::query::ResourceFilter::Global => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                         }
                         rolify_core::query::ResourceFilter::Class(type_name) => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
                         }
                         rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
                             all_values.push(resource_id.as_str().to_owned());
                         }
@@ -2335,25 +2336,27 @@ mod mysql_impl {
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
+            // `?` cannot replace this match: the fn returns a future,
+            // so the error arm must wrap the error in one.
+            #[allow(clippy::question_mark)]
             let role_record =
-                match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
+                match find_or_create_by_triple(conn, &self.role_table, &role.name, rt, rid) {
                     Ok(r) => r,
                     Err(e) => return async move { Err(e) },
                 };
 
+            // Same future-returning-fn shape as `add`: `?` cannot
+            // produce the early-returned future.
+            #[allow(clippy::question_mark)]
             let role_id = match get_role_id(
                 conn,
                 &self.role_table,
                 &role_record.name,
-                role_record
-                    .resource_type
-                    .as_ref()
-                    .map(|s| s.as_str())
-                    .unwrap_or_default(),
+                role_record.resource_type.as_deref().unwrap_or_default(),
                 role_record
                     .resource_id
                     .as_ref()
-                    .map(|r| r.as_str())
+                    .map(ResourceId::as_str)
                     .unwrap_or_default(),
             ) {
                 Ok(id) => id,
@@ -2384,11 +2387,7 @@ mod mysql_impl {
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
             let holder_id = holder.as_str().to_owned();
             let name_owned = name.as_str().to_owned();
-            let target_owned = match target {
-                RemovalTarget::NameOnly => RemovalTarget::NameOnly,
-                RemovalTarget::TypeSweep(t) => RemovalTarget::TypeSweep(t),
-                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, id),
-            };
+            let target_owned = target;
             let role_table = self.role_table.clone();
             let join_table = self.join_table.clone();
 
@@ -2458,13 +2457,10 @@ mod mysql_impl {
                                 conn,
                                 &role_table,
                                 &role.name,
-                                role.resource_type
-                                    .as_ref()
-                                    .map(|s| s.as_str())
-                                    .unwrap_or_default(),
+                                role.resource_type.as_deref().unwrap_or_default(),
                                 role.resource_id
                                     .as_ref()
-                                    .map(|r| r.as_str())
+                                    .map(ResourceId::as_str)
                                     .unwrap_or_default(),
                             )?;
                             let sweep_sql =
@@ -2515,6 +2511,15 @@ mod mysql_impl {
             holder: &ResourceId,
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+            #[derive(diesel::deserialize::QueryableByName)]
+            #[allow(dead_code)]
+            struct ExistsRow {
+                // Named exactly like the `AS dummy` projection: by-name
+                // decoding matches on it (an underscore prefix broke the
+                // match and made `exists` always false).
+                #[diesel(sql_type = diesel::sql_types::Integer)]
+                dummy: i32,
+            }
             let holder_id = holder.as_str();
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
@@ -2531,11 +2536,6 @@ mod mysql_impl {
                 join_table = self.join_table,
                 scope_cond = scope_cond,
             );
-            #[derive(diesel::deserialize::QueryableByName)]
-            struct ExistsRow {
-                #[diesel(sql_type = diesel::sql_types::Integer)]
-                dummy: i32,
-            }
             let q = diesel::sql_query(sql).bind::<Text, _>(holder_id);
             let found = q.get_result::<ExistsRow>(conn).is_ok();
             async move { Ok(found) }
@@ -2560,6 +2560,7 @@ mod mysql_impl {
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
+        #[allow(clippy::too_many_lines)] // per-arity typed bind dispatch for the holder finder
         fn holders_where(
             &self,
             conn: &mut Self::Conn,
@@ -2591,7 +2592,7 @@ mod mysql_impl {
 
             let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> =
-                (1..1 + holder_types.len()).map(placeholder).collect();
+                (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -2622,13 +2623,13 @@ mod mysql_impl {
                 match &query.filter {
                     rolify_core::query::ResourceFilter::Global => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Class(type_name) => {
                         all_values.push(name.to_owned());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         all_values.push(name.to_owned());
@@ -2643,22 +2644,22 @@ mod mysql_impl {
                 match &query.filter {
                     rolify_core::query::ResourceFilter::Global => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Class(type_name) => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
                         all_values.push(resource_id.as_str().to_owned());
                     }
@@ -2785,7 +2786,7 @@ mod mysql_impl {
 
             let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> =
-                (1..1 + holder_types.len()).map(placeholder).collect();
+                (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -2829,6 +2830,7 @@ mod mysql_impl {
             }
         }
 
+        #[allow(clippy::too_many_lines)] // catalog filter composition with per-arity typed binds
         fn roles_matching(
             &self,
             conn: &mut Self::Conn,
@@ -2867,7 +2869,7 @@ mod mysql_impl {
                 .replace("{scope_filter}", &scope_filter)
                 .replace("{holder_filter}", &holder_filter);
 
-            let mut type_vals: Vec<&str> = query.types.iter().map(|s| *s).collect();
+            let mut type_vals: Vec<&str> = query.types.to_vec();
             if let Some(name) = query.name {
                 type_vals.push(name.as_str());
             }
@@ -2974,7 +2976,7 @@ mod mysql_impl {
             let mut all_keys: Vec<ResourceKey> = Vec::new();
 
             // 1. Instance-scoped roles: direct query on roles table
-            let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> = (1..=types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
             let name_ph = placeholder(type_placeholders.len() + 1);
 
@@ -3046,6 +3048,7 @@ mod mysql_impl {
             async move { Ok(all_keys) }
         }
 
+        #[allow(clippy::too_many_lines)] // typed bind ladder for the candidate coverage read
         fn in_list(
             &self,
             conn: &mut Self::Conn,
@@ -3063,7 +3066,7 @@ mod mysql_impl {
             // scopeless (global/class) row, with no resource-type check.
             // Candidate keys (not row keys) are returned, so scopeless
             // covering rows never reach `to_key`.
-            let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
+            let name_placeholders: Vec<String> = (2..=names.len() + 1).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
             let sql = format!(
                 "SELECT DISTINCT role_row.name AS name, role_row.resource_type, role_row.resource_id \
@@ -3173,7 +3176,9 @@ mod mysql_impl {
 
 #[cfg(all(feature = "sqlite", feature = "sync"))]
 mod sqlite_impl {
-    use super::*;
+    use super::{
+        DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL, split_where_any_batches,
+    };
     use diesel::Connection;
     use diesel::RunQueryDsl;
     use diesel::sql_types::{BigInt, Text};
@@ -3212,8 +3217,8 @@ mod sqlite_impl {
             .bind::<Text, _>(resource_type)
             .bind::<Text, _>(resource_id);
         match insert_q.execute(conn) {
-            Ok(_) => {}
-            Err(diesel::result::Error::DatabaseError(
+            Ok(_)
+            | Err(diesel::result::Error::DatabaseError(
                 diesel::result::DatabaseErrorKind::UniqueViolation,
                 _,
             )) => {}
@@ -3362,6 +3367,7 @@ mod sqlite_impl {
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
+        #[allow(clippy::too_many_lines)] // typed bind ladder enumerates bind chains by arity
         fn where_any(
             &self,
             conn: &mut Self::Conn,
@@ -3398,22 +3404,22 @@ mod sqlite_impl {
                     match &query.filter {
                         rolify_core::query::ResourceFilter::Global => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                         }
                         rolify_core::query::ResourceFilter::Class(type_name) => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
                         }
                         rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                             all_values.push(name.to_owned());
-                            all_values.push("".to_owned());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
-                            all_values.push("".to_owned());
+                            all_values.push(String::new());
                             all_values.push(type_name.to_string());
                             all_values.push(resource_id.as_str().to_owned());
                         }
@@ -3806,25 +3812,27 @@ mod sqlite_impl {
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
+            // `?` cannot replace this match: the fn returns a future,
+            // so the error arm must wrap the error in one.
+            #[allow(clippy::question_mark)]
             let role_record =
-                match find_or_create_by_triple(conn, &self.role_table, &role.name, &rt, &rid) {
+                match find_or_create_by_triple(conn, &self.role_table, &role.name, rt, rid) {
                     Ok(r) => r,
                     Err(e) => return async move { Err(e) },
                 };
 
+            // Same future-returning-fn shape as `add`: `?` cannot
+            // produce the early-returned future.
+            #[allow(clippy::question_mark)]
             let role_id = match get_role_id(
                 conn,
                 &self.role_table,
                 &role_record.name,
-                role_record
-                    .resource_type
-                    .as_ref()
-                    .map(|s| s.as_str())
-                    .unwrap_or_default(),
+                role_record.resource_type.as_deref().unwrap_or_default(),
                 role_record
                     .resource_id
                     .as_ref()
-                    .map(|r| r.as_str())
+                    .map(ResourceId::as_str)
                     .unwrap_or_default(),
             ) {
                 Ok(id) => id,
@@ -3855,11 +3863,7 @@ mod sqlite_impl {
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
             let holder_id = holder.as_str().to_owned();
             let name_owned = name.as_str().to_owned();
-            let target_owned = match target {
-                RemovalTarget::NameOnly => RemovalTarget::NameOnly,
-                RemovalTarget::TypeSweep(t) => RemovalTarget::TypeSweep(t),
-                RemovalTarget::Exact(t, id) => RemovalTarget::Exact(t, id),
-            };
+            let target_owned = target;
             let role_table = self.role_table.clone();
             let join_table = self.join_table.clone();
 
@@ -3929,13 +3933,10 @@ mod sqlite_impl {
                                 conn,
                                 &role_table,
                                 &role.name,
-                                role.resource_type
-                                    .as_ref()
-                                    .map(|s| s.as_str())
-                                    .unwrap_or_default(),
+                                role.resource_type.as_deref().unwrap_or_default(),
                                 role.resource_id
                                     .as_ref()
-                                    .map(|r| r.as_str())
+                                    .map(ResourceId::as_str)
                                     .unwrap_or_default(),
                             )?;
                             let sweep_sql =
@@ -3986,6 +3987,15 @@ mod sqlite_impl {
             holder: &ResourceId,
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+            #[derive(diesel::deserialize::QueryableByName)]
+            #[allow(dead_code)]
+            struct ExistsRow {
+                // Named exactly like the `AS dummy` projection: by-name
+                // decoding matches on it (an underscore prefix broke the
+                // match and made `exists` always false).
+                #[diesel(sql_type = diesel::sql_types::Integer)]
+                dummy: i32,
+            }
             let holder_id = holder.as_str();
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
@@ -4002,11 +4012,6 @@ mod sqlite_impl {
                 join_table = self.join_table,
                 scope_cond = scope_cond,
             );
-            #[derive(diesel::deserialize::QueryableByName)]
-            struct ExistsRow {
-                #[diesel(sql_type = diesel::sql_types::Integer)]
-                dummy: i32,
-            }
             let q = diesel::sql_query(sql).bind::<Text, _>(holder_id);
             let found = q.get_result::<ExistsRow>(conn).is_ok();
             async move { Ok(found) }
@@ -4031,6 +4036,7 @@ mod sqlite_impl {
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
+        #[allow(clippy::too_many_lines)] // per-arity typed bind dispatch for the holder finder
         fn holders_where(
             &self,
             conn: &mut Self::Conn,
@@ -4062,7 +4068,7 @@ mod sqlite_impl {
 
             let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> =
-                (1..1 + holder_types.len()).map(placeholder).collect();
+                (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
@@ -4093,13 +4099,13 @@ mod sqlite_impl {
                 match &query.filter {
                     rolify_core::query::ResourceFilter::Global => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Class(type_name) => {
                         all_values.push(name.to_owned());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         all_values.push(name.to_owned());
@@ -4114,22 +4120,22 @@ mod sqlite_impl {
                 match &query.filter {
                     rolify_core::query::ResourceFilter::Global => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Class(type_name) => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                     }
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
-                        all_values.push("".to_owned());
+                        all_values.push(String::new());
                         all_values.push((*type_name).to_owned());
                         all_values.push(resource_id.as_str().to_owned());
                     }
@@ -4256,15 +4262,12 @@ mod sqlite_impl {
 
             let holder_table = self.holder_table_sql();
             let type_placeholders: Vec<String> =
-                (1..1 + holder_types.len()).map(placeholder).collect();
+                (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
                 "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
-                holder_table = holder_table,
-                type_filter = type_filter,
             );
-
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
                 0 => unreachable!(),
@@ -4300,6 +4303,7 @@ mod sqlite_impl {
             }
         }
 
+        #[allow(clippy::too_many_lines)] // catalog filter composition with per-arity typed binds
         fn roles_matching(
             &self,
             conn: &mut Self::Conn,
@@ -4338,7 +4342,7 @@ mod sqlite_impl {
                 .replace("{scope_filter}", &scope_filter)
                 .replace("{holder_filter}", &holder_filter);
 
-            let mut type_vals: Vec<&str> = query.types.iter().map(|s| *s).collect();
+            let mut type_vals: Vec<&str> = query.types.to_vec();
             if let Some(name) = query.name {
                 type_vals.push(name.as_str());
             }
@@ -4444,7 +4448,7 @@ mod sqlite_impl {
             let mut all_keys: Vec<ResourceKey> = Vec::new();
 
             // 1. Instance-scoped roles: direct query on roles table
-            let type_placeholders: Vec<String> = (1..1 + types.len()).map(placeholder).collect();
+            let type_placeholders: Vec<String> = (1..=types.len()).map(placeholder).collect();
             let type_filter = format!("resource_type IN ({})", type_placeholders.join(", "));
             let name_ph = placeholder(type_placeholders.len() + 1);
 
@@ -4516,6 +4520,7 @@ mod sqlite_impl {
             async move { Ok(all_keys) }
         }
 
+        #[allow(clippy::too_many_lines)] // typed bind ladder for the candidate coverage read
         fn in_list(
             &self,
             conn: &mut Self::Conn,
@@ -4533,7 +4538,7 @@ mod sqlite_impl {
             // scopeless (global/class) row, with no resource-type check.
             // Candidate keys (not row keys) are returned, so scopeless
             // covering rows never reach `to_key`.
-            let name_placeholders: Vec<String> = (2..2 + names.len()).map(placeholder).collect();
+            let name_placeholders: Vec<String> = (2..=names.len() + 1).map(placeholder).collect();
             let name_filter = format!("role_row.name IN ({})", name_placeholders.join(", "));
             let sql = format!(
                 "SELECT DISTINCT role_row.name AS name, role_row.resource_type, role_row.resource_id \

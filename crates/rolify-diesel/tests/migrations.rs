@@ -4,9 +4,6 @@
 //! embed correctly and apply/revert cleanly on `SQLite` (the hermetic leg),
 //! Postgres, and `MySQL` (the parity gate legs per D-14).
 
-#[cfg(feature = "sqlite")]
-use diesel::sqlite::SqliteConnection;
-
 #[cfg(feature = "postgres")]
 mod pg_migrations {
     use diesel::Connection;
@@ -22,18 +19,24 @@ mod pg_migrations {
     #[derive(QueryableByName)]
     struct TableNameRow {
         #[diesel(sql_type = Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         table_name: String,
     }
 
     #[derive(QueryableByName)]
     struct ConstraintNameRow {
         #[diesel(sql_type = Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         constraint_name: String,
     }
 
     #[derive(QueryableByName)]
     struct IndexNameRow {
         #[diesel(sql_type = Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         indexname: String,
     }
 
@@ -49,21 +52,14 @@ mod pg_migrations {
         count: i64,
     }
 
-    #[derive(QueryableByName)]
-    struct CollationRow {
-        #[diesel(sql_type = Text)]
-        collation_name: String,
-    }
-
     fn pg_container() -> &'static testcontainers::Container<postgres::Postgres> {
         use std::sync::OnceLock;
         static CONTAINER: OnceLock<testcontainers::Container<postgres::Postgres>> = OnceLock::new();
         CONTAINER.get_or_init(|| {
-            let container = postgres::Postgres::default()
+            postgres::Postgres::default()
                 .with_tag("17")
                 .start()
-                .expect("Docker must be available for Postgres; postgres:17 image will be pulled");
-            container
+                .expect("Docker must be available for Postgres; postgres:17 image will be pulled")
         })
     }
 
@@ -76,6 +72,7 @@ mod pg_migrations {
         PgConnection::establish(&url).expect("Postgres connection")
     }
 
+    #[allow(clippy::too_many_lines)] // linear apply → probe → revert → re-apply lifecycle
     #[test]
     fn migrations_apply_and_revert_cleanly_on_postgres() {
         let mut conn = pg_conn();
@@ -451,6 +448,8 @@ mod sqlite_migrations {
     #[derive(QueryableByName)]
     struct SqliteNameRow {
         #[diesel(sql_type = diesel::sql_types::Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         name: String,
     }
 

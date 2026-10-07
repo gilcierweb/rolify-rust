@@ -33,7 +33,11 @@ use rolify_diesel::{
 };
 
 use testcontainers::ImageExt;
-use testcontainers_modules::{mysql, postgres, testcontainers::runners::SyncRunner};
+#[cfg(feature = "mysql")]
+use testcontainers_modules::mysql;
+#[cfg(feature = "postgres")]
+use testcontainers_modules::postgres;
+use testcontainers_modules::testcontainers::runners::SyncRunner;
 
 const RACE_ITERATIONS: usize = 3;
 
@@ -121,9 +125,8 @@ mod pg_concurrency {
         holder_type: &str,
         name: &str,
     ) -> ResourceId {
-        let row: IdRow = diesel::sql_query(&format!(
-            "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
-            table
+        let row: IdRow = diesel::sql_query(format!(
+            "INSERT INTO {table} (rolify_type, name) VALUES ($1, $2) RETURNING id",
         ))
         .bind::<diesel::sql_types::Text, _>(holder_type)
         .bind::<diesel::sql_types::Text, _>(name)
@@ -132,7 +135,7 @@ mod pg_concurrency {
         ResourceId::from(row.id)
     }
 
-    fn test_find_or_create_race(role_name: &str, scope: ScopeKind) {
+    fn test_find_or_create_race(role_name: &str, scope: &ScopeKind) {
         let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = pg_conn();
         reset_roles(&mut seed_conn);
@@ -188,13 +191,12 @@ mod pg_concurrency {
             .expect("count role rows");
             assert_eq!(
                 count_row.count, 1,
-                "iteration {iteration}: exactly one role row for '{}'",
-                role_name
+                "iteration {iteration}: exactly one role row for '{role_name}'",
             );
         }
     }
 
-    fn test_add_race(role_name: &str, scope: ScopeKind) {
+    fn test_add_race(role_name: &str, scope: &ScopeKind) {
         let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = pg_conn();
         reset_roles(&mut seed_conn);
@@ -222,7 +224,6 @@ mod pg_concurrency {
             let barrier = Arc::new(Barrier::new(2));
             let role_clone = role.clone();
             let holder_clone = holder_id.clone();
-            let scope_clone = scope.clone();
 
             let mut handles = vec![];
             for _ in 0..2 {
@@ -230,7 +231,6 @@ mod pg_concurrency {
                 let barrier = Arc::clone(&barrier);
                 let role = role_clone.clone();
                 let holder = holder_clone.clone();
-                let scope = scope_clone.clone();
                 let handle = thread::spawn(move || {
                     let mut conn = pg_conn();
                     let mut store = DieselStore::new(&config);
@@ -247,7 +247,7 @@ mod pg_concurrency {
                 results.push(handle.join().expect("thread panicked"));
             }
 
-            results.sort();
+            results.sort_unstable();
             assert_eq!(
                 results,
                 vec![false, true],
@@ -282,14 +282,14 @@ mod pg_concurrency {
 
     #[test]
     fn concurrent_find_or_create_by_global_role() {
-        test_find_or_create_race("concurrent_global_admin", ScopeKind::Global);
+        test_find_or_create_race("concurrent_global_admin", &ScopeKind::Global);
     }
 
     #[test]
     fn concurrent_find_or_create_by_class_role() {
         test_find_or_create_race(
             "concurrent_class_manager",
-            ScopeKind::Class("Forum".to_owned()),
+            &ScopeKind::Class("Forum".to_owned()),
         );
     }
 
@@ -297,20 +297,20 @@ mod pg_concurrency {
     fn concurrent_find_or_create_by_instance_role() {
         test_find_or_create_race(
             "concurrent_instance_moderator",
-            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+            &ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
         );
     }
 
     #[test]
     fn concurrent_add_global_role() {
-        test_add_race("concurrent_add_admin", ScopeKind::Global);
+        test_add_race("concurrent_add_admin", &ScopeKind::Global);
     }
 
     #[test]
     fn concurrent_add_class_role() {
         test_add_race(
             "concurrent_add_manager",
-            ScopeKind::Class("Forum".to_owned()),
+            &ScopeKind::Class("Forum".to_owned()),
         );
     }
 
@@ -318,7 +318,7 @@ mod pg_concurrency {
     fn concurrent_add_instance_role() {
         test_add_race(
             "concurrent_add_moderator",
-            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+            &ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
         );
     }
 }
@@ -403,7 +403,7 @@ mod mysql_concurrency {
         ResourceId::from(row.id)
     }
 
-    fn test_find_or_create_race(role_name: &str, scope: ScopeKind) {
+    fn test_find_or_create_race(role_name: &str, scope: &ScopeKind) {
         let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = mysql_conn();
         reset_roles(&mut seed_conn);
@@ -459,13 +459,12 @@ mod mysql_concurrency {
             .expect("count role rows");
             assert_eq!(
                 count_row.count, 1,
-                "iteration {iteration}: exactly one role row for '{}'",
-                role_name
+                "iteration {iteration}: exactly one role row for '{role_name}'",
             );
         }
     }
 
-    fn test_add_race(role_name: &str, scope: ScopeKind) {
+    fn test_add_race(role_name: &str, scope: &ScopeKind) {
         let _serial = crate::support::SuiteGuard::acquire();
         let mut seed_conn = mysql_conn();
         reset_roles(&mut seed_conn);
@@ -493,7 +492,6 @@ mod mysql_concurrency {
             let barrier = Arc::new(Barrier::new(2));
             let role_clone = role.clone();
             let holder_clone = holder_id.clone();
-            let scope_clone = scope.clone();
 
             let mut handles = vec![];
             for _ in 0..2 {
@@ -501,7 +499,6 @@ mod mysql_concurrency {
                 let barrier = Arc::clone(&barrier);
                 let role = role_clone.clone();
                 let holder = holder_clone.clone();
-                let scope = scope_clone.clone();
                 let handle = thread::spawn(move || {
                     let mut conn = mysql_conn();
                     let mut store = DieselStore::new(&config);
@@ -518,7 +515,7 @@ mod mysql_concurrency {
                 results.push(handle.join().expect("thread panicked"));
             }
 
-            results.sort();
+            results.sort_unstable();
             assert_eq!(
                 results,
                 vec![false, true],
@@ -553,14 +550,14 @@ mod mysql_concurrency {
 
     #[test]
     fn concurrent_find_or_create_by_global_role() {
-        test_find_or_create_race("concurrent_global_admin", ScopeKind::Global);
+        test_find_or_create_race("concurrent_global_admin", &ScopeKind::Global);
     }
 
     #[test]
     fn concurrent_find_or_create_by_class_role() {
         test_find_or_create_race(
             "concurrent_class_manager",
-            ScopeKind::Class("Forum".to_owned()),
+            &ScopeKind::Class("Forum".to_owned()),
         );
     }
 
@@ -568,20 +565,20 @@ mod mysql_concurrency {
     fn concurrent_find_or_create_by_instance_role() {
         test_find_or_create_race(
             "concurrent_instance_moderator",
-            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+            &ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
         );
     }
 
     #[test]
     fn concurrent_add_global_role() {
-        test_add_race("concurrent_add_admin", ScopeKind::Global);
+        test_add_race("concurrent_add_admin", &ScopeKind::Global);
     }
 
     #[test]
     fn concurrent_add_class_role() {
         test_add_race(
             "concurrent_add_manager",
-            ScopeKind::Class("Forum".to_owned()),
+            &ScopeKind::Class("Forum".to_owned()),
         );
     }
 
@@ -589,7 +586,7 @@ mod mysql_concurrency {
     fn concurrent_add_instance_role() {
         test_add_race(
             "concurrent_add_moderator",
-            ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
+            &ScopeKind::Instance("Forum".to_owned(), ResourceId::from("77")),
         );
     }
 }

@@ -21,16 +21,19 @@ use diesel::RunQueryDsl;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel_migrations::MigrationHarness;
 use rolify_core::config::RolifyConfig;
-use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
-use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
+use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::store::RoleStore;
 use rolify_diesel::{DieselStore, MIGRATIONS, rows::CountRow};
 
 use rolify_diesel::rows::IdRow;
 use testcontainers::ImageExt;
-use testcontainers_modules::{mysql, postgres, testcontainers::runners::SyncRunner};
+#[cfg(feature = "mysql")]
+use testcontainers_modules::mysql;
+#[cfg(feature = "postgres")]
+use testcontainers_modules::postgres;
+use testcontainers_modules::testcontainers::runners::SyncRunner;
 
 #[cfg(feature = "postgres")]
 mod pg_executor {
@@ -98,9 +101,8 @@ mod pg_executor {
         holder_type: &str,
         name: &str,
     ) -> ResourceId {
-        let row: IdRow = diesel::sql_query(&format!(
-            "INSERT INTO {} (rolify_type, name) VALUES ($1, $2) RETURNING id",
-            table
+        let row: IdRow = diesel::sql_query(format!(
+            "INSERT INTO {table} (rolify_type, name) VALUES ($1, $2) RETURNING id"
         ))
         .bind::<diesel::sql_types::Text, _>(holder_type)
         .bind::<diesel::sql_types::Text, _>(name)
@@ -109,6 +111,7 @@ mod pg_executor {
         ResourceId::from(row.id)
     }
 
+    #[allow(clippy::too_many_lines)] // linear 4-leg executor matrix
     fn run_executor_matrix() {
         let _container = pg_container();
         let mut conn = pg_conn();
@@ -389,7 +392,7 @@ mod mysql_executor {
         holder_type: &str,
         name: &str,
     ) -> ResourceId {
-        diesel::sql_query(&format!(
+        diesel::sql_query(format!(
             "INSERT INTO {} (rolify_type, name) VALUES (?, ?)",
             table
         ))
@@ -403,6 +406,7 @@ mod mysql_executor {
         ResourceId::from(row.id)
     }
 
+    #[allow(clippy::too_many_lines)] // linear 4-leg executor matrix
     fn run_executor_matrix() {
         let _container = mysql_container();
         let mut conn = mysql_conn();
