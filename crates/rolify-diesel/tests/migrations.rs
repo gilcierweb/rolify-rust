@@ -223,18 +223,24 @@ mod mysql_migrations {
     #[derive(QueryableByName)]
     struct TableNameRow {
         #[diesel(sql_type = Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         table_name: String,
     }
 
     #[derive(QueryableByName)]
     struct ConstraintNameRow {
         #[diesel(sql_type = Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         constraint_name: String,
     }
 
     #[derive(QueryableByName)]
     struct IndexNameRow {
         #[diesel(sql_type = Text)]
+        #[allow(dead_code)]
+        // decode vehicle: existence proven by row count, not field reads
         index_name: String,
     }
 

@@ -7,13 +7,12 @@
 
 mod support;
 
-use diesel::Connection;
 use diesel::RunQueryDsl;
 use diesel_migrations::MigrationHarness;
 use rolify_core::config::RolifyConfig;
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
-use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::store::RoleStore;
 use rolify_diesel::rows::CountRow;
 use rolify_diesel::{DieselStore, MIGRATIONS};
