@@ -69,19 +69,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Mode gates per Pitfall 11: the bare workspace command cannot stay
       # green after D-08 flipped rolify-diesel's default to ["sync"] (it
-      # would unify the sync flag onto the async-only rolify-sqlx), so each
-      # mode's workspace gate isolates the member that cannot take it:
-      # - async mode: exclude rolify-diesel (the sync-default member)
-      # - sync mode: exclude rolify-sqlx (the async-only member), with the
-      #   is_sync flag pinning the mode explicitly
+      # would unify the sync flag onto the async-only members), so each
+      # mode's workspace gate isolates what cannot take it:
+      # - async mode: exclude rolify-diesel (the sync-default member) AND
+      #   rolify-cli (its rolify-diesel dev-dependency reintroduces the
+      #   same is_sync unification through the test graph; the cli suite
+      #   is mode-agnostic and runs in full, diesel store leg included,
+      #   in the sync gate below)
+      # - sync mode: exclude rolify-sqlx and rolify-seaorm (the
+      #   async-only members), with the is_sync flag pinning the mode
       # rolify-mongodb rides both gates: maybe-async's mode is global to
       # the build graph, so the sync leg pins rolify-mongodb/sync to keep
       # the crate's cfg arms aligned with the macro mode. The async leg
-      # needs no pin: excluding rolify-diesel leaves no is_sync unifier
-      # in the graph.
+      # needs no pin: excluding rolify-diesel and rolify-cli leaves no
+      # is_sync unifier in the graph.
       # Neither mode can silently stop being exercised (04-09, T-04-15).
-      - name: cargo test (workspace async mode, exclude rolify-diesel)
-        run: cargo test --workspace --exclude rolify-diesel
+      - name: cargo test (workspace async mode, exclude rolify-diesel and rolify-cli)
+        run: cargo test --workspace --exclude rolify-diesel --exclude rolify-cli
       - name: cargo test (workspace sync mode, exclude rolify-sqlx and rolify-seaorm)
         run: cargo test --workspace --features rolify-core/is_sync,rolify-mongodb/sync --exclude rolify-sqlx --exclude rolify-seaorm
       - name: cargo test (rolify-test suite async)
