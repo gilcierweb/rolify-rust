@@ -677,6 +677,13 @@ pub mod sqlx_backend {
     use super::{setup_fixtures_sqlite_conn, sqlite_memory_pool};
     use rolify_sqlx::SqlxStore;
     use rolify_sqlx::rows::CountRow;
+    // `SqliteConnectOptions::to_url_lossy` in the sqlite-only `make_conn`
+    // arm is a `ConnectOptions` trait method, so the trait import rides
+    // the same feature gate. An ungated import warned on every non-sqlite
+    // leg (those never compile the arm), which is how it came to be
+    // removed as stale together with the arm's only user.
+    #[cfg(feature = "sqlite")]
+    use sqlx::ConnectOptions;
 
     /// Process-wide serializer for tests sharing one database.
     ///
