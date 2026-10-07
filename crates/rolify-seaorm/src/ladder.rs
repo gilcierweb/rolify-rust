@@ -157,6 +157,14 @@ pub fn build_strict_where(
 /// Build OR-joined ladders for `where_any`: one ladder per query, joined
 /// by ` OR ` (mirrors `build_conditions`, role_adapter.rb:88-104: each
 /// disjunct's `join(' OR ')`). Each sub-ladder gets its own bind sequence.
+///
+/// The joined group is wrapped in one enclosing pair of parentheses: the
+/// store embeds the fragment as `WHERE link.user_id = ? AND {fragment}`,
+/// and SQL binds `AND` tighter than `OR`, so an unparenthesized group
+/// would parse as `(holder AND ladder1) OR ladder2` and leak every
+/// ladder after the first out of the holder gate (the gem's
+/// `ActiveRecord` composes each where fragment parenthesized,
+/// role_adapter.rb:88-104).
 #[must_use]
 pub fn build_any_where(
     backend: DbBackend,
@@ -172,7 +180,7 @@ pub fn build_any_where(
         index = next_index;
     }
 
-    (parts.join(" OR "), index)
+    (format!("({})", parts.join(" OR ")), index)
 }
 
 #[cfg(test)]
@@ -289,5 +297,25 @@ mod tests {
         // Two ladders: global (3 binds) + instance (7 binds) = 10 binds
         assert_eq!(sql.matches(" OR ").count(), 3);
         assert_eq!(next, 11);
+    }
+
+    #[test]
+    fn any_where_wraps_the_or_group_in_parens() {
+        let name = RoleName::from("solo");
+        let queries = [
+            RoleQuery {
+                name: &name,
+                filter: ResourceFilter::Global,
+            },
+            RoleQuery {
+                name: &name,
+                filter: ResourceFilter::Class("Forum"),
+            },
+        ];
+        let (sql, _) = build_any_where(DbBackend::Postgres, &queries, 2);
+        assert!(
+            sql.starts_with('(') && sql.ends_with(')'),
+            "the OR group must stay inside the holder gate: {sql}"
+        );
     }
 }

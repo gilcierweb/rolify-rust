@@ -758,6 +758,16 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         if query.types.is_empty() {
             return Ok(Vec::new());
         }
+        // A holder filter without a registered holder table would
+        // silently read every holder's rows; fail loudly instead (the
+        // same InvalidConfig posture as holders_where / all_holders).
+        if query.holder.is_some() && self.holder_table.is_none() {
+            return Err(Error::Core(RolifyError::InvalidConfig {
+                reason:
+                    "roles_matching with a holder filter requires for_holder_table(..) on the store"
+                        .to_owned(),
+            }));
+        }
         let backend = backend_of(conn);
         let role_table = quote_identifier(backend, &self.role_table);
         let join_table = quote_identifier(backend, &self.join_table);
@@ -802,8 +812,8 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                 values.push(Value::from(SCOPE_SENTINEL.to_owned()));
                 index += 1;
             }
-            CatalogScope::InstanceOnly { resource_id } => {
-                if let Some(id) = resource_id {
+            CatalogScope::InstanceOnly { resource_id } => match resource_id {
+                Some(id) => {
                     let _ = write!(
                         sql,
                         " AND role_row.resource_id = {}",
@@ -812,11 +822,26 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                     values.push(Value::from(id.as_str().to_owned()));
                     index += 1;
                 }
-            }
+                // `None` is the documented "every instance row in
+                // types" read (catalog.rs): class rows stay out, the
+                // same `resource_id != ''` filter the diesel and sqlx
+                // adapters emit.
+                None => {
+                    let _ = write!(sql, " AND role_row.resource_id != ''");
+                }
+            },
         }
-        if let (Some(holder_id), true) = (&query.holder, self.holder_table.is_some()) {
-            let _ = write!(sql, " AND holder.id = {}", placeholder(backend, index));
-            // Holder primary keys are integers; the bind carries the stringified id.
+        if let Some(holder_id) = &query.holder {
+            // Holder primary keys are integers while the bind carries
+            // the stringified id, so the comparison needs the same
+            // text cast the join uses (Postgres rejects integer =
+            // text without it).
+            let _ = write!(
+                sql,
+                " AND {} = {}",
+                cast_to_text(backend, "holder.id"),
+                placeholder(backend, index)
+            );
             values.push(Value::from(holder_id.as_str().to_owned()));
         }
 
@@ -964,10 +989,13 @@ impl<C: ConnectionTrait + Send + 'static> ResourceStore for SeaormStore<C> {
         Ok(keys)
     }
 
-    /// Gem `in` (`resource_adapter.rb:28`): among `candidates`, the
-    /// resources where `holder` holds any of `names` at class or instance
-    /// scope. Coverage is decided caller-side (mirroring the `InMemory`
-    /// reference: same-id instance row OR same-type class row).
+    /// Gem `in` (`resource_adapter.rb:27-30`): among `candidates`, the
+    /// resources where `holder` holds any of `names` at class or
+    /// instance scope. Coverage is decided caller-side with NO
+    /// resource-type check, mirroring the gem's SQL
+    /// (`resource_id = pk OR resource_id IS NULL`) and the `InMemory`
+    /// reference: a same-id instance row, a class row, or a global row
+    /// covers the candidate.
     async fn in_list(
         &self,
         conn: &mut Self::Conn,
@@ -1013,10 +1041,8 @@ impl<C: ConnectionTrait + Send + 'static> ResourceStore for SeaormStore<C> {
         Ok(candidates
             .iter()
             .filter(|candidate| {
-                held.iter().any(|(resource_type, resource_id)| {
-                    resource_type == &candidate.resource_type
-                        && (resource_id == candidate.resource_id.as_str()
-                            || resource_id == SCOPE_SENTINEL)
+                held.iter().any(|(_resource_type, resource_id)| {
+                    resource_id == candidate.resource_id.as_str() || resource_id == SCOPE_SENTINEL
                 })
             })
             .cloned()
