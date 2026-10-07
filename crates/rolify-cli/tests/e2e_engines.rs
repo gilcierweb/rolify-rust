@@ -78,8 +78,18 @@ async fn execute_sqlite_sql_file(pool: &SqlitePool, sql: &str) -> Result<(), sql
 }
 
 /// Runs the Postgres e2e test: generate schema, apply to real Postgres 17, verify with `DieselStore` smoke.
+#[allow(clippy::too_many_lines)] // generate → apply → seed → smoke is a single linear leg
 #[tokio::test]
 async fn generated_postgres_schema_applies_and_holds_store_smoke() {
+    use diesel::Connection;
+    use rolify_core::config::RolifyConfig;
+    use rolify_core::kernel::RemovalTarget;
+    use rolify_core::query::{ResourceFilter, RoleQuery};
+    use rolify_core::resource::ResourceRef;
+    use rolify_core::role::{ResourceId, RoleName};
+    use rolify_core::store::RoleStore;
+    use rolify_diesel::DieselStore;
+
     // Start Postgres 17 container
     let postgres = Postgres::default()
         .with_db_name("rolify_test")
@@ -260,15 +270,6 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
         .await
         .expect("failed to re-apply up.sql for store smoke");
 
-    use diesel::Connection;
-    use rolify_core::config::RolifyConfig;
-    use rolify_core::kernel::RemovalTarget;
-    use rolify_core::query::{ResourceFilter, RoleQuery};
-    use rolify_core::resource::ResourceRef;
-    use rolify_core::role::{ResourceId, RoleName};
-    use rolify_core::store::RoleStore;
-    use rolify_diesel::DieselStore;
-
     let mut diesel_conn = diesel::pg::PgConnection::establish(&db_url)
         .expect("diesel connection to the CLI-generated schema");
 
@@ -339,6 +340,7 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
 }
 
 /// Runs the `MySQL` e2e test: generate schema, apply to real `MySQL` 8.4, verify roundtrip.
+#[allow(clippy::too_many_lines)] // linear generate → apply → smoke e2e leg
 #[tokio::test]
 async fn generated_mysql_schema_roundtrip() {
     // Start MySQL 8.4 container (testcontainers-modules defaults: root user,
@@ -542,6 +544,7 @@ async fn generated_mysql_schema_roundtrip() {
 
 /// Runs the `SQLite` e2e test: generate schema, apply to hermetic `SQLite`, verify roundtrip.
 /// `SQLite` is file-based (no container needed, zero Docker required).
+#[allow(clippy::too_many_lines)] // linear generate → apply → smoke e2e leg
 #[tokio::test]
 async fn generated_sqlite_schema_roundtrip() {
     // Generate sqlite migrations
@@ -750,6 +753,7 @@ async fn generated_sqlite_schema_roundtrip() {
 }
 
 /// Tests that the custom names matrix works with the generated schema on Postgres.
+#[allow(clippy::too_many_lines)] // linear generate → apply → smoke e2e leg
 #[tokio::test]
 async fn generated_custom_names_schema_applies() {
     // Start Postgres 17 container
@@ -892,6 +896,7 @@ async fn generated_custom_names_schema_applies() {
 }
 
 /// Tests custom names live on `SQLite` too (hermetic, no Docker).
+#[allow(clippy::too_many_lines)] // linear generate → apply → smoke e2e leg
 #[tokio::test]
 async fn generated_custom_names_sqlite_applies() {
     let dir = test_temp_dir();

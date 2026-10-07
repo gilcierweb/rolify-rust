@@ -1,9 +1,9 @@
-//! SeaORM migration template for rolify schema.
+//! `SeaORM` migration template for rolify schema.
 //!
 //! This template is hand-maintained (D-16) and mirrors the canonical schema
 //! from the vendored SQL templates. The raw-SQL approach (option a per
 //! 06-RESEARCH.md Code Examples) reuses the exact canonical strings per engine
-//! selected at runtime via the SchemaManager's database backend.
+//! selected at runtime via the `SchemaManager`'s database backend.
 //!
 //! CONVERGENCE NOTE (D-16): This template is the second maintained source.
 //! The semantic checklist in tests/drift.rs keeps it honest against the
@@ -24,7 +24,7 @@ impl MigrationTrait for Migration {
         // prepared statement"), so the canonical script is split into
         // individual statements at render time.
         for statement in [
-            r#"-- Decision record (D-10): FK cascade from join to roles is deliberate; the
+            r"-- Decision record (D-10): FK cascade from join to roles is deliberate; the
 -- gem emits no FKs (divergence documented in the parity matrix). Resource
 -- cleanup for deleted consumer resources is app-level: one DELETE on roles by
 -- (resource_type, resource_id); cascade sweeps join rows.
@@ -49,14 +49,14 @@ CREATE TABLE roles (
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT roles_triple_unique UNIQUE (name, resource_type, resource_id)
-);"#,
-            r#"CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);"#,
-            r#"CREATE INDEX idx_roles_name ON roles (name);"#,
-            r#"CREATE TABLE users_roles (
+);",
+            r"CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);",
+            r"CREATE INDEX idx_roles_name ON roles (name);",
+            r"CREATE TABLE users_roles (
     user_id VARCHAR(191) NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
-);"#,
+);",
         ] {
             let stmt = sea_orm::Statement::from_string(
                 manager.get_database_backend(),

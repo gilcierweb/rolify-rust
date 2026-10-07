@@ -1,4 +1,4 @@
-//! Compile gate for the checked-in expected SeaORM migration (T-06-04, D-16).
+//! Compile gate for the checked-in expected `SeaORM` migration (T-06-04, D-16).
 //!
 //! The expected file is compiled INTO this test binary via a `#[path]` module
 //! so `sea-orm-migration` 2.0.4 typechecks it: a template edit that breaks the

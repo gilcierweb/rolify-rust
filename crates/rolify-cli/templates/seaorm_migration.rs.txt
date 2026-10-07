@@ -1,9 +1,9 @@
-//! SeaORM migration template for rolify schema.
+//! `SeaORM` migration template for rolify schema.
 //!
 //! This template is hand-maintained (D-16) and mirrors the canonical schema
 //! from the vendored SQL templates. The raw-SQL approach (option a per
 //! 06-RESEARCH.md Code Examples) reuses the exact canonical strings per engine
-//! selected at runtime via the SchemaManager's database backend.
+//! selected at runtime via the `SchemaManager`'s database backend.
 //!
 //! CONVERGENCE NOTE (D-16): This template is the second maintained source.
 //! The semantic checklist in tests/drift.rs keeps it honest against the
@@ -37,7 +37,10 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Down drops join table first (FK order), then roles (D-10, D-12)
-        for statement in ["{{DOWN_JOIN}}", "{{DOWN_ROLES}}"] {
+        for statement in [
+            "{{DOWN_JOIN}}",
+            "{{DOWN_ROLES}}",
+        ] {
             let stmt = sea_orm::Statement::from_string(
                 manager.get_database_backend(),
                 statement.to_owned(),

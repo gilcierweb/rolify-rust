@@ -229,7 +229,7 @@ fn init_alias_produces_identical_tree() {
         .assert()
         .success();
 
-    // Compare trees recursively - they should be identical
+    #[allow(clippy::items_after_statements)] // local helper co-located for readability
     fn collect_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
         let mut files = Vec::new();
         for entry in WalkDir::new(dir.join("migrations"))
@@ -532,7 +532,7 @@ fn init_alias_output_identity() {
         .assert()
         .success();
 
-    // Compare all files recursively
+    #[allow(clippy::items_after_statements)] // local helper co-located for readability
     fn collect_all_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
         let mut files = Vec::new();
         for entry in WalkDir::new(dir)
@@ -688,6 +688,7 @@ fn sqlx_output_matches_diesel_tree() {
     // Scaffolding files (README, stubs, config examples) legitimately carry the
     // backend name and are out of D-11 scope: the identity claim covers the SQL
     // migration bytes only.
+    #[allow(clippy::items_after_statements)] // local helper co-located for readability
     fn collect_migration_files(dir: &PathBuf) -> Vec<(PathBuf, String)> {
         let mut files = Vec::new();
         for entry in WalkDir::new(dir.join("migrations"))

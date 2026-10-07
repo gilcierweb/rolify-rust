@@ -52,11 +52,12 @@ pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
 
     // Render each statement as a raw-string array element. Raw strings
     // preserve real newlines and never interpret backslash escapes; the
-    // canonical SQL contains no double quotes, so no `"#` terminator can
-    // appear inside a statement body.
+    // canonical SQL contains no double quotes, so no `"` terminator can
+    // appear inside a statement body (no hashes needed, per clippy's
+    // needless-raw-string-hashes gate).
     let up_elements: Vec<String> = up_statements
         .iter()
-        .map(|statement| format!("            r#\"{statement}\"#,")) // -> r#"..."#,
+        .map(|statement| format!("            r\"{statement}\",")) // -> r"...",
         .collect();
     let up_array_body = up_elements.join("\n");
 
