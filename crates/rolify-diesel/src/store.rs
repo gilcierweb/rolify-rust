@@ -16,6 +16,9 @@ use rolify_core::store::Sealed;
 
 use crate::dialect::quote_identifier;
 
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+use rolify_core::query::{ResourceFilter, RoleQuery};
+
 /// Diesel sync store — holds the configured table names and a resource registry.
 ///
 /// One store per holder/role-table pair (D-07). Construct via
@@ -50,8 +53,21 @@ impl DieselStore {
     }
 
     /// Create a store with explicit table names (for multi-pair setups).
+    ///
+    /// # Panics
+    ///
+    /// Panics when `role_table` or `join_table` fails the identifier
+    /// allow-list (`^[A-Za-z_][A-Za-z0-9_]*$`). The config boundary
+    /// documents that adapter constructors must re-validate names that
+    /// bypass config, the same rule the sibling constructors apply:
+    /// a quote character in a table name breaks out of the quoted
+    /// identifier and injects into every generated statement.
     #[must_use]
     pub fn with_tables(role_table: &str, join_table: &str) -> Self {
+        RolifyConfigBuilder::validate_identifier(role_table)
+            .expect("role table name must pass validation");
+        RolifyConfigBuilder::validate_identifier(join_table)
+            .expect("join table name must pass validation");
         Self {
             role_table: quote_identifier(role_table),
             join_table: quote_identifier(join_table),
@@ -156,6 +172,53 @@ impl Sealed for DieselStore {}
 // The sync impls compile only when the `sync` mode feature is on (D-08
 // engines are mode-agnostic); the async rider lives in cfg-gated
 // sibling modules that reuse the same sql/rows/sentinel templates.
+
+/// Bind cap of the typed `where_any` ladder: the engine impls enumerate
+/// bind chains by arity, so one statement cannot carry more binds than
+/// this. `has_any_roles` forwards arbitrary consumer query lists (four
+/// Instance queries alone cost the holder plus 28 binds), so the impls
+/// chunk the list into ladder-sized batches and union-dedup the rows:
+/// OR across batches is OR within.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+const WHERE_ANY_LADDER_BIND_CAP: usize = 23;
+
+/// Bind cost of one `RoleQuery` in the `where_any` ladder: Global binds
+/// the name plus two sentinel columns, Class adds the type and a
+/// sentinel slot, Instance binds the name, sentinels, type and id, and
+/// Any binds the name alone.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+fn where_any_bind_cost(query: &RoleQuery<'_>) -> usize {
+    match &query.filter {
+        ResourceFilter::Global => 3,
+        ResourceFilter::Class(_) => 5,
+        ResourceFilter::Instance(_, _) => 7,
+        ResourceFilter::Any => 1,
+    }
+}
+
+/// Split `queries` into consecutive slices whose bind total (the holder
+/// bind included) stays within [`WHERE_ANY_LADDER_BIND_CAP`]. A single
+/// query can never exceed the cap by itself (Instance costs 8 with the
+/// holder), so the splitter always makes progress.
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+fn split_where_any_batches<'batches, 'data>(
+    queries: &'batches [RoleQuery<'data>],
+) -> Vec<&'batches [RoleQuery<'data>]> {
+    let mut batches = Vec::new();
+    let mut batch_start = 0;
+    let mut batch_binds = 1; // the holder bind
+    for (index, query) in queries.iter().enumerate() {
+        let query_cost = where_any_bind_cost(query);
+        if batch_binds + query_cost > WHERE_ANY_LADDER_BIND_CAP && index > batch_start {
+            batches.push(&queries[batch_start..index]);
+            batch_start = index;
+            batch_binds = 1;
+        }
+        batch_binds += query_cost;
+    }
+    batches.push(&queries[batch_start..]);
+    batches
+}
 
 #[cfg(all(feature = "postgres", feature = "sync"))]
 mod pg_impl {
@@ -359,413 +422,417 @@ mod pg_impl {
             if queries.is_empty() {
                 return async { Ok(Vec::new()) };
             }
-            let (where_clause, _) = crate::sql::build_any_where(
-                &self.role_table,
-                &self.join_table,
-                &placeholder(1),
-                queries,
-                2,
-            );
-            let sql = crate::sql::select_roles_for_holder(
-                &self.role_table,
-                &self.join_table,
-                &where_clause,
-                &placeholder(1),
-            );
-            // Collect all bind values in order, then match on query count for typed binds
-            let mut all_values: Vec<String> = Vec::new();
-            all_values.push(holder.as_str().to_owned());
-            for query in queries {
-                let name = query.name.as_str();
-                match &query.filter {
-                    rolify_core::query::ResourceFilter::Global => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Class(type_name) => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push("".to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push(resource_id.as_str().to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Any => {
-                        all_values.push(name.to_owned());
+            // The typed ladder below enumerates bind chains by arity, up
+            // to 23 binds per statement, and `has_any_roles` forwards any
+            // consumer query list: chunk into ladder-sized batches, then
+            // union-dedup the rows (OR across batches is OR within).
+            let mut seen: Vec<RoleRecord> = Vec::new();
+            for batch in split_where_any_batches(queries) {
+                let (where_clause, _) = crate::sql::build_any_where(
+                    &self.role_table,
+                    &self.join_table,
+                    &placeholder(1),
+                    batch,
+                    2,
+                );
+                let sql = crate::sql::select_roles_for_holder(
+                    &self.role_table,
+                    &self.join_table,
+                    &where_clause,
+                    &placeholder(1),
+                );
+                // Collect all bind values in order, then match on query count for typed binds
+                let mut all_values: Vec<String> = Vec::new();
+                all_values.push(holder.as_str().to_owned());
+                for query in batch {
+                    let name = query.name.as_str();
+                    match &query.filter {
+                        rolify_core::query::ResourceFilter::Global => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Class(type_name) => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push("".to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push(resource_id.as_str().to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Any => {
+                            all_values.push(name.to_owned());
+                        }
                     }
                 }
-            }
-            let q = diesel::sql_query(sql);
-            let rows: Vec<RoleRow> = match all_values.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                2 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                3 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                4 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                5 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                6 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                7 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                8 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                9 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                10 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                11 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                12 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                13 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                14 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                15 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                16 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                17 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                18 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                19 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                20 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                // The ported suite batches up to four queries (l.68:
-                // Instance + Global + Instance + Class = 23 binds).
-                21 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                22 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .bind::<Text, _>(&all_values[21])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                23 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .bind::<Text, _>(&all_values[21])
-                    .bind::<Text, _>(&all_values[22])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("where_any: too many bind values (max 23)"),
-            };
-            async move {
-                let mut seen = Vec::new();
+                let q = diesel::sql_query(sql);
+                let rows: Vec<RoleRow> = match all_values.len() {
+                    0 => unreachable!(),
+                    1 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    2 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    3 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    4 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    5 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    6 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    7 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    8 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    9 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    10 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    11 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    12 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    13 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    14 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    15 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    16 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    17 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    18 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    19 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    20 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    // The ported suite batches up to four queries (l.68:
+                    // Instance + Global + Instance + Class = 23 binds).
+                    21 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    22 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .bind::<Text, _>(&all_values[21])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    23 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .bind::<Text, _>(&all_values[21])
+                        .bind::<Text, _>(&all_values[22])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    _ => panic!("where_any: batch exceeded the 23-bind ladder cap"),
+                };
                 for row in rows {
                     let record = row.to_record();
                     if !seen.contains(&record) {
                         seen.push(record);
                     }
                 }
-                Ok(seen)
             }
+            async move { Ok(seen) }
         }
 
         fn find_or_create_by(
@@ -1833,413 +1900,417 @@ mod mysql_impl {
             if queries.is_empty() {
                 return async { Ok(Vec::new()) };
             }
-            let (where_clause, _) = crate::sql::build_any_where(
-                &self.role_table,
-                &self.join_table,
-                &placeholder(1),
-                queries,
-                2,
-            );
-            let sql = crate::sql::select_roles_for_holder(
-                &self.role_table,
-                &self.join_table,
-                &where_clause,
-                &placeholder(1),
-            );
-            // Collect all bind values in order, then match on query count for typed binds
-            let mut all_values: Vec<String> = Vec::new();
-            all_values.push(holder.as_str().to_owned());
-            for query in queries {
-                let name = query.name.as_str();
-                match &query.filter {
-                    rolify_core::query::ResourceFilter::Global => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Class(type_name) => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push("".to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push(resource_id.as_str().to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Any => {
-                        all_values.push(name.to_owned());
+            // The typed ladder below enumerates bind chains by arity, up
+            // to 23 binds per statement, and `has_any_roles` forwards any
+            // consumer query list: chunk into ladder-sized batches, then
+            // union-dedup the rows (OR across batches is OR within).
+            let mut seen: Vec<RoleRecord> = Vec::new();
+            for batch in split_where_any_batches(queries) {
+                let (where_clause, _) = crate::sql::build_any_where(
+                    &self.role_table,
+                    &self.join_table,
+                    &placeholder(1),
+                    batch,
+                    2,
+                );
+                let sql = crate::sql::select_roles_for_holder(
+                    &self.role_table,
+                    &self.join_table,
+                    &where_clause,
+                    &placeholder(1),
+                );
+                // Collect all bind values in order, then match on query count for typed binds
+                let mut all_values: Vec<String> = Vec::new();
+                all_values.push(holder.as_str().to_owned());
+                for query in batch {
+                    let name = query.name.as_str();
+                    match &query.filter {
+                        rolify_core::query::ResourceFilter::Global => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Class(type_name) => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push("".to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push(resource_id.as_str().to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Any => {
+                            all_values.push(name.to_owned());
+                        }
                     }
                 }
-            }
-            let q = diesel::sql_query(sql);
-            let rows: Vec<RoleRow> = match all_values.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                2 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                3 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                4 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                5 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                6 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                7 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                8 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                9 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                10 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                11 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                12 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                13 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                14 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                15 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                16 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                17 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                18 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                19 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                20 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                // The ported suite batches up to four queries (l.68:
-                // Instance + Global + Instance + Class = 23 binds).
-                21 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                22 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .bind::<Text, _>(&all_values[21])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                23 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .bind::<Text, _>(&all_values[21])
-                    .bind::<Text, _>(&all_values[22])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("where_any: too many bind values (max 23)"),
-            };
-            async move {
-                let mut seen = Vec::new();
+                let q = diesel::sql_query(sql);
+                let rows: Vec<RoleRow> = match all_values.len() {
+                    0 => unreachable!(),
+                    1 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    2 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    3 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    4 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    5 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    6 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    7 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    8 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    9 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    10 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    11 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    12 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    13 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    14 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    15 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    16 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    17 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    18 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    19 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    20 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    // The ported suite batches up to four queries (l.68:
+                    // Instance + Global + Instance + Class = 23 binds).
+                    21 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    22 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .bind::<Text, _>(&all_values[21])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    23 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .bind::<Text, _>(&all_values[21])
+                        .bind::<Text, _>(&all_values[22])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    _ => panic!("where_any: batch exceeded the 23-bind ladder cap"),
+                };
                 for row in rows {
                     let record = row.to_record();
                     if !seen.contains(&record) {
                         seen.push(record);
                     }
                 }
-                Ok(seen)
             }
+            async move { Ok(seen) }
         }
 
         fn find_or_create_by(
@@ -3300,413 +3371,417 @@ mod sqlite_impl {
             if queries.is_empty() {
                 return async { Ok(Vec::new()) };
             }
-            let (where_clause, _) = crate::sql::build_any_where(
-                &self.role_table,
-                &self.join_table,
-                &placeholder(1),
-                queries,
-                2,
-            );
-            let sql = crate::sql::select_roles_for_holder(
-                &self.role_table,
-                &self.join_table,
-                &where_clause,
-                &placeholder(1),
-            );
-            // Collect all bind values in order, then match on query count for typed binds
-            let mut all_values: Vec<String> = Vec::new();
-            all_values.push(holder.as_str().to_owned());
-            for query in queries {
-                let name = query.name.as_str();
-                match &query.filter {
-                    rolify_core::query::ResourceFilter::Global => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Class(type_name) => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push("".to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                        all_values.push(name.to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push("".to_owned());
-                        all_values.push(type_name.to_string());
-                        all_values.push(resource_id.as_str().to_owned());
-                    }
-                    rolify_core::query::ResourceFilter::Any => {
-                        all_values.push(name.to_owned());
+            // The typed ladder below enumerates bind chains by arity, up
+            // to 23 binds per statement, and `has_any_roles` forwards any
+            // consumer query list: chunk into ladder-sized batches, then
+            // union-dedup the rows (OR across batches is OR within).
+            let mut seen: Vec<RoleRecord> = Vec::new();
+            for batch in split_where_any_batches(queries) {
+                let (where_clause, _) = crate::sql::build_any_where(
+                    &self.role_table,
+                    &self.join_table,
+                    &placeholder(1),
+                    batch,
+                    2,
+                );
+                let sql = crate::sql::select_roles_for_holder(
+                    &self.role_table,
+                    &self.join_table,
+                    &where_clause,
+                    &placeholder(1),
+                );
+                // Collect all bind values in order, then match on query count for typed binds
+                let mut all_values: Vec<String> = Vec::new();
+                all_values.push(holder.as_str().to_owned());
+                for query in batch {
+                    let name = query.name.as_str();
+                    match &query.filter {
+                        rolify_core::query::ResourceFilter::Global => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Class(type_name) => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push("".to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                            all_values.push(name.to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push("".to_owned());
+                            all_values.push(type_name.to_string());
+                            all_values.push(resource_id.as_str().to_owned());
+                        }
+                        rolify_core::query::ResourceFilter::Any => {
+                            all_values.push(name.to_owned());
+                        }
                     }
                 }
-            }
-            let q = diesel::sql_query(sql);
-            let rows: Vec<RoleRow> = match all_values.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                2 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                3 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                4 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                5 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                6 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                7 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                8 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                9 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                10 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                11 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                12 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                13 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                14 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                15 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                16 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                17 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                18 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                19 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                20 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                // The ported suite batches up to four queries (l.68:
-                // Instance + Global + Instance + Class = 23 binds).
-                21 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                22 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .bind::<Text, _>(&all_values[21])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                23 => q
-                    .bind::<Text, _>(&all_values[0])
-                    .bind::<Text, _>(&all_values[1])
-                    .bind::<Text, _>(&all_values[2])
-                    .bind::<Text, _>(&all_values[3])
-                    .bind::<Text, _>(&all_values[4])
-                    .bind::<Text, _>(&all_values[5])
-                    .bind::<Text, _>(&all_values[6])
-                    .bind::<Text, _>(&all_values[7])
-                    .bind::<Text, _>(&all_values[8])
-                    .bind::<Text, _>(&all_values[9])
-                    .bind::<Text, _>(&all_values[10])
-                    .bind::<Text, _>(&all_values[11])
-                    .bind::<Text, _>(&all_values[12])
-                    .bind::<Text, _>(&all_values[13])
-                    .bind::<Text, _>(&all_values[14])
-                    .bind::<Text, _>(&all_values[15])
-                    .bind::<Text, _>(&all_values[16])
-                    .bind::<Text, _>(&all_values[17])
-                    .bind::<Text, _>(&all_values[18])
-                    .bind::<Text, _>(&all_values[19])
-                    .bind::<Text, _>(&all_values[20])
-                    .bind::<Text, _>(&all_values[21])
-                    .bind::<Text, _>(&all_values[22])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("where_any: too many bind values (max 23)"),
-            };
-            async move {
-                let mut seen = Vec::new();
+                let q = diesel::sql_query(sql);
+                let rows: Vec<RoleRow> = match all_values.len() {
+                    0 => unreachable!(),
+                    1 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    2 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    3 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    4 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    5 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    6 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    7 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    8 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    9 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    10 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    11 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    12 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    13 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    14 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    15 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    16 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    17 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    18 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    19 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    20 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    // The ported suite batches up to four queries (l.68:
+                    // Instance + Global + Instance + Class = 23 binds).
+                    21 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    22 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .bind::<Text, _>(&all_values[21])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    23 => q
+                        .bind::<Text, _>(&all_values[0])
+                        .bind::<Text, _>(&all_values[1])
+                        .bind::<Text, _>(&all_values[2])
+                        .bind::<Text, _>(&all_values[3])
+                        .bind::<Text, _>(&all_values[4])
+                        .bind::<Text, _>(&all_values[5])
+                        .bind::<Text, _>(&all_values[6])
+                        .bind::<Text, _>(&all_values[7])
+                        .bind::<Text, _>(&all_values[8])
+                        .bind::<Text, _>(&all_values[9])
+                        .bind::<Text, _>(&all_values[10])
+                        .bind::<Text, _>(&all_values[11])
+                        .bind::<Text, _>(&all_values[12])
+                        .bind::<Text, _>(&all_values[13])
+                        .bind::<Text, _>(&all_values[14])
+                        .bind::<Text, _>(&all_values[15])
+                        .bind::<Text, _>(&all_values[16])
+                        .bind::<Text, _>(&all_values[17])
+                        .bind::<Text, _>(&all_values[18])
+                        .bind::<Text, _>(&all_values[19])
+                        .bind::<Text, _>(&all_values[20])
+                        .bind::<Text, _>(&all_values[21])
+                        .bind::<Text, _>(&all_values[22])
+                        .load(conn)
+                        .map_err(Error::Diesel)?,
+                    _ => panic!("where_any: batch exceeded the 23-bind ladder cap"),
+                };
                 for row in rows {
                     let record = row.to_record();
                     if !seen.contains(&record) {
                         seen.push(record);
                     }
                 }
-                Ok(seen)
             }
+            async move { Ok(seen) }
         }
 
         fn find_or_create_by(
@@ -4580,7 +4655,9 @@ mod sqlite_impl {
 
 #[cfg(all(feature = "postgres", feature = "async"))]
 mod pg_async_impl {
-    use super::{DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL};
+    use super::{
+        DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL, split_where_any_batches,
+    };
     use core::future::Future;
     use diesel::sql_types::{BigInt, Text};
     use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -4803,432 +4880,442 @@ mod pg_async_impl {
                 if queries.is_empty() {
                     return Ok(Vec::new());
                 }
-                let (where_clause, _) = crate::sql::build_any_where(
-                    &role_table,
-                    &join_table,
-                    &placeholder(1),
-                    queries,
-                    2,
-                );
-                let sql = crate::sql::select_roles_for_holder(
-                    &role_table,
-                    &join_table,
-                    &where_clause,
-                    &placeholder(1),
-                );
-                // Collect all bind values in order, then match on query count
-                // for typed binds (mirrors the sync path's all_values idiom).
-                let mut all_values: Vec<String> = Vec::new();
-                all_values.push(holder.as_str().to_owned());
-                for query in queries {
-                    let name = query.name.as_str();
-                    match &query.filter {
-                        rolify_core::query::ResourceFilter::Global => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                        }
-                        rolify_core::query::ResourceFilter::Class(type_name) => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(String::new());
-                        }
-                        rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(resource_id.as_str().to_owned());
-                        }
-                        rolify_core::query::ResourceFilter::Any => {
-                            all_values.push(name.to_owned());
+                // The typed ladder below enumerates bind chains by
+                // arity, up to 23 binds per statement, and
+                // `has_any_roles` forwards any consumer query list:
+                // chunk into ladder-sized batches, then union-dedup
+                // the rows (OR across batches is OR within).
+                let mut seen: Vec<RoleRecord> = Vec::new();
+                for batch in split_where_any_batches(queries) {
+                    let (where_clause, _) = crate::sql::build_any_where(
+                        &role_table,
+                        &join_table,
+                        &placeholder(1),
+                        batch,
+                        2,
+                    );
+                    let sql = crate::sql::select_roles_for_holder(
+                        &role_table,
+                        &join_table,
+                        &where_clause,
+                        &placeholder(1),
+                    );
+                    // Collect all bind values in order, then match on query count
+                    // for typed binds (mirrors the sync path's all_values idiom).
+                    let mut all_values: Vec<String> = Vec::new();
+                    all_values.push(holder.as_str().to_owned());
+                    for query in batch {
+                        let name = query.name.as_str();
+                        match &query.filter {
+                            rolify_core::query::ResourceFilter::Global => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                            }
+                            rolify_core::query::ResourceFilter::Class(type_name) => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(String::new());
+                            }
+                            rolify_core::query::ResourceFilter::Instance(
+                                type_name,
+                                resource_id,
+                            ) => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(resource_id.as_str().to_owned());
+                            }
+                            rolify_core::query::ResourceFilter::Any => {
+                                all_values.push(name.to_owned());
+                            }
                         }
                     }
-                }
-                let q = diesel::sql_query(sql);
-                let rows: Vec<RoleRow> = match all_values.len() {
-                    0 => unreachable!(),
-                    1 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    2 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    3 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    4 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    5 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    6 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    7 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    8 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    9 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    10 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    11 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    12 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    13 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    14 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    15 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    16 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    17 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    18 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    19 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    20 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    // The ported suite batches up to four queries (l.68:
-                    // Instance + Global + Instance + Class = 23 binds).
-                    21 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    22 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .bind::<Text, _>(&all_values[21])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    23 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .bind::<Text, _>(&all_values[21])
-                        .bind::<Text, _>(&all_values[22])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    _ => panic!("where_any: too many bind values (max 23)"),
-                };
-                let mut seen = Vec::new();
-                for row in rows {
-                    let record = row.to_record();
-                    if !seen.contains(&record) {
-                        seen.push(record);
+                    let q = diesel::sql_query(sql);
+                    let rows: Vec<RoleRow> = match all_values.len() {
+                        0 => unreachable!(),
+                        1 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        2 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        3 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        4 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        5 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        6 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        7 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        8 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        9 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        10 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        11 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        12 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        13 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        14 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        15 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        16 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        17 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        18 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        19 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        20 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        // The ported suite batches up to four queries (l.68:
+                        // Instance + Global + Instance + Class = 23 binds).
+                        21 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        22 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .bind::<Text, _>(&all_values[21])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        23 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .bind::<Text, _>(&all_values[21])
+                            .bind::<Text, _>(&all_values[22])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        _ => panic!("where_any: batch exceeded the 23-bind ladder cap"),
+                    };
+                    for row in rows {
+                        let record = row.to_record();
+                        if !seen.contains(&record) {
+                            seen.push(record);
+                        }
                     }
                 }
                 Ok(seen)
@@ -6193,7 +6280,9 @@ mod pg_async_impl {
 // diesel_async::AsyncMysqlConnection and the same sql/rows/sentinel templates.
 #[cfg(all(feature = "mysql", feature = "async"))]
 mod mysql_async_impl {
-    use super::{DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL};
+    use super::{
+        DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL, split_where_any_batches,
+    };
     use core::future::Future;
     use diesel::sql_types::{BigInt, Text};
     use diesel_async::{AsyncConnection, AsyncMysqlConnection, RunQueryDsl};
@@ -6413,432 +6502,442 @@ mod mysql_async_impl {
                 if queries.is_empty() {
                     return Ok(Vec::new());
                 }
-                let (where_clause, _) = crate::sql::build_any_where(
-                    &role_table,
-                    &join_table,
-                    &placeholder(1),
-                    queries,
-                    2,
-                );
-                let sql = crate::sql::select_roles_for_holder(
-                    &role_table,
-                    &join_table,
-                    &where_clause,
-                    &placeholder(1),
-                );
-                // Collect all bind values in order, then match on query count
-                // for typed binds (mirrors the sync path's all_values idiom).
-                let mut all_values: Vec<String> = Vec::new();
-                all_values.push(holder.as_str().to_owned());
-                for query in queries {
-                    let name = query.name.as_str();
-                    match &query.filter {
-                        rolify_core::query::ResourceFilter::Global => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                        }
-                        rolify_core::query::ResourceFilter::Class(type_name) => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(String::new());
-                        }
-                        rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(resource_id.as_str().to_owned());
-                        }
-                        rolify_core::query::ResourceFilter::Any => {
-                            all_values.push(name.to_owned());
+                // The typed ladder below enumerates bind chains by
+                // arity, up to 23 binds per statement, and
+                // `has_any_roles` forwards any consumer query list:
+                // chunk into ladder-sized batches, then union-dedup
+                // the rows (OR across batches is OR within).
+                let mut seen: Vec<RoleRecord> = Vec::new();
+                for batch in split_where_any_batches(queries) {
+                    let (where_clause, _) = crate::sql::build_any_where(
+                        &role_table,
+                        &join_table,
+                        &placeholder(1),
+                        batch,
+                        2,
+                    );
+                    let sql = crate::sql::select_roles_for_holder(
+                        &role_table,
+                        &join_table,
+                        &where_clause,
+                        &placeholder(1),
+                    );
+                    // Collect all bind values in order, then match on query count
+                    // for typed binds (mirrors the sync path's all_values idiom).
+                    let mut all_values: Vec<String> = Vec::new();
+                    all_values.push(holder.as_str().to_owned());
+                    for query in batch {
+                        let name = query.name.as_str();
+                        match &query.filter {
+                            rolify_core::query::ResourceFilter::Global => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                            }
+                            rolify_core::query::ResourceFilter::Class(type_name) => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(String::new());
+                            }
+                            rolify_core::query::ResourceFilter::Instance(
+                                type_name,
+                                resource_id,
+                            ) => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(resource_id.as_str().to_owned());
+                            }
+                            rolify_core::query::ResourceFilter::Any => {
+                                all_values.push(name.to_owned());
+                            }
                         }
                     }
-                }
-                let q = diesel::sql_query(sql);
-                let rows: Vec<RoleRow> = match all_values.len() {
-                    0 => unreachable!(),
-                    1 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    2 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    3 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    4 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    5 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    6 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    7 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    8 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    9 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    10 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    11 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    12 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    13 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    14 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    15 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    16 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    17 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    18 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    19 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    20 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    // The ported suite batches up to four queries (l.68:
-                    // Instance + Global + Instance + Class = 23 binds).
-                    21 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    22 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .bind::<Text, _>(&all_values[21])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    23 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .bind::<Text, _>(&all_values[21])
-                        .bind::<Text, _>(&all_values[22])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    _ => panic!("where_any: too many bind values (max 23)"),
-                };
-                let mut seen = Vec::new();
-                for row in rows {
-                    let record = row.to_record();
-                    if !seen.contains(&record) {
-                        seen.push(record);
+                    let q = diesel::sql_query(sql);
+                    let rows: Vec<RoleRow> = match all_values.len() {
+                        0 => unreachable!(),
+                        1 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        2 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        3 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        4 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        5 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        6 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        7 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        8 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        9 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        10 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        11 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        12 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        13 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        14 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        15 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        16 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        17 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        18 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        19 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        20 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        // The ported suite batches up to four queries (l.68:
+                        // Instance + Global + Instance + Class = 23 binds).
+                        21 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        22 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .bind::<Text, _>(&all_values[21])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        23 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .bind::<Text, _>(&all_values[21])
+                            .bind::<Text, _>(&all_values[22])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        _ => panic!("where_any: batch exceeded the 23-bind ladder cap"),
+                    };
+                    for row in rows {
+                        let record = row.to_record();
+                        if !seen.contains(&record) {
+                            seen.push(record);
+                        }
                     }
                 }
                 Ok(seen)
@@ -7799,7 +7898,9 @@ mod mysql_async_impl {
 // offloading). Mirrors the sync SQLite impl and the pg_async_impl.
 #[cfg(all(feature = "sqlite", feature = "async"))]
 mod sqlite_async_impl {
-    use super::{DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL};
+    use super::{
+        DieselStore, ResourceId, ResourceRef, RoleName, SCOPE_SENTINEL, split_where_any_batches,
+    };
     use core::future::Future;
     use diesel::sql_types::{BigInt, Text};
     use diesel::sqlite::SqliteConnection;
@@ -8024,432 +8125,442 @@ mod sqlite_async_impl {
                 if queries.is_empty() {
                     return Ok(Vec::new());
                 }
-                let (where_clause, _) = crate::sql::build_any_where(
-                    &role_table,
-                    &join_table,
-                    &placeholder(1),
-                    queries,
-                    2,
-                );
-                let sql = crate::sql::select_roles_for_holder(
-                    &role_table,
-                    &join_table,
-                    &where_clause,
-                    &placeholder(1),
-                );
-                // Collect all bind values in order, then match on query count
-                // for typed binds (mirrors the sync path's all_values idiom).
-                let mut all_values: Vec<String> = Vec::new();
-                all_values.push(holder.as_str().to_owned());
-                for query in queries {
-                    let name = query.name.as_str();
-                    match &query.filter {
-                        rolify_core::query::ResourceFilter::Global => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                        }
-                        rolify_core::query::ResourceFilter::Class(type_name) => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(String::new());
-                        }
-                        rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                            all_values.push(name.to_owned());
-                            all_values.push(String::new());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(String::new());
-                            all_values.push(type_name.to_string());
-                            all_values.push(resource_id.as_str().to_owned());
-                        }
-                        rolify_core::query::ResourceFilter::Any => {
-                            all_values.push(name.to_owned());
+                // The typed ladder below enumerates bind chains by
+                // arity, up to 23 binds per statement, and
+                // `has_any_roles` forwards any consumer query list:
+                // chunk into ladder-sized batches, then union-dedup
+                // the rows (OR across batches is OR within).
+                let mut seen: Vec<RoleRecord> = Vec::new();
+                for batch in split_where_any_batches(queries) {
+                    let (where_clause, _) = crate::sql::build_any_where(
+                        &role_table,
+                        &join_table,
+                        &placeholder(1),
+                        batch,
+                        2,
+                    );
+                    let sql = crate::sql::select_roles_for_holder(
+                        &role_table,
+                        &join_table,
+                        &where_clause,
+                        &placeholder(1),
+                    );
+                    // Collect all bind values in order, then match on query count
+                    // for typed binds (mirrors the sync path's all_values idiom).
+                    let mut all_values: Vec<String> = Vec::new();
+                    all_values.push(holder.as_str().to_owned());
+                    for query in batch {
+                        let name = query.name.as_str();
+                        match &query.filter {
+                            rolify_core::query::ResourceFilter::Global => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                            }
+                            rolify_core::query::ResourceFilter::Class(type_name) => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(String::new());
+                            }
+                            rolify_core::query::ResourceFilter::Instance(
+                                type_name,
+                                resource_id,
+                            ) => {
+                                all_values.push(name.to_owned());
+                                all_values.push(String::new());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(String::new());
+                                all_values.push(type_name.to_string());
+                                all_values.push(resource_id.as_str().to_owned());
+                            }
+                            rolify_core::query::ResourceFilter::Any => {
+                                all_values.push(name.to_owned());
+                            }
                         }
                     }
-                }
-                let q = diesel::sql_query(sql);
-                let rows: Vec<RoleRow> = match all_values.len() {
-                    0 => unreachable!(),
-                    1 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    2 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    3 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    4 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    5 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    6 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    7 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    8 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    9 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    10 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    11 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    12 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    13 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    14 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    15 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    16 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    17 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    18 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    19 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    20 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    // The ported suite batches up to four queries (l.68:
-                    // Instance + Global + Instance + Class = 23 binds).
-                    21 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    22 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .bind::<Text, _>(&all_values[21])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    23 => q
-                        .bind::<Text, _>(&all_values[0])
-                        .bind::<Text, _>(&all_values[1])
-                        .bind::<Text, _>(&all_values[2])
-                        .bind::<Text, _>(&all_values[3])
-                        .bind::<Text, _>(&all_values[4])
-                        .bind::<Text, _>(&all_values[5])
-                        .bind::<Text, _>(&all_values[6])
-                        .bind::<Text, _>(&all_values[7])
-                        .bind::<Text, _>(&all_values[8])
-                        .bind::<Text, _>(&all_values[9])
-                        .bind::<Text, _>(&all_values[10])
-                        .bind::<Text, _>(&all_values[11])
-                        .bind::<Text, _>(&all_values[12])
-                        .bind::<Text, _>(&all_values[13])
-                        .bind::<Text, _>(&all_values[14])
-                        .bind::<Text, _>(&all_values[15])
-                        .bind::<Text, _>(&all_values[16])
-                        .bind::<Text, _>(&all_values[17])
-                        .bind::<Text, _>(&all_values[18])
-                        .bind::<Text, _>(&all_values[19])
-                        .bind::<Text, _>(&all_values[20])
-                        .bind::<Text, _>(&all_values[21])
-                        .bind::<Text, _>(&all_values[22])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    _ => panic!("where_any: too many bind values (max 23)"),
-                };
-                let mut seen = Vec::new();
-                for row in rows {
-                    let record = row.to_record();
-                    if !seen.contains(&record) {
-                        seen.push(record);
+                    let q = diesel::sql_query(sql);
+                    let rows: Vec<RoleRow> = match all_values.len() {
+                        0 => unreachable!(),
+                        1 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        2 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        3 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        4 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        5 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        6 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        7 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        8 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        9 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        10 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        11 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        12 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        13 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        14 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        15 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        16 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        17 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        18 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        19 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        20 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        // The ported suite batches up to four queries (l.68:
+                        // Instance + Global + Instance + Class = 23 binds).
+                        21 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        22 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .bind::<Text, _>(&all_values[21])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        23 => q
+                            .bind::<Text, _>(&all_values[0])
+                            .bind::<Text, _>(&all_values[1])
+                            .bind::<Text, _>(&all_values[2])
+                            .bind::<Text, _>(&all_values[3])
+                            .bind::<Text, _>(&all_values[4])
+                            .bind::<Text, _>(&all_values[5])
+                            .bind::<Text, _>(&all_values[6])
+                            .bind::<Text, _>(&all_values[7])
+                            .bind::<Text, _>(&all_values[8])
+                            .bind::<Text, _>(&all_values[9])
+                            .bind::<Text, _>(&all_values[10])
+                            .bind::<Text, _>(&all_values[11])
+                            .bind::<Text, _>(&all_values[12])
+                            .bind::<Text, _>(&all_values[13])
+                            .bind::<Text, _>(&all_values[14])
+                            .bind::<Text, _>(&all_values[15])
+                            .bind::<Text, _>(&all_values[16])
+                            .bind::<Text, _>(&all_values[17])
+                            .bind::<Text, _>(&all_values[18])
+                            .bind::<Text, _>(&all_values[19])
+                            .bind::<Text, _>(&all_values[20])
+                            .bind::<Text, _>(&all_values[21])
+                            .bind::<Text, _>(&all_values[22])
+                            .load(conn)
+                            .await
+                            .map_err(Error::Diesel)?,
+                        _ => panic!("where_any: batch exceeded the 23-bind ladder cap"),
+                    };
+                    for row in rows {
+                        let record = row.to_record();
+                        if !seen.contains(&record) {
+                            seen.push(record);
+                        }
                     }
                 }
                 Ok(seen)
@@ -9465,5 +9576,109 @@ mod tests {
         assert_eq!(name, "moderator");
         assert_eq!(rt, "Forum");
         assert_eq!(rid, "42");
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "role table name must pass validation")]
+    fn with_tables_rejects_role_table_quote_breakout() {
+        DieselStore::with_tables("x\"; DROP TABLE users; --", "users_roles");
+    }
+
+    #[test]
+    #[should_panic(expected = "join table name must pass validation")]
+    fn with_tables_rejects_join_table_quote_breakout() {
+        DieselStore::with_tables("roles", "links\"; DELETE FROM roles WHERE 1=1; --");
+    }
+
+    #[test]
+    fn with_tables_quotes_valid_identifiers() {
+        let store = DieselStore::with_tables("custom_roles", "custom_role_links");
+        assert_eq!(store.role_table, quote_identifier("custom_roles"));
+        assert_eq!(store.join_table, quote_identifier("custom_role_links"));
+    }
+
+    #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+    mod where_any_batches {
+        use super::super::*;
+
+        #[test]
+        fn instance_queries_split_past_the_bind_cap() {
+            let visitor = RoleName::from("visitor");
+            let forum_id = ResourceId::from(1_i64);
+            let queries = [
+                RoleQuery::with_role_and_filter(
+                    &visitor,
+                    ResourceFilter::Instance("Forum", &forum_id),
+                ),
+                RoleQuery::with_role_and_filter(
+                    &visitor,
+                    ResourceFilter::Instance("Forum", &forum_id),
+                ),
+                RoleQuery::with_role_and_filter(
+                    &visitor,
+                    ResourceFilter::Instance("Forum", &forum_id),
+                ),
+                RoleQuery::with_role_and_filter(
+                    &visitor,
+                    ResourceFilter::Instance("Forum", &forum_id),
+                ),
+            ];
+            // Holder + 4 x 7 = 29 binds: three queries fit (22), the
+            // fourth opens a second batch.
+            let batches = split_where_any_batches(&queries);
+            assert_eq!(batches.len(), 2);
+            assert_eq!(batches[0].len(), 3);
+            assert_eq!(batches[1].len(), 1);
+        }
+
+        #[test]
+        fn global_queries_split_past_the_bind_cap() {
+            let admin = RoleName::from("admin");
+            let queries = [
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+            ];
+            // Holder + 8 x 3 = 25 binds: seven fit (22), the eighth
+            // opens a second batch.
+            let batches = split_where_any_batches(&queries);
+            assert_eq!(batches.len(), 2);
+            assert_eq!(batches[0].len(), 7);
+            assert_eq!(batches[1].len(), 1);
+        }
+
+        #[test]
+        fn suite_shaped_batch_stays_whole() {
+            let admin = RoleName::from("admin");
+            let staff = RoleName::from("staff");
+            let forum_id = ResourceId::from(1_i64);
+            let queries = [
+                RoleQuery::with_role_and_filter(
+                    &staff,
+                    ResourceFilter::Instance("Forum", &forum_id),
+                ),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global),
+                RoleQuery::with_role_and_filter(
+                    &admin,
+                    ResourceFilter::Instance("Forum", &forum_id),
+                ),
+                RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum")),
+            ];
+            // Holder + 7 + 3 + 7 + 5 = 23 binds: exactly one batch (the
+            // ported suite's largest shape).
+            let batches = split_where_any_batches(&queries);
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].len(), 4);
+        }
     }
 }

@@ -690,7 +690,73 @@ async fn instance_any_tail_rows<B: TestBackend>(backend: &mut B) -> Result<(), B
     Ok(())
 }
 
-/// Expand the 4 `has_any_role` wrappers for one backend. Wrapper names
+/// Regression pin for the diesel `where_any` bind ladder: four
+/// Instance queries cost the holder bind plus 7 binds each (29 total),
+/// past the 23-bind typed-chain cap, so the adapter must chunk the
+/// query list into ladder-sized batches and union the rows instead of
+/// panicking. The gem's `has_any_role?` accepts any query list with no
+/// such cap (`shared_examples_for_has_any_role.rb` rows never exceed
+/// the ladder, which is why this pin sits outside the gem's line map).
+///
+/// # Errors
+///
+/// Propagates backend failures from the build, context load,
+/// provisioning, or asks.
+///
+/// # Panics
+///
+/// Panics when a parity assertion fails.
+#[maybe_async::maybe_async]
+pub async fn instance_any_beyond_ladder_batches<B: TestBackend>() -> Result<(), B::Error> {
+    let mut backend = B::build().await?;
+    load_scope_context(&mut backend, ScopeContext::Instance).await?;
+    let forum_first = backend.resource(FixtureResource::ForumFirst);
+    let forum_last = backend.resource(FixtureResource::ForumLast);
+    let group_first = backend.resource(FixtureResource::GroupFirst);
+    let group_last = backend.resource(FixtureResource::GroupLast);
+    // Roles held nowhere in the Instance context (its seeds are
+    // moderator, anonymous, visitor and soldier): an Instance ladder
+    // also matches global and class rows of the same name, so unheld
+    // names are the only way to keep the negative leg empty.
+    let ghost = RoleName::from("ghost");
+    let phantom = RoleName::from("phantom");
+    let spirit = RoleName::from("spirit");
+    let wraith = RoleName::from("wraith");
+    let subject = backend.subject("god");
+    let queries = [
+        RoleQuery::with_role_and_filter(
+            &ghost,
+            ResourceFilter::Instance("Forum", &forum_first.resource_id),
+        ),
+        RoleQuery::with_role_and_filter(
+            &phantom,
+            ResourceFilter::Instance("Forum", &forum_last.resource_id),
+        ),
+        RoleQuery::with_role_and_filter(
+            &spirit,
+            ResourceFilter::Instance("Group", &group_first.resource_id),
+        ),
+        RoleQuery::with_role_and_filter(
+            &wraith,
+            ResourceFilter::Instance("Group", &group_last.resource_id),
+        ),
+    ];
+    let answer = subject.has_any_roles(&queries).await?;
+    assert!(!answer);
+    // Grant one member of the union: the batched OR must find it even
+    // though the match now spans two statements.
+    subject
+        .add_role(
+            &ghost,
+            ResourceRef::Instance("Forum", &forum_first.resource_id),
+        )
+        .await?;
+    let answer = subject.has_any_roles(&queries).await?;
+    assert!(answer);
+    Ok(())
+}
+
+/// Expand the 5 `has_any_role` wrappers for one backend. Wrapper names
 /// carry the `has_any_role_` prefix so the 12 binding modules never
 /// collide.
 #[macro_export]
@@ -720,6 +786,13 @@ macro_rules! parity_has_any_role_cases {
         #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
         async fn has_any_role_instance_any_rows() {
             $crate::suite::has_any_role::instance_any_rows::<$backend>()
+                .await
+                .unwrap();
+        }
+
+        #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+        async fn has_any_role_instance_any_beyond_ladder_batches() {
+            $crate::suite::has_any_role::instance_any_beyond_ladder_batches::<$backend>()
                 .await
                 .unwrap();
         }
