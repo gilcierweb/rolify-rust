@@ -14,6 +14,7 @@ faker-rust = { version = "0.1", optional = true }
 [features]
 default = []
 is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
+faker = ["dep:faker-rust"]
 suite = ["dep:rstest", "dep:faker-rust"]
 
 [dev-dependencies]

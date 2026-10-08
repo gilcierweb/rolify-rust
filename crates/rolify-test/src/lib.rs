@@ -89,6 +89,12 @@ pub mod suite;
 pub mod matchers;
 pub use matchers::RoleAssertions;
 
+// Always compiled (D-12): the deterministic fixture builders ship with
+// the mock, no feature flag (the faker generators inside stay opt-in).
+// Bare declaration only for now; the crate-root re-export lands with the
+// proof wiring once the builder functions exist.
+pub mod builders;
+
 /// In-memory [`RoleStore`] + [`ResourceStore`] - the workspace's reference
 /// implementation, validation target, and published consumer mock.
 ///
