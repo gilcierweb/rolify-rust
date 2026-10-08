@@ -53,6 +53,12 @@ pub mod fixtures;
 #[cfg(feature = "suite")]
 pub mod suite;
 
+// Always compiled (D-07): the consumer assertion surface ships with the
+// mock, no feature flag. The trait plus re-export land with the Task 1
+// GREEN implementation; this declaration exists now so the tracer tests
+// compile in RED.
+pub mod matchers;
+
 /// In-memory [`RoleStore`] + [`ResourceStore`] - the workspace's reference
 /// implementation and validation target.
 ///
