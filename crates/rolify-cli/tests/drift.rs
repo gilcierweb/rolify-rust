@@ -286,6 +286,39 @@ fn validate_identifier_rejects_malicious() {
     ));
 }
 
+/// Tests that no rendered SQL migration carries an em-dash (U+2014): the
+/// project forbids the character in code and comments, so the shipped-SQL
+/// convention must not silently regress even if a canonical tree drifts
+/// (WR-06).
+#[test]
+fn rendered_sql_carries_no_em_dash() {
+    let plan = RenderPlan {
+        backend: Backend::Diesel,
+        role_name: "Role".to_string(),
+        holder_name: "User".to_string(),
+        roles_table: "roles".to_string(),
+        join_table: "users_roles".to_string(),
+    };
+
+    let rendered = render_all(&plan).unwrap();
+
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let files = rendered
+            .get(engine)
+            .unwrap_or_else(|| panic!("no files for engine: {engine}"));
+
+        for file in files {
+            if file.path.ends_with("up.sql") || file.path.ends_with("down.sql") {
+                assert!(
+                    !file.content.contains('\u{2014}'),
+                    "rendered {} for engine {engine} carries an em-dash (U+2014)",
+                    file.path
+                );
+            }
+        }
+    }
+}
+
 /// Tests custom-names rendering matches the checked-in snapshots byte-for-byte,
 /// proving the longest-first rule with renamed identifiers (T-06-06).
 #[test]

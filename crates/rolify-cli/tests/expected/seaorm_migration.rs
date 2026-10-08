@@ -29,15 +29,15 @@ impl MigrationTrait for Migration {
 -- cleanup for deleted consumer resources is app-level: one DELETE on roles by
 -- (resource_type, resource_id); cascade sweeps join rows.
 --
--- D-01/D-02: sentinel '' strategy — global/class scope rows store empty string
+-- D-01/D-02: sentinel '' strategy: global/class scope rows store empty string
 -- in resource_type/resource_id (never SQL NULL) so the UNIQUE triple constraint
 -- deduplicates identically on Postgres, MySQL, and SQLite.
 --
--- D-05: join table has UNIQUE(user_id, role_id) — diverges from the gem's
+-- D-05: join table has UNIQUE(user_id, role_id): diverges from the gem's
 -- non-unique composite index. This makes add_role race-safe via INSERT with
 -- catch-and-ignore of unique violation.
 --
--- D-03: VARCHAR sizes — name(255), resource_type(191), resource_id(191).
+-- D-03: VARCHAR sizes: name(255), resource_type(191), resource_id(191).
 -- D-12: roles.id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY.
 -- D-13: timestamps NOT NULL DEFAULT CURRENT_TIMESTAMP (updated_at static; roles never UPDATE).
 
