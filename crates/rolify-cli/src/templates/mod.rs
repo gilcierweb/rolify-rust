@@ -67,7 +67,8 @@ pub mod scaffolding {
             .replace("{join_table}", join_table)
     }
 
-    /// Returns the README template for the given engine.
+    /// Returns the README template for the given backend-keyed name
+    /// (`README_diesel`, `README_sqlx`, `README_seaorm`, `README_mongodb`).
     ///
     /// # Errors
     ///

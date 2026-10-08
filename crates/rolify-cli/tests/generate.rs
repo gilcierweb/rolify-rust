@@ -770,3 +770,119 @@ fn sqlx_output_matches_diesel_tree() {
         );
     }
 }
+
+/// Tests that an --backend sqlx run ships the sqlx README into every engine
+/// directory: the consumption story keys on the backend the user chose, not
+/// on the engine directory the file lands in (CR-02, D-02, D-20).
+#[test]
+fn sqlx_run_emits_sqlx_readme() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "sqlx",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let readme = fs::read_to_string(dir.join(format!("{engine}/README.md"))).unwrap();
+
+        assert!(
+            readme.contains("sqlx"),
+            "sqlx consumption story missing from {engine}/README.md"
+        );
+        assert!(
+            readme.contains("Migration::new"),
+            "programmatic Migrator construction missing from {engine}/README.md"
+        );
+        assert!(
+            !readme.contains("diesel migration run"),
+            "diesel runner instructions must not reach sqlx consumers ({engine}/README.md)"
+        );
+        assert!(
+            readme.contains("generate --backend sqlx"),
+            "generated-by header must name the sqlx backend in {engine}/README.md"
+        );
+    }
+}
+
+/// Tests that a diesel run keeps the diesel consumption story: the backend
+/// re-keying must not displace the diesel document for diesel consumers.
+#[test]
+fn diesel_run_keeps_diesel_readme() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let readme = fs::read_to_string(dir.join(format!("{engine}/README.md"))).unwrap();
+        assert!(
+            readme.contains("diesel migration run"),
+            "diesel runner instructions missing from {engine}/README.md for a diesel run"
+        );
+        assert!(
+            readme.contains("generate --backend diesel"),
+            "generated-by header must name the diesel backend in {engine}/README.md"
+        );
+    }
+}
+
+/// Tests that no generated README cites internal planning documents the
+/// consumer tree cannot contain (IN-05: every emitted README.md, for all
+/// four backends, is free of the planning-file reference).
+#[test]
+fn generated_readmes_cite_no_planning_docs() {
+    for backend in ["diesel", "sqlx", "seaorm", "mongodb"] {
+        let dir = test_temp_dir();
+        let out_dir = dir.to_str().unwrap();
+
+        rolify_cli()
+            .args([
+                "generate",
+                "--backend",
+                backend,
+                "Role",
+                "User",
+                "--out-dir",
+                out_dir,
+            ])
+            .assert()
+            .success();
+
+        for entry in WalkDir::new(&dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            let is_readme = entry.file_type().is_file()
+                && entry.file_name().to_str().is_some_and(|name| name == "README.md");
+            if is_readme {
+                let readme = fs::read_to_string(entry.path()).unwrap();
+                assert!(
+                    !readme.contains("06-CONTEXT"),
+                    "generated README cites the internal planning doc: {}",
+                    entry.path().display()
+                );
+            }
+        }
+    }
+}

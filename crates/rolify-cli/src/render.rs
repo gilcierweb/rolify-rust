@@ -144,18 +144,17 @@ fn render_scaffolding(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntr
 }
 
 /// Generates scaffolding files for a specific engine.
+///
+/// The README consumption story keys on the BACKEND the user chose, never on
+/// the engine directory the file lands in (D-02, D-20): an `--backend sqlx`
+/// run ships the sqlx Migrator story into all three engine directories,
+/// and the diesel runner instructions only reach diesel consumers (CR-02).
 fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry>, CliError> {
-    let readme_name = match engine {
-        "postgres" | "mysql" | "sqlite" => "README_diesel",
-        "seaorm" => "README_seaorm",
-        "mongo" => "README_mongodb",
-        _ => {
-            return Err(CliError::Core(
-                rolify_core::error::RolifyError::InvalidConfig {
-                    reason: format!("unknown engine for README: {engine}"),
-                },
-            ));
-        }
+    let readme_name = match plan.backend {
+        Backend::Diesel => "README_diesel",
+        Backend::Sqlx => "README_sqlx",
+        Backend::Seaorm => "README_seaorm",
+        Backend::Mongodb => "README_mongodb",
     };
     let readme_content = readme(readme_name)
         .map_err(|error| {

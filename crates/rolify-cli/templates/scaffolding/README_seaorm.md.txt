@@ -72,11 +72,19 @@ impl MigrationTrait for Migration {
 
 ## Registering with Migrator
 
-Add the migration to your `Migrator` struct:
+Add the migration to your `Migrator` struct. The emitted file name
+(`0000000001_rolify_create_tables.rs`) starts with a digit, so it cannot be
+declared as a plain module (a Rust identifier cannot start with a digit);
+alias it with a `#[path]` attribute module instead:
 
 ```rust
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::DatabaseBackend;
+
+// Points at the emitted migration file (adjust the relative path to where
+// you copied it inside your migration project).
+#[path = "0000000001_rolify_create_tables.rs"]
+mod rolify_create_tables;
 
 // In your migrator file (e.g., src/migrator.rs)
 pub struct Migrator;
@@ -85,7 +93,7 @@ pub struct Migrator;
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
-            Box::new(m20240101_000001_rolify_create_tables::Migration),
+            Box::new(rolify_create_tables::Migration),
             // ... other migrations
         ]
     }
@@ -135,4 +143,3 @@ accordingly.
 
 - [SeaORM migration guide](https://www.sea-ql.org/SeaORM/docs/1.0.x/migration/writing-migration)
 - [rolify-rust documentation](https://docs.rs/rolify)
-- [D-10, D-16 decisions](06-CONTEXT.md)

@@ -99,4 +99,3 @@ when Phase 5 executes (D-17). No BSON-type invention beyond the spec.
 
 - [rolify-rust documentation](https://docs.rs/rolify)
 - [MongoDB Rust driver](https://docs.mongodb.com/drivers/rust/)
-- [D-09, D-17 decisions](06-CONTEXT.md)

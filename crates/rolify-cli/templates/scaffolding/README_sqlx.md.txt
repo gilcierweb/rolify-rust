@@ -104,8 +104,8 @@ migrator.run(&pool).await?;
 
 ## Schema Details
 
-The schema is identical to the Diesel migrations (see `README_diesel.md` for
-full schema details). Key points:
+Each engine tree carries the canonical rolify schema, byte-identical to what
+the diesel backend emits (D-11 identity by construction). Key points:
 
 - **Byte-identical SQL** (D-11): The `up.sql` and `down.sql` files are
   identical to the Diesel migrations for each engine.
@@ -114,6 +114,10 @@ full schema details). Key points:
   `Migrator`.
 - **All three engines emitted** (D-06): Postgres, MySQL, and SQLite trees
   are generated in a single run.
+- **Tables**: the roles table stores role rows with the sentinel `''`
+  strategy for global/class scopes; the join table links holders to roles
+  with `UNIQUE (holder_id, role_id)` and an `ON DELETE CASCADE` foreign key
+  to the roles table.
 
 ## Using with rolify-sqlx Adapter
 
@@ -132,10 +136,17 @@ store.add_role(&user_id, &RoleName::from("admin")).await?;
 
 ## Engine-Specific Notes
 
-Same as Diesel (see `README_diesel.md`). The SQL is byte-identical.
+Each engine tree uses that engine's canonical dialect:
+
+- **PostgreSQL**: `BIGINT GENERATED ALWAYS AS IDENTITY` primary key,
+  `VARCHAR` string columns, `TIMESTAMP` defaults.
+- **MySQL**: `BIGINT AUTO_INCREMENT` primary key, `utf8mb4` character set
+  with `utf8mb4_bin` collation for byte-exact comparison, `InnoDB` engine
+  for foreign key support.
+- **SQLite**: `INTEGER PRIMARY KEY` (rowid alias) primary key, `TEXT` string
+  columns; enable `PRAGMA foreign_keys = ON` for foreign key enforcement.
 
 ## References
 
 - [sqlx migration docs](https://github.com/launchbadge/sqlx/blob/main/sqlx-cli/README.md)
 - [rolify-rust documentation](https://docs.rs/rolify)
-- [D-11 identity decision](06-CONTEXT.md#D-11)
