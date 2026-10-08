@@ -37,15 +37,21 @@ fn renderer_matches_canonical_default_names() {
             join_table: "users_roles".to_string(),
         };
 
-        let rendered =
-            render_all(&plan).unwrap_or_else(|error| panic!("render failed for {engine}: {error:?}"));
+        let rendered = render_all(&plan)
+            .unwrap_or_else(|error| panic!("render failed for {engine}: {error:?}"));
         let files = rendered
             .get(engine)
             .unwrap_or_else(|| panic!("no files for engine: {engine}"));
 
         // Find up.sql and down.sql
-        let up_file = files.iter().find(|file| file.path.ends_with("up.sql")).unwrap();
-        let down_file = files.iter().find(|file| file.path.ends_with("down.sql")).unwrap();
+        let up_file = files
+            .iter()
+            .find(|file| file.path.ends_with("up.sql"))
+            .unwrap();
+        let down_file = files
+            .iter()
+            .find(|file| file.path.ends_with("down.sql"))
+            .unwrap();
 
         let expected_up = read_canonical(engine, "up.sql");
         let expected_down = read_canonical(engine, "down.sql");
@@ -75,7 +81,10 @@ fn renderer_custom_names_longest_first() {
     let rendered = render_all(&plan).unwrap();
     let files = rendered.get("postgres").unwrap();
 
-    let up_file = files.iter().find(|file| file.path.ends_with("up.sql")).unwrap();
+    let up_file = files
+        .iter()
+        .find(|file| file.path.ends_with("up.sql"))
+        .unwrap();
     let content = &up_file.content;
 
     // Verify longest-first replacement: join table replaced before roles table
@@ -224,6 +233,200 @@ fn seaorm_renderer_semantic_checklist() {
     let join_pos = rendered.find("users_roles").unwrap();
     let roles_pos = rendered.rfind("roles").unwrap();
     assert!(join_pos < roles_pos, "down should drop join table first");
+}
+
+/// Splits a SQL script into whole statements with test-local logic,
+/// mirroring the emitter's documented contract (comments ride along; only a
+/// non-comment line ending in a semicolon terminates). The wiring proof
+/// must NOT import the emitter's own splitting logic (T-06-13).
+fn split_statements_test_local(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+
+    for line in sql.lines() {
+        current.push_str(line);
+        current.push('\n');
+
+        let trimmed = line.trim();
+        if !trimmed.starts_with("--") && trimmed.ends_with(';') {
+            statements.push(current.trim().to_owned());
+            current.clear();
+        }
+    }
+    assert!(
+        current.trim().is_empty(),
+        "test derivation hit an unterminated statement tail"
+    );
+    statements
+}
+
+/// Mirrors the emitters' substitution contract (D-14): split on the
+/// canonical join sentinel first, replace the roles stem per ORIGINAL
+/// segment, join the requested name last. Test-local by design: the wiring
+/// proof must not import the emitter's own logic (T-06-13).
+fn substitute_names_test_local(sql: &str, roles_table: &str, join_table: &str) -> String {
+    sql.split("users_roles")
+        .map(|segment| segment.replace("roles", roles_table))
+        .collect::<Vec<_>>()
+        .join(join_table)
+}
+
+/// Derives the expected down statements (join drop first, roles drop
+/// second) from the canonical down.sql with test-local logic mirroring the
+/// documented extraction contract: whole statements, comment lines ignored
+/// for classification, substitution applied per extracted statement.
+fn derive_down_statements_test_local(
+    down_sql: &str,
+    roles_table: &str,
+    join_table: &str,
+) -> Vec<String> {
+    let mut join_drop = String::new();
+    let mut roles_drop = String::new();
+
+    for statement in split_statements_test_local(down_sql) {
+        let executable: String = statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if !executable.contains("DROP TABLE") {
+            continue;
+        }
+        let claims_join = executable.contains("users_roles");
+        let claims_roles = executable.replace("users_roles", "").contains("roles");
+        if claims_join {
+            join_drop = substitute_names_test_local(&statement, roles_table, join_table);
+        } else if claims_roles {
+            roles_drop = substitute_names_test_local(&statement, roles_table, join_table);
+        }
+    }
+
+    assert!(
+        !join_drop.is_empty() && !roles_drop.is_empty(),
+        "canonical down must carry both drop classes"
+    );
+    vec![join_drop, roles_drop]
+}
+
+/// Parses the raw-string elements of a const statement array out of the
+/// rendered migration. Elements are `r"..."` spans; the canonical SQL
+/// carries no double quotes, so the closing `",` is unambiguous.
+fn parse_statement_array(rendered: &str, array_name: &str) -> Vec<String> {
+    let header = format!("const {array_name}: &[&str] = &[");
+    let header_position = rendered
+        .find(&header)
+        .unwrap_or_else(|| panic!("array {array_name} missing from the rendered migration"));
+    let body_start = header_position + header.len();
+    let body_length = rendered[body_start..]
+        .find("\n];")
+        .unwrap_or_else(|| panic!("array {array_name} has no closing bracket"));
+    let body = &rendered[body_start..body_start + body_length];
+
+    let mut elements = Vec::new();
+    let mut current: Option<String> = None;
+    for line in body.lines() {
+        if let Some(accumulated) = current.take() {
+            if let Some(final_piece) = line.strip_suffix("\",") {
+                elements.push(format!("{accumulated}\n{final_piece}"));
+            } else {
+                current = Some(format!("{accumulated}\n{line}"));
+            }
+        } else if let Some(rest) = line.trim_start().strip_prefix("r\"") {
+            if let Some(single_line) = rest.strip_suffix("\",") {
+                elements.push(single_line.to_owned());
+            } else {
+                current = Some(rest.to_owned());
+            }
+        }
+    }
+    assert!(
+        current.is_none(),
+        "array {array_name} carries an unterminated element"
+    );
+    elements
+}
+
+/// Tests that every emitted per-dialect statement array equals the
+/// statements independently derived from the canonical on-disk trees for
+/// that engine, element for element (T-06-13, CR-03): a postgres-into-mysql
+/// mis-wiring cannot pass this gate, and the substitution bytes flow into
+/// every array. The derivation is test-local end to end; it never imports
+/// the emitter's own splitting or extraction logic.
+#[test]
+fn seaorm_dialect_arrays_match_canonical_per_engine() {
+    let roles_table = "privileges";
+    let join_table = "customers_privileges";
+    let plan = RenderPlan {
+        backend: Backend::Seaorm,
+        role_name: "Privilege".to_string(),
+        holder_name: "Customer".to_string(),
+        roles_table: roles_table.to_string(),
+        join_table: join_table.to_string(),
+    };
+
+    let rendered = render_seaorm(&plan).unwrap();
+
+    for (engine, array_stem) in [
+        ("postgres", "POSTGRES"),
+        ("mysql", "MYSQL"),
+        ("sqlite", "SQLITE"),
+    ] {
+        let canonical_up = read_canonical(engine, "up.sql");
+        let canonical_down = read_canonical(engine, "down.sql");
+
+        // Up: substitution first, then the split (the emitter's documented
+        // pipeline order, mirrored locally).
+        let substituted_up = substitute_names_test_local(&canonical_up, roles_table, join_table);
+        let expected_up = split_statements_test_local(&substituted_up);
+
+        // Down: whole-statement extraction from the original canonical text.
+        let expected_down =
+            derive_down_statements_test_local(&canonical_down, roles_table, join_table);
+
+        let up_array = parse_statement_array(&rendered, &format!("{array_stem}_UP_STATEMENTS"));
+        let down_array = parse_statement_array(&rendered, &format!("{array_stem}_DOWN_STATEMENTS"));
+
+        assert_eq!(
+            up_array, expected_up,
+            "{engine} up array is mis-wired or drifted from the canonical tree"
+        );
+        assert_eq!(
+            down_array, expected_down,
+            "{engine} down array is mis-wired or drifted from the canonical tree"
+        );
+    }
+
+    // Dialect markers: each up array carries its own engine's identity DDL,
+    // so a copy-paste between dialects fails even if names would agree.
+    let postgres_up = parse_statement_array(&rendered, "POSTGRES_UP_STATEMENTS");
+    let mysql_up = parse_statement_array(&rendered, "MYSQL_UP_STATEMENTS");
+    let sqlite_up = parse_statement_array(&rendered, "SQLITE_UP_STATEMENTS");
+
+    assert!(
+        postgres_up
+            .iter()
+            .any(|statement| statement.contains("GENERATED ALWAYS AS IDENTITY")),
+        "postgres up array must carry the identity-column form"
+    );
+    assert!(
+        mysql_up
+            .iter()
+            .any(|statement| statement.contains("AUTO_INCREMENT")),
+        "mysql up array must carry the auto-increment form"
+    );
+    assert!(
+        !mysql_up
+            .iter()
+            .any(|statement| statement.contains("GENERATED ALWAYS AS IDENTITY")),
+        "mysql up array must not carry the postgres identity clause"
+    );
+    assert!(
+        sqlite_up
+            .iter()
+            .any(|statement| statement.contains("INTEGER PRIMARY KEY")),
+        "sqlite up array must carry the rowid-alias primary key form"
+    );
 }
 
 /// Tests Mongo renderer matches the expected snapshot (byte-for-byte).
@@ -453,8 +656,14 @@ fn custom_names_postgres_matches_snapshots() {
     let rendered = render_all(&plan).unwrap();
     let files = rendered.get("postgres").unwrap();
 
-    let up_file = files.iter().find(|file| file.path.ends_with("up.sql")).unwrap();
-    let down_file = files.iter().find(|file| file.path.ends_with("down.sql")).unwrap();
+    let up_file = files
+        .iter()
+        .find(|file| file.path.ends_with("up.sql"))
+        .unwrap();
+    let down_file = files
+        .iter()
+        .find(|file| file.path.ends_with("down.sql"))
+        .unwrap();
 
     let expected_up = read_expected_snapshot("custom_privileges_postgres_up.sql");
     let expected_down = read_expected_snapshot("custom_privileges_postgres_down.sql");

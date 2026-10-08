@@ -12,10 +12,10 @@ pub mod sql;
 use crate::render::RenderPlan;
 
 /// Canonical join-table sentinel in the vendored templates.
-const JOIN_TABLE_SENTINEL: &str = "users_roles";
+pub(crate) const JOIN_TABLE_SENTINEL: &str = "users_roles";
 
 /// Canonical roles-table stem in the vendored templates.
-const ROLES_TABLE_SENTINEL: &str = "roles";
+pub(crate) const ROLES_TABLE_SENTINEL: &str = "roles";
 
 /// Re-scan-free table-name substitution (D-14).
 ///

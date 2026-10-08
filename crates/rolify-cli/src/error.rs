@@ -10,6 +10,9 @@ pub enum CliError {
     #[error("file already exists: {files}")]
     AlreadyExists { files: String },
 
+    #[error("malformed canonical SQL: {detail}")]
+    MalformedCanonicalSql { detail: String },
+
     #[error("core error: {0}")]
     Core(#[from] RolifyError),
 }
@@ -36,6 +39,14 @@ mod tests {
             files: "up.sql".into(),
         };
         assert_eq!(err.to_string(), "file already exists: up.sql");
+
+        let err = CliError::MalformedCanonicalSql {
+            detail: "unterminated statement tail".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "malformed canonical SQL: unterminated statement tail"
+        );
 
         let core_err = RolifyError::InvalidConfig {
             reason: "bad table".into(),
