@@ -38,6 +38,18 @@ use crate::query::RoleQuery;
 use crate::resource::ResourceRef;
 use crate::role::{ResourceId, RoleName, RoleRecord};
 
+/// Sealed-SPI evolution contract (the member list lives on [`RoleStore`]).
+///
+/// Evolution rules (enforced by the `semver` CI job running
+/// cargo-semver-checks in deny mode; every SPI growth also records a
+/// parity-matrix entry with the gem cite plus the pinning test):
+///
+/// * Adding a required method is a minor-safe change because external
+///   implementors are impossible under the seal.
+/// * Changing a member signature is a major change.
+/// * Removing a member is a major change.
+/// * New optional surface ships as provided methods first, so adopters opt
+///   in without implementor churn.
 #[doc(hidden)]
 pub mod seal {
     /// Marker supertrait gating SPI impls (soft seal - see module docs).
@@ -90,6 +102,17 @@ pub struct RemovalOutcome {
 }
 
 /// The role-row storage SPI that backend adapters implement.
+///
+/// # Evolution rules
+///
+/// The SPI is soft-sealed ([`Sealed`]): only crates in this workspace can
+/// implement it, so adding a required method is a minor-safe change that
+/// cannot break external implementors. Changing a member signature is a
+/// major change, and removing a member is a major change. New optional
+/// surface always ships as provided methods first. The `semver` CI job
+/// (cargo-semver-checks in deny mode) enforces this contract, and every
+/// SPI growth records a parity-matrix entry citing the gem contract plus
+/// the pinning test.
 ///
 /// # Example
 ///
