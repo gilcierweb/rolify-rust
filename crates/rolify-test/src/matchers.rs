@@ -1361,4 +1361,141 @@ mod tests {
             .assert_role_names(&expected, "ghost is unexpected")
             .await;
     }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn every_negative_passes_on_empty_holder() {
+        let mut player = Player::fresh(21);
+        let admin = role_name("admin");
+        let class_query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
+        player
+            .assert_has_no_strict_role(&admin, ResourceFilter::Class("Forum"), "nothing granted")
+            .await;
+        player
+            .assert_has_no_all_roles(core::slice::from_ref(&class_query), "nothing granted")
+            .await;
+        player
+            .assert_has_no_any_roles(core::slice::from_ref(&class_query), "nothing granted")
+            .await;
+        player
+            .assert_has_no_only_role(&admin, ResourceFilter::Global, "nothing granted")
+            .await;
+        let expected = [role_name("admin")];
+        player
+            .assert_has_no_role_names(&expected, "empty set differs")
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    #[should_panic(expected = "assert_has_no_strict_role")]
+    async fn no_strict_panics_once_the_strict_role_is_granted() {
+        let mut player = Player::fresh(22);
+        player
+            .add_role(&role_name("moderator"), ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
+        player
+            .assert_has_no_strict_role(
+                &role_name("moderator"),
+                ResourceFilter::Class("Forum"),
+                "strictly held",
+            )
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn no_all_passes_when_one_query_misses() {
+        let mut player = Player::fresh(23);
+        let admin = role_name("admin");
+        let ghost = role_name("ghost");
+        player.add_role(&admin, ResourceRef::Global).await.unwrap();
+        let queries = [RoleQuery::with_role(&admin), RoleQuery::with_role(&ghost)];
+        player
+            .assert_has_no_all_roles(&queries, "one query misses")
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    #[should_panic(expected = "assert_has_no_all_roles")]
+    async fn no_all_panics_when_both_queries_hold() {
+        let mut player = Player::fresh(23);
+        let admin = role_name("admin");
+        let moderator = role_name("moderator");
+        player.add_role(&admin, ResourceRef::Global).await.unwrap();
+        player
+            .add_role(&moderator, ResourceRef::Class("Forum"))
+            .await
+            .unwrap();
+        let queries = [
+            RoleQuery::with_role(&admin),
+            RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Class("Forum")),
+        ];
+        player
+            .assert_has_no_all_roles(&queries, "both queries hold")
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn no_any_passes_on_empty_query_slice() {
+        let mut player = Player::fresh(24);
+        player
+            .assert_has_no_any_roles(&[], "empty slice matches nothing")
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    #[should_panic(expected = "assert_has_no_any_roles")]
+    async fn no_any_panics_once_a_query_hits() {
+        let mut player = Player::fresh(24);
+        let admin = role_name("admin");
+        let ghost = role_name("ghost");
+        player.add_role(&admin, ResourceRef::Global).await.unwrap();
+        let queries = [RoleQuery::with_role(&ghost), RoleQuery::with_role(&admin)];
+        player
+            .assert_has_no_any_roles(&queries, "one query hits")
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    #[should_panic(expected = "assert_has_no_only_role")]
+    async fn no_only_panics_on_solo_role() {
+        let mut player = Player::fresh(25);
+        player
+            .add_role(&role_name("admin"), ResourceRef::Global)
+            .await
+            .unwrap();
+        player
+            .assert_has_no_only_role(
+                &role_name("admin"),
+                ResourceFilter::Global,
+                "solo role is only",
+            )
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn no_names_passes_when_sets_differ() {
+        let mut player = Player::fresh(26);
+        player
+            .add_role(&role_name("admin"), ResourceRef::Global)
+            .await
+            .unwrap();
+        let expected = [role_name("admin"), role_name("moderator")];
+        player
+            .assert_has_no_role_names(&expected, "moderator missing")
+            .await;
+    }
+
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    #[should_panic(expected = "assert_has_no_role_names")]
+    async fn no_names_panics_when_sets_match() {
+        let mut player = Player::fresh(26);
+        player
+            .add_role(&role_name("admin"), ResourceRef::Global)
+            .await
+            .unwrap();
+        let expected = [role_name("admin")];
+        player
+            .assert_has_no_role_names(&expected, "exact set unexpectedly held")
+            .await;
+    }
 }
