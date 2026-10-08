@@ -859,7 +859,10 @@ fn generated_readmes_cite_no_planning_docs() {
             .filter_map(std::result::Result::ok)
         {
             let is_readme = entry.file_type().is_file()
-                && entry.file_name().to_str().is_some_and(|name| name == "README.md");
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name == "README.md");
             if is_readme {
                 let readme = fs::read_to_string(entry.path()).unwrap();
                 assert!(
