@@ -782,6 +782,496 @@ pub trait RoleAssertions: RolifyUser {
             }
         }
     }
+
+    /// Strict negative assertion (D-05 symmetry leg): passes exactly when
+    /// [`RolifyUser::has_strict_role`] is false, else panics with the same
+    /// full-context shape as
+    /// [`RoleAssertions::assert_has_strict_role`]. This method is the
+    /// negation: no manual `!` around the positive is needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the holder holds the role at the exact queried scope,
+    /// or when the underlying store read fails.
+    ///
+    /// # Example
+    ///
+    /// Grant then deny: the negative panics on the strictly held role.
+    /// Runs live in BOTH modes:
+    ///
+    /// ```rust,should_panic
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     player.add_role(&RoleName::from("moderator"), ResourceRef::Class("Forum")).await.unwrap();
+    ///     player.assert_has_no_strict_role(&RoleName::from("moderator"), ResourceFilter::Class("Forum"), "strictly held, so this panics").await;
+    /// }
+    /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
+    fn assert_has_no_strict_role(
+        &mut self,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let expected = RoleQuery { name, filter };
+            let satisfied = match self.has_strict_role(expected.name, expected.filter).await {
+                Ok(satisfied) => satisfied,
+                Err(store_error) => {
+                    let message = build_assertion_message(
+                        "assert_has_no_strict_role",
+                        Self::rolify_type(),
+                        &holder,
+                        &expected,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            if satisfied {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_assertion_message(
+                    "assert_has_no_strict_role",
+                    Self::rolify_type(),
+                    &holder,
+                    &expected,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
+
+    /// All-roles negative assertion (D-05 symmetry leg): passes exactly
+    /// when [`RolifyUser::has_all_roles`] is false (at least one query
+    /// misses), else panics naming the full query list through the same
+    /// multi-query message as
+    /// [`RoleAssertions::assert_has_all_roles`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when every query holds, or when the underlying store read
+    /// fails.
+    ///
+    /// # Example
+    ///
+    /// Grant both then deny: the negative panics. Runs live in BOTH modes:
+    ///
+    /// ```rust,should_panic
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     let admin = RoleName::from("admin");
+    ///     player.add_role(&admin, ResourceRef::Global).await.unwrap();
+    ///     let queries = [RoleQuery::with_role(&admin)];
+    ///     player.assert_has_no_all_roles(&queries, "held, so this panics").await;
+    /// }
+    /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
+    fn assert_has_no_all_roles(
+        &mut self,
+        queries: &[RoleQuery<'_>],
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let satisfied = match self.has_all_roles(queries).await {
+                Ok(satisfied) => satisfied,
+                Err(store_error) => {
+                    let message = build_multi_assertion_message(
+                        "assert_has_no_all_roles",
+                        Self::rolify_type(),
+                        &holder,
+                        queries,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            if satisfied {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_multi_assertion_message(
+                    "assert_has_no_all_roles",
+                    Self::rolify_type(),
+                    &holder,
+                    queries,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
+
+    /// Any-roles negative assertion (D-05 symmetry leg): passes exactly
+    /// when [`RolifyUser::has_any_roles`] is false (no query hits,
+    /// including the empty slice which matches nothing), else panics
+    /// through the same multi-query message as
+    /// [`RoleAssertions::assert_has_any_roles`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when at least one query hits, or when the underlying store
+    /// read fails.
+    ///
+    /// # Example
+    ///
+    /// Grant then deny: the negative panics. Runs live in BOTH modes:
+    ///
+    /// ```rust,should_panic
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     let admin = RoleName::from("admin");
+    ///     player.add_role(&admin, ResourceRef::Global).await.unwrap();
+    ///     let queries = [RoleQuery::with_role(&admin)];
+    ///     player.assert_has_no_any_roles(&queries, "held, so this panics").await;
+    /// }
+    /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
+    fn assert_has_no_any_roles(
+        &mut self,
+        queries: &[RoleQuery<'_>],
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let satisfied = match self.has_any_roles(queries).await {
+                Ok(satisfied) => satisfied,
+                Err(store_error) => {
+                    let message = build_multi_assertion_message(
+                        "assert_has_no_any_roles",
+                        Self::rolify_type(),
+                        &holder,
+                        queries,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            if satisfied {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_multi_assertion_message(
+                    "assert_has_no_any_roles",
+                    Self::rolify_type(),
+                    &holder,
+                    queries,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
+
+    /// Only-role negative assertion (D-05 symmetry leg): passes exactly
+    /// when [`RolifyUser::only_has_role`] is false (the asked role is
+    /// missing or the holder carries more than one role), else panics
+    /// with the same full-context shape as
+    /// [`RoleAssertions::assert_only_has_role`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when the holder holds exactly the asked role and nothing
+    /// else, or when the underlying store read fails.
+    ///
+    /// # Example
+    ///
+    /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+    /// example's own `await`s when `is_sync` is active):
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     player.assert_has_no_only_role(&RoleName::from("admin"), ResourceFilter::Global, "nothing granted yet").await;
+    /// }
+    /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
+    fn assert_has_no_only_role(
+        &mut self,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let expected = RoleQuery { name, filter };
+            let satisfied = match self.only_has_role(expected.name, expected.filter).await {
+                Ok(satisfied) => satisfied,
+                Err(store_error) => {
+                    let message = build_assertion_message(
+                        "assert_has_no_only_role",
+                        Self::rolify_type(),
+                        &holder,
+                        &expected,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            if satisfied {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_assertion_message(
+                    "assert_has_no_only_role",
+                    Self::rolify_type(),
+                    &holder,
+                    &expected,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
+
+    /// Role-names negative assertion (D-05 symmetry leg): passes exactly
+    /// when the held name set differs from the expected set, else panics
+    /// through the same names-set message as
+    /// [`RoleAssertions::assert_role_names`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when the held name set equals the expected set, or when the
+    /// underlying store read fails.
+    ///
+    /// # Example
+    ///
+    /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+    /// example's own `await`s when `is_sync` is active):
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     player.add_role(&RoleName::from("admin"), ResourceRef::Global).await.unwrap();
+    ///     let expected = [RoleName::from("admin"), RoleName::from("moderator")];
+    ///     player.assert_has_no_role_names(&expected, "moderator is missing").await;
+    /// }
+    /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
+    fn assert_has_no_role_names(
+        &mut self,
+        expected: &[RoleName],
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let held_names = match self.roles_name().await {
+                Ok(held_names) => held_names,
+                Err(store_error) => {
+                    let message = build_names_assertion_message(
+                        "assert_has_no_role_names",
+                        Self::rolify_type(),
+                        &holder,
+                        expected,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            let expected_texts = sorted_unique_texts(expected.iter().map(RoleName::as_str));
+            let held_texts = sorted_unique_texts(held_names.iter().map(RoleName::as_str));
+            if expected_texts == held_texts {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_names_assertion_message(
+                    "assert_has_no_role_names",
+                    Self::rolify_type(),
+                    &holder,
+                    expected,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
 }
 
 impl<Holder> RoleAssertions for Holder where Holder: RolifyUser {}
