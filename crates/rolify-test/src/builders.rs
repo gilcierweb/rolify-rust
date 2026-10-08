@@ -15,7 +15,8 @@
 //! `block_on` anywhere.
 
 use rolify_core::resource::ResourceRef;
-use rolify_core::role::{ResourceId, RoleName};
+use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+use rolify_core::store::RoleStore;
 
 /// Owned scope for one fixture grant: the write-side triple behind
 /// [`ResourceRef`](rolify_core::resource::ResourceRef), owned so grants
@@ -105,6 +106,118 @@ impl FixtureGrant {
     }
 }
 
+/// Seed one grant against any consumer store: `find_or_create_by` the row
+/// for the grant name plus scope, then `add` the holder link (the gem's
+/// `role_adapter.rb` level-1 row dedupe plus level-2 link guard).
+/// Idempotent: repeating the same grant returns the same row with no
+/// extra rows or links.
+///
+/// # Errors
+///
+/// Propagates the store errors of `find_or_create_by` / `add`.
+///
+/// # Example
+///
+/// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+/// example's own `await`s when `is_sync` is active):
+///
+/// ```rust
+/// use rolify_core::role::ResourceId;
+/// use rolify_test::builders::{FixtureGrant, grant};
+/// use rolify_test::InMemoryStore;
+///
+/// # #[cfg(not(feature = "is_sync"))]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() { usage().await; }
+/// # #[cfg(feature = "is_sync")]
+/// # fn main() { usage(); }
+/// #
+/// #[maybe_async::maybe_async]
+/// async fn usage() {
+///     let mut store = InMemoryStore::new();
+///     let mut conn = ();
+///     let holder = ResourceId::from(7001_i64);
+///     let record = grant(&mut store, &mut conn, &holder, &FixtureGrant::global("admin"))
+///         .await
+///         .unwrap();
+///     assert!(record.is_global());
+/// }
+/// ```
+#[maybe_async::maybe_async]
+pub async fn grant<Store>(
+    store: &mut Store,
+    conn: &mut Store::Conn,
+    holder: &ResourceId,
+    fixture_grant: &FixtureGrant,
+) -> Result<RoleRecord, Store::Error>
+where
+    Store: RoleStore,
+{
+    let scope = fixture_grant.scope.scope_ref();
+    let record = store
+        .find_or_create_by(conn, &fixture_grant.name, scope)
+        .await?;
+    store.add(conn, holder, &record).await?;
+    Ok(record)
+}
+
+/// Seed several grants for one holder in order, returning the created rows
+/// in the same order (one `grant` call per entry).
+///
+/// # Errors
+///
+/// Propagates the store errors of the first failing `grant` call.
+///
+/// # Example
+///
+/// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+/// example's own `await`s when `is_sync` is active):
+///
+/// ```rust
+/// use rolify_core::role::ResourceId;
+/// use rolify_test::builders::{FixtureGrant, grant_all};
+/// use rolify_test::InMemoryStore;
+///
+/// # #[cfg(not(feature = "is_sync"))]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() { usage().await; }
+/// # #[cfg(feature = "is_sync")]
+/// # fn main() { usage(); }
+/// #
+/// #[maybe_async::maybe_async]
+/// async fn usage() {
+///     let mut store = InMemoryStore::new();
+///     let mut conn = ();
+///     let holder = ResourceId::from(7001_i64);
+///     let forum_id = ResourceId::from(3_i64);
+///     let fixture_grants = vec![
+///         FixtureGrant::for_class("manager", "Forum"),
+///         FixtureGrant::for_instance("moderator", "Forum", forum_id),
+///     ];
+///     let records = grant_all(&mut store, &mut conn, &holder, &fixture_grants)
+///         .await
+///         .unwrap();
+///     assert_eq!(records.len(), 2);
+/// }
+/// ```
+#[maybe_async::maybe_async]
+pub async fn grant_all<Store>(
+    store: &mut Store,
+    conn: &mut Store::Conn,
+    holder: &ResourceId,
+    fixture_grants: &[FixtureGrant],
+) -> Result<Vec<RoleRecord>, Store::Error>
+where
+    Store: RoleStore,
+{
+    let mut records = Vec::with_capacity(fixture_grants.len());
+    for fixture_grant in fixture_grants {
+        let record = grant(store, conn, holder, fixture_grant).await?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,7 +229,7 @@ mod tests {
     }
 
     /// Grant creates a global admin row linked to the holder and repeats
-    /// idempotently (RED: `grant` does not exist yet).
+    /// idempotently.
     #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn grant_creates_global_admin_and_repeats_idempotently() {
         let mut store = InMemoryStore::new();
@@ -133,11 +246,14 @@ mod tests {
         assert_eq!(second, first, "repeat grant returns the same row");
         let held = store.roles_of(&mut conn, &holder).await.unwrap();
         assert_eq!(held.len(), 1, "exactly one linked row after repeat");
-        assert_eq!(store.assertion_len(), 1, "exactly one role row after repeat");
+        assert_eq!(
+            store.assertion_len(),
+            1,
+            "exactly one role row after repeat"
+        );
     }
 
-    /// Grant-all seeds class plus instance grants in one call (RED:
-    /// `grant_all` does not exist yet).
+    /// Grant-all seeds class plus instance grants in one call.
     #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
     async fn grant_all_seeds_class_plus_instance_in_one_call() {
         let mut store = InMemoryStore::new();
@@ -152,7 +268,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(records.len(), 2, "one record per grant in order");
-        assert_eq!(records[0], rolify_core::role::RoleRecord::for_class("manager", "Forum"));
+        assert_eq!(
+            records[0],
+            rolify_core::role::RoleRecord::for_class("manager", "Forum")
+        );
         assert_eq!(
             records[1],
             rolify_core::role::RoleRecord::for_instance("moderator", "Forum", forum_id)
