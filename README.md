@@ -649,10 +649,20 @@ exists, then each backend proves itself against the same suite.
 | `rails g rolify Role User` | `rolify-cli` (Phase 6) |
 | `is_admin?` shortcuts | Not ported (no `method_missing`); use `has_role` |
 
-Deliberate divergences are labeled in code and will be published in the
-parity matrix (Phase 7): `:any` follows the gem's database path (includes
-global rows); STI is modeled as `Resource::descendant_types()`; dynamic
-shortcuts are excluded.
+Deliberate divergences are labeled in code and published in
+[PARITY.md](PARITY.md), the complete Ruby-to-Rust ledger with gem
+file-and-line cites and pinning tests: `:any` follows the gem's database
+path (includes global rows); STI is modeled as
+`Resource::descendant_types()`; dynamic shortcuts are excluded.
+
+**Coming from Ruby:** [COMING-FROM-RUBY.md](COMING-FROM-RUBY.md) maps the
+dropped aliases, dynamic shortcuts, and global config onto Rust idioms,
+with worked grant/check/revoke examples at every scope plus
+Mongoid-to-MongoDB notes.
+
+**Positioning:** storage-only roles with no enforcement, pairing with
+`casbin`/`cerbos` and complementing (never competing with) SeaORM's `rbac`
+module. See [the ledger's positioning section](PARITY.md#positioning-complementary-never-competing).
 
 ## Quality gates
 
