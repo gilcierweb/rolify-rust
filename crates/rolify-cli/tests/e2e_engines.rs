@@ -1,27 +1,12 @@
-use assert_cmd::Command;
+mod common;
+
+use common::{rolify_cli, test_temp_dir};
 use sqlx::{AssertSqlSafe, MySqlPool, PgPool, SqlitePool};
 use std::fs;
-use std::path::PathBuf;
 use testcontainers::ImageExt;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::mysql::Mysql;
 use testcontainers_modules::postgres::Postgres;
-
-/// Path to the rolify-cli binary.
-fn rolify_cli() -> Command {
-    Command::cargo_bin("rolify-cli").unwrap()
-}
-
-/// Creates a temporary directory in the project's target/test-workspace.
-fn test_temp_dir() -> PathBuf {
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-workspace");
-    fs::create_dir_all(&base).unwrap();
-    let dir = tempfile::Builder::new()
-        .prefix("rolify-cli-e2e-")
-        .tempdir_in(&base)
-        .unwrap();
-    dir.keep()
-}
 
 /// Splits a SQL file into individual statements, skipping comment lines.
 fn split_sql_statements(sql: &str) -> Vec<String> {
@@ -163,7 +148,9 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
     .unwrap();
 
     assert!(
-        constraints.iter().any(|c| c == "roles_triple_unique"),
+        constraints
+            .iter()
+            .any(|constraint| constraint == "roles_triple_unique"),
         "roles_triple_unique missing"
     );
 
@@ -177,7 +164,7 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
     assert!(
         join_constraints
             .iter()
-            .any(|c| c == "users_roles_pair_unique"),
+            .any(|constraint| constraint == "users_roles_pair_unique"),
         "users_roles_pair_unique missing"
     );
 
@@ -414,7 +401,9 @@ async fn generated_mysql_schema_roundtrip() {
     .unwrap();
 
     assert!(
-        constraints.iter().any(|c| c == "roles_triple_unique"),
+        constraints
+            .iter()
+            .any(|constraint| constraint == "roles_triple_unique"),
         "roles_triple_unique missing"
     );
 
@@ -428,7 +417,7 @@ async fn generated_mysql_schema_roundtrip() {
     assert!(
         join_constraints
             .iter()
-            .any(|c| c == "users_roles_pair_unique"),
+            .any(|constraint| constraint == "users_roles_pair_unique"),
         "users_roles_pair_unique missing"
     );
 

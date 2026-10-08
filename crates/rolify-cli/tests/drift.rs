@@ -38,14 +38,14 @@ fn renderer_matches_canonical_default_names() {
         };
 
         let rendered =
-            render_all(&plan).unwrap_or_else(|e| panic!("render failed for {engine}: {e:?}"));
+            render_all(&plan).unwrap_or_else(|error| panic!("render failed for {engine}: {error:?}"));
         let files = rendered
             .get(engine)
             .unwrap_or_else(|| panic!("no files for engine: {engine}"));
 
         // Find up.sql and down.sql
-        let up_file = files.iter().find(|f| f.path.ends_with("up.sql")).unwrap();
-        let down_file = files.iter().find(|f| f.path.ends_with("down.sql")).unwrap();
+        let up_file = files.iter().find(|file| file.path.ends_with("up.sql")).unwrap();
+        let down_file = files.iter().find(|file| file.path.ends_with("down.sql")).unwrap();
 
         let expected_up = read_canonical(engine, "up.sql");
         let expected_down = read_canonical(engine, "down.sql");
@@ -75,7 +75,7 @@ fn renderer_custom_names_longest_first() {
     let rendered = render_all(&plan).unwrap();
     let files = rendered.get("postgres").unwrap();
 
-    let up_file = files.iter().find(|f| f.path.ends_with("up.sql")).unwrap();
+    let up_file = files.iter().find(|file| file.path.ends_with("up.sql")).unwrap();
     let content = &up_file.content;
 
     // Verify longest-first replacement: join table replaced before roles table
@@ -453,8 +453,8 @@ fn custom_names_postgres_matches_snapshots() {
     let rendered = render_all(&plan).unwrap();
     let files = rendered.get("postgres").unwrap();
 
-    let up_file = files.iter().find(|f| f.path.ends_with("up.sql")).unwrap();
-    let down_file = files.iter().find(|f| f.path.ends_with("down.sql")).unwrap();
+    let up_file = files.iter().find(|file| file.path.ends_with("up.sql")).unwrap();
+    let down_file = files.iter().find(|file| file.path.ends_with("down.sql")).unwrap();
 
     let expected_up = read_expected_snapshot("custom_privileges_postgres_up.sql");
     let expected_down = read_expected_snapshot("custom_privileges_postgres_down.sql");

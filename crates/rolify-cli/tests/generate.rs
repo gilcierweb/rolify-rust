@@ -1,25 +1,10 @@
-use assert_cmd::Command;
+mod common;
+
+use common::{rolify_cli, test_temp_dir};
 use predicates::prelude::*;
 use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
-
-/// Path to the rolify-cli binary.
-fn rolify_cli() -> Command {
-    Command::cargo_bin("rolify-cli").unwrap()
-}
-
-/// Creates a temporary directory in a safe location to avoid /tmp quota issues.
-fn test_temp_dir() -> PathBuf {
-    // Use a subdirectory of the project's target dir to avoid /tmp quota issues
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-workspace");
-    fs::create_dir_all(&base).unwrap();
-    let dir = tempfile::Builder::new()
-        .prefix("rolify-cli-test-")
-        .tempdir_in(&base)
-        .unwrap();
-    dir.keep()
-}
 
 #[test]
 fn help_lists_generate() {
