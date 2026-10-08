@@ -67,14 +67,45 @@ When a role is removed, emptiness is checked AFTER removal:
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_core::query::{ResourceFilter, RoleQuery};
+use rolify_core::resource::ResourceRef;
+use rolify_core::role::{ResourceId, RoleName};
 use rolify_mongodb::MongoStore;
-use mongodb::Database;
 
 let config = RolifyConfig::builder().build()?;
-let store = MongoStore::new(db, config);
+let mut store = MongoStore::new(&db, &config);
+let mut conn = ();
 
-// Same API as other adapters
-store.add_role(&user_id, &RoleName::from("admin")).await?;
+// Grant the global admin role: the store SPI mirrors the gem's adapter
+// calls (async here: every call awaits the database handle; the Mongo
+// connection is the unit value because the database lives in the store).
+let admin = store
+    .find_or_create_by(&mut conn, &RoleName::from("admin"), ResourceRef::Global)
+    .await?;
+store
+    .add(&mut conn, &ResourceId::from("user-1"), &admin)
+    .await?;
+
+// Check membership through the where_ ladder.
+let roles = store
+    .where_(
+        &mut conn,
+        &ResourceId::from("user-1"),
+        &RoleQuery {
+            name: &RoleName::from("admin"),
+            filter: ResourceFilter::Global,
+        },
+    )
+    .await?;
+assert_eq!(roles.len(), 1);
+
+// Prefer the idiomatic path in application code: implement
+// rolify_core::user::RolifyUser on your holder type, then await
+// user.add_role(&RoleName::from("admin"), ResourceRef::Global) and
+// user.has_role(&RoleName::from("admin"), ResourceFilter::Global).
+// Scoped grants pass the scope as an argument:
+// ResourceRef::Class("Forum") or
+// ResourceRef::Instance("Post", &ResourceId::from("42")).
 ```
 
 ## Custom Table Names

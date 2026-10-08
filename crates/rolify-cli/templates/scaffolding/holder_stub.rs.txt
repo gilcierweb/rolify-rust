@@ -35,39 +35,52 @@ impl {holder_name} {
 
     /// Returns the holder's roles as a set of role names.
     ///
-    /// This is a stub - the actual implementation will query the database
-    /// through the rolify adapter (e.g., `DieselStore::roles_for_user`).
+    /// This is a stub - the actual implementation queries the database
+    /// through the store SPI (`RoleStore::roles_of` with the holder id),
+    /// or implement `rolify_core::user::RolifyUser` on this type and call
+    /// `roles_name()`.
     pub fn roles(&self) -> HashSet<RoleName> {
-        // TODO: Implement via your rolify adapter
-        // Example for Diesel: DieselStore::roles_for_user(conn, self.id)
+        // TODO: Implement via your rolify adapter, e.g. with the store SPI:
+        // store.roles_of(&mut conn, &ResourceId::from(self.id))
         HashSet::new()
     }
 
     /// Checks if the holder has a specific role (global, class, or instance).
     ///
-    /// This is a stub - the actual implementation will query the database
-    /// through the rolify adapter.
+    /// This is a stub - the actual implementation queries the database
+    /// through the store SPI (`RoleStore::where_` with a `RoleQuery`),
+    /// or implement `rolify_core::user::RolifyUser` on this type and call
+    /// `has_role(&RoleName, ResourceFilter)`.
     pub fn has_role(&self, role: &RoleName) -> bool {
-        // TODO: Implement via your rolify adapter
-        // Example for Diesel: DieselStore::has_role(conn, self.id, role)
+        // TODO: Implement via your rolify adapter, e.g. with the store SPI:
+        // store.where_(&mut conn, &ResourceId::from(self.id), &RoleQuery {
+        //     name: role,
+        //     filter: ResourceFilter::Global,
+        // })
         false
     }
 
     /// Adds a role to this holder.
     ///
-    /// This is a stub - the actual implementation will use the rolify adapter.
+    /// This is a stub - the actual implementation uses the store SPI
+    /// (`RoleStore::find_or_create_by` plus `RoleStore::add`), or implement
+    /// `rolify_core::user::RolifyUser` on this type and call
+    /// `add_role(&RoleName, ResourceRef::Global)`.
     pub fn add_role(&mut self, role: &RoleName) -> Result<(), rolify_core::error::RolifyError> {
-        // TODO: Implement via your rolify adapter
-        // Example for Diesel: DieselStore::add_role(conn, self.id, role)
+        // TODO: Implement via your rolify adapter, e.g. with the store SPI:
+        // let record = store.find_or_create_by(&mut conn, role, ResourceRef::Global)?;
+        // store.add(&mut conn, &ResourceId::from(self.id), &record)?;
         Ok(())
     }
 
     /// Removes a role from this holder.
     ///
-    /// This is a stub - the actual implementation will use the rolify adapter.
+    /// This is a stub - the actual implementation uses the store SPI
+    /// (`RoleStore::remove`), or implement `rolify_core::user::RolifyUser`
+    /// on this type and call `remove_role(&RoleName, RemovalTarget::NameOnly)`.
     pub fn remove_role(&mut self, role: &RoleName) -> Result<(), rolify_core::error::RolifyError> {
-        // TODO: Implement via your rolify adapter
-        // Example for Diesel: DieselStore::remove_role(conn, self.id, role)
+        // TODO: Implement via your rolify adapter, e.g. with the store SPI:
+        // store.remove(&mut conn, &ResourceId::from(self.id), role, RemovalTarget::NameOnly, true)?;
         Ok(())
     }
 }

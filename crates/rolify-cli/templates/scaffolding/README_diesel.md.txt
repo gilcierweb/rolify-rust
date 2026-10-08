@@ -79,23 +79,33 @@ CREATE TABLE users_roles (
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_core::query::{ResourceFilter, RoleQuery};
+use rolify_core::resource::ResourceRef;
+use rolify_core::role::{ResourceId, RoleName};
 use rolify_diesel::DieselStore;
-use diesel::pg::PgConnection;
 
 let config = RolifyConfig::builder().build()?;
-let store = DieselStore::new(conn, config);
+let mut store = DieselStore::new(&config);
 
-// Add a global role
-store.add_role(&user_id, &RoleName::from("admin"))?;
+// Grant the global admin role: the store SPI mirrors the gem's adapter
+// calls (find_or_create_by dedupes the role row, add links the holder).
+let admin = store.find_or_create_by(&mut conn, &RoleName::from("admin"), ResourceRef::Global)?;
+store.add(&mut conn, &ResourceId::from("user-1"), &admin)?;
 
-// Check if user has role
-let has_admin = store.has_role(&user_id, &RoleName::from("admin"))?;
+// Check membership through the where_ ladder.
+let roles = store.where_(&mut conn, &ResourceId::from("user-1"), &RoleQuery {
+    name: &RoleName::from("admin"),
+    filter: ResourceFilter::Global,
+})?;
+assert_eq!(roles.len(), 1);
 
-// Add a class-scoped role
-store.add_role_scoped(&user_id, &RoleName::from("moderator"), "Forum", "")?;
-
-// Add an instance-scoped role
-store.add_role_scoped(&user_id, &RoleName::from("owner"), "Post", "42")?;
+// Prefer the idiomatic path in application code: implement
+// rolify_core::user::RolifyUser on your holder type, then call
+// user.add_role(&RoleName::from("admin"), ResourceRef::Global) and
+// user.has_role(&RoleName::from("admin"), ResourceFilter::Global).
+// Scoped grants pass the scope as an argument:
+// ResourceRef::Class("Forum") or
+// ResourceRef::Instance("Post", &ResourceId::from("42")).
 ```
 
 ## Custom Table Names

@@ -61,40 +61,50 @@ in versioned subdirectories), which differ from SQLx's expected flat layout,
 the recommended approach is to build a `Migrator` programmatically:
 
 ```rust
-use sqlx::migrate::{Migration, Migrator, MigrationType};
-use sqlx::postgres::PgPool;
-use std::path::Path;
+use sqlx::migrate::{Migration, MigrationType, Migrator};
+use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
+use std::borrow::Cow;
 use std::fs;
+use std::path::Path;
 
 fn build_migrator(migration_dir: &Path) -> Result<Migrator, Box<dyn std::error::Error>> {
-    let mut migrations = Vec::new();
-    
     let mut entries: Vec<_> = fs::read_dir(migration_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
         .collect();
-    
+
     // Sort by directory name (timestamp prefix)
     entries.sort_by_key(|e| e.file_name());
-    
+
+    let mut migrations = Vec::new();
     for entry in entries {
         let dir = entry.path();
-        let version_str = dir.file_name().unwrap().to_str().unwrap();
-        let version: i64 = version_str.split('_').next().unwrap().parse()?;
-        
+        let dir_name = dir.file_name().unwrap().to_str().unwrap();
+        let version: i64 = dir_name.split('_').next().unwrap().parse()?;
+        let description: Cow<'static, str> = dir_name.to_owned().into();
+
+        // sqlx 0.9 types runtime SQL as SqlStr: only &'static str converts
+        // directly, so audit the generated files once and wrap them.
         let up_sql = fs::read_to_string(dir.join("up.sql"))?;
-        let down_sql = fs::read_to_string(dir.join("down.sql"))?;
-        
         migrations.push(Migration::new(
             version,
-            version_str.to_string(),
-            up_sql,
-            Some(down_sql),
-            MigrationType::ReversibleUpAndDown,
+            description.clone(),
+            MigrationType::ReversibleUp,
+            AssertSqlSafe(up_sql).into_sql_str(),
+            false,
+        ));
+
+        let down_sql = fs::read_to_string(dir.join("down.sql"))?;
+        migrations.push(Migration::new(
+            version,
+            description,
+            MigrationType::ReversibleDown,
+            AssertSqlSafe(down_sql).into_sql_str(),
+            false,
         ));
     }
-    
-    Ok(Migrator::new(migrations))
+
+    Ok(Migrator::with_migrations(migrations))
 }
 
 // Usage
@@ -123,15 +133,43 @@ the diesel backend emits (D-11 identity by construction). Key points:
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_core::query::{ResourceFilter, RoleQuery};
+use rolify_core::resource::ResourceRef;
+use rolify_core::role::{ResourceId, RoleName};
 use rolify_sqlx::SqlxStore;
-use sqlx::PgPool;
 
-let pool = PgPool::connect("postgres://...").await?;
 let config = RolifyConfig::builder().build()?;
-let store = SqlxStore::new(pool, config);
+let mut store = SqlxStore::<sqlx::Postgres>::new(&config);
 
-// Same API as DieselStore
-store.add_role(&user_id, &RoleName::from("admin")).await?;
+// Grant the global admin role: the store SPI mirrors the gem's adapter
+// calls (async here: every call awaits the pool).
+let admin = store
+    .find_or_create_by(&mut conn, &RoleName::from("admin"), ResourceRef::Global)
+    .await?;
+store
+    .add(&mut conn, &ResourceId::from("user-1"), &admin)
+    .await?;
+
+// Check membership through the where_ ladder.
+let roles = store
+    .where_(
+        &mut conn,
+        &ResourceId::from("user-1"),
+        &RoleQuery {
+            name: &RoleName::from("admin"),
+            filter: ResourceFilter::Global,
+        },
+    )
+    .await?;
+assert_eq!(roles.len(), 1);
+
+// Prefer the idiomatic path in application code: implement
+// rolify_core::user::RolifyUser on your holder type, then await
+// user.add_role(&RoleName::from("admin"), ResourceRef::Global) and
+// user.has_role(&RoleName::from("admin"), ResourceFilter::Global).
+// Scoped grants pass the scope as an argument:
+// ResourceRef::Class("Forum") or
+// ResourceRef::Instance("Post", &ResourceId::from("42")).
 ```
 
 ## Engine-Specific Notes
