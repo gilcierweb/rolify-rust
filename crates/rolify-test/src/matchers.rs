@@ -1,9 +1,12 @@
 //! [`RoleAssertions`] - consumer test assertions over [`RolifyUser`].
 //!
 //! Blanket trait (D-01): every holder implementing [`RolifyUser`] gains
-//! `assert_has_role` plus `assert_has_no_role` with no extra wiring. Both
-//! methods delegate every decision to the existing `has_role` predicate, so
-//! the kernel ladder (global override, strict gate, class-covers-instance)
+//! the store-backed family (`assert_has_role`, strict, all, any, only,
+//! names) plus the symmetric `assert_has_no_*` negatives (D-05) plus the
+//! zero-I/O `assert_cached_*` twins over borrowed [`RoleSet`] snapshots
+//! (D-06), with no extra wiring. Every method delegates its decision to
+//! the matching [`RolifyUser`] predicate or [`RoleSet`] predicate, so the
+//! kernel ladder (global override, strict gate, class-covers-instance)
 //! is inherited, never reimplemented.
 //!
 //! Failure shape (D-02, D-11): mismatches panic (no `Result` return) with
@@ -14,9 +17,12 @@
 //! through the same builder with a `store_error` line; the held list then
 //! renders empty because it could not be read.
 //!
-//! Argument shape (D-09): borrowed [`RoleName`] plus [`ResourceFilter`],
-//! exactly the `has_role` query halves, so callers reuse the queries they
-//! already build. User-side only (D-10): no resource-side matchers.
+//! Argument shape (D-09): borrowed [`RoleName`] plus [`ResourceFilter`]
+//! for the single-query asserts, [`RoleQuery`] slices for the all plus
+//! any asserts, [`RoleName`] slices for the names asserts: exactly the
+//! predicate argument halves, so callers reuse the queries they already
+//! build. User-side only (D-10): no resource-side matchers; resource
+//! reads stay plain `assert!` on query results.
 //!
 //! Dual-mode: the trait carries `maybe_async` AFIT exactly like
 //! [`RolifyUser`]; it compiles in both default async and `is_sync` builds
@@ -35,7 +41,7 @@
 use core::future::Future;
 
 use rolify_core::query::{ResourceFilter, RoleQuery};
-    use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
 use rolify_core::store::RoleStore;
 use rolify_core::user::RolifyUser;
 
@@ -1272,6 +1278,755 @@ pub trait RoleAssertions: RolifyUser {
             }
         }
     }
+
+    /// Cached positive assertion (D-06 twin leg): passes when the borrowed
+    /// [`RoleSet`] snapshot holds the role through the non-strict ladder,
+    /// else panics with the same full-context shape as the store-backed
+    /// twin. Zero I/O by signature: no store handle in, no store handle
+    /// out. A stale snapshot fails loudly here instead of passing.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot misses the role at the queried scope.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// player.assert_has_cached_role(&snapshot, &RoleName::from("admin"), ResourceFilter::Global, "snapshot hit");
+    /// # }
+    /// ```
+    fn assert_has_cached_role(
+        &self,
+        snapshot: &RoleSet<'_>,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected = RoleQuery::with_role_and_filter(name, filter);
+        if !snapshot.has_cached_role(&expected) {
+            let message = build_assertion_message(
+                "assert_has_cached_role",
+                Self::rolify_type(),
+                &holder,
+                &expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached strict positive assertion (D-06 twin leg): passes when the
+    /// snapshot holds the role at the exact scope
+    /// ([`RoleSet::has_strict_cached_role`]), else panics with the same
+    /// shape as the store-backed strict twin. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot lacks the role at the exact queried scope.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::for_class("moderator", "Forum")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// player.assert_has_strict_cached_role(&snapshot, &RoleName::from("moderator"), ResourceFilter::Class("Forum"), "exact cached row");
+    /// # }
+    /// ```
+    fn assert_has_strict_cached_role(
+        &self,
+        snapshot: &RoleSet<'_>,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected = RoleQuery::with_role_and_filter(name, filter);
+        if !snapshot.has_strict_cached_role(&expected) {
+            let message = build_assertion_message(
+                "assert_has_strict_cached_role",
+                Self::rolify_type(),
+                &holder,
+                &expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached all-roles positive assertion (D-06 twin leg): passes when
+    /// every query matches through [`RoleSet::has_all_cached`], else
+    /// panics naming the full query list through the shared multi-query
+    /// message. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when any query misses the snapshot.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// let admin = RoleName::from("admin");
+    /// let queries = [RoleQuery::with_role(&admin)];
+    /// player.assert_has_all_cached(&snapshot, &queries, "every query cached");
+    /// # }
+    /// ```
+    fn assert_has_all_cached(
+        &self,
+        snapshot: &RoleSet<'_>,
+        queries: &[RoleQuery<'_>],
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        if !snapshot.has_all_cached(queries) {
+            let message = build_multi_assertion_message(
+                "assert_has_all_cached",
+                Self::rolify_type(),
+                &holder,
+                queries,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached any-roles positive assertion (D-06 twin leg): passes when at
+    /// least one query matches through [`RoleSet::has_any_cached`], else
+    /// panics naming the full query list. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when every query misses the snapshot (an empty slice always
+    /// panics, it matches nothing).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// let admin = RoleName::from("admin");
+    /// let ghost = RoleName::from("ghost");
+    /// let queries = [RoleQuery::with_role(&ghost), RoleQuery::with_role(&admin)];
+    /// player.assert_has_any_cached(&snapshot, &queries, "one cached hit suffices");
+    /// # }
+    /// ```
+    fn assert_has_any_cached(
+        &self,
+        snapshot: &RoleSet<'_>,
+        queries: &[RoleQuery<'_>],
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        if !snapshot.has_any_cached(queries) {
+            let message = build_multi_assertion_message(
+                "assert_has_any_cached",
+                Self::rolify_type(),
+                &holder,
+                queries,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached only-role positive assertion (D-06 twin leg): passes when the
+    /// query matches and the snapshot holds exactly one record
+    /// ([`RoleSet::only_has_cached`]), else panics with the held rows
+    /// showing what else the snapshot carries. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the query misses or the snapshot holds more than one
+    /// record.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// player.assert_only_has_cached(&snapshot, &RoleName::from("admin"), ResourceFilter::Global, "solo cached role");
+    /// # }
+    /// ```
+    fn assert_only_has_cached(
+        &self,
+        snapshot: &RoleSet<'_>,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected = RoleQuery::with_role_and_filter(name, filter);
+        if !snapshot.only_has_cached(&expected) {
+            let message = build_assertion_message(
+                "assert_only_has_cached",
+                Self::rolify_type(),
+                &holder,
+                &expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached role-names positive assertion (D-06 twin leg): passes when
+    /// the sorted name set over the snapshot rows equals the expected
+    /// set, regardless of row order. The panic shows missing plus
+    /// unexpected names. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot name set differs from the expected set.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// let expected = [RoleName::from("admin")];
+    /// player.assert_cached_role_names(&snapshot, &expected, "exact cached set");
+    /// # }
+    /// ```
+    fn assert_cached_role_names(
+        &self,
+        snapshot: &RoleSet<'_>,
+        expected: &[RoleName],
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected_texts = sorted_unique_texts(expected.iter().map(RoleName::as_str));
+        let held_texts =
+            sorted_unique_texts(snapshot.rows().iter().map(|record| record.name.as_str()));
+        if expected_texts != held_texts {
+            let message = build_names_assertion_message(
+                "assert_cached_role_names",
+                Self::rolify_type(),
+                &holder,
+                expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached negative assertion (D-05 plus D-06 legs): passes exactly
+    /// when [`RoleSet::has_cached_role`] is false for the snapshot, else
+    /// panics with the same shape as
+    /// [`RoleAssertions::assert_has_cached_role`]. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot holds the role at the queried scope.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// player.assert_has_no_cached_role(&snapshot, &RoleName::from("ghost"), ResourceFilter::Any, "never cached");
+    /// # }
+    /// ```
+    fn assert_has_no_cached_role(
+        &self,
+        snapshot: &RoleSet<'_>,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected = RoleQuery::with_role_and_filter(name, filter);
+        if snapshot.has_cached_role(&expected) {
+            let message = build_assertion_message(
+                "assert_has_no_cached_role",
+                Self::rolify_type(),
+                &holder,
+                &expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached strict negative assertion (D-05 plus D-06 legs): passes
+    /// exactly when [`RoleSet::has_strict_cached_role`] is false, else
+    /// panics with the same shape as
+    /// [`RoleAssertions::assert_has_strict_cached_role`]. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot holds the role at the exact queried scope.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// player.assert_has_no_strict_cached_role(&snapshot, &RoleName::from("admin"), ResourceFilter::Class("Forum"), "global is not the class row");
+    /// # }
+    /// ```
+    fn assert_has_no_strict_cached_role(
+        &self,
+        snapshot: &RoleSet<'_>,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected = RoleQuery::with_role_and_filter(name, filter);
+        if snapshot.has_strict_cached_role(&expected) {
+            let message = build_assertion_message(
+                "assert_has_no_strict_cached_role",
+                Self::rolify_type(),
+                &holder,
+                &expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached all-roles negative assertion (D-05 plus D-06 legs): passes
+    /// exactly when [`RoleSet::has_all_cached`] is false (at least one
+    /// query misses), else panics through the shared multi-query message.
+    /// Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when every query matches the snapshot.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// let admin = RoleName::from("admin");
+    /// let ghost = RoleName::from("ghost");
+    /// let queries = [RoleQuery::with_role(&admin), RoleQuery::with_role(&ghost)];
+    /// player.assert_has_no_all_cached(&snapshot, &queries, "one query misses");
+    /// # }
+    /// ```
+    fn assert_has_no_all_cached(
+        &self,
+        snapshot: &RoleSet<'_>,
+        queries: &[RoleQuery<'_>],
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        if snapshot.has_all_cached(queries) {
+            let message = build_multi_assertion_message(
+                "assert_has_no_all_cached",
+                Self::rolify_type(),
+                &holder,
+                queries,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached any-roles negative assertion (D-05 plus D-06 legs): passes
+    /// exactly when [`RoleSet::has_any_cached`] is false (no query hits,
+    /// including the empty slice), else panics through the shared
+    /// multi-query message. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when at least one query matches the snapshot.
+    ///
+    /// # Example
+    ///
+    /// ```rust,should_panic
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::RoleQuery;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// let admin = RoleName::from("admin");
+    /// let queries = [RoleQuery::with_role(&admin)];
+    /// player.assert_has_no_any_cached(&snapshot, &queries, "cached, so this panics");
+    /// # }
+    /// ```
+    fn assert_has_no_any_cached(
+        &self,
+        snapshot: &RoleSet<'_>,
+        queries: &[RoleQuery<'_>],
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        if snapshot.has_any_cached(queries) {
+            let message = build_multi_assertion_message(
+                "assert_has_no_any_cached",
+                Self::rolify_type(),
+                &holder,
+                queries,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached only-role negative assertion (D-05 plus D-06 legs): passes
+    /// exactly when [`RoleSet::only_has_cached`] is false, else panics
+    /// with the held rows. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot holds exactly the asked role and nothing
+    /// else.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin"), RoleRecord::global("staff")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// player.assert_has_no_only_cached(&snapshot, &RoleName::from("admin"), ResourceFilter::Global, "staff breaks only");
+    /// # }
+    /// ```
+    fn assert_has_no_only_cached(
+        &self,
+        snapshot: &RoleSet<'_>,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected = RoleQuery::with_role_and_filter(name, filter);
+        if snapshot.only_has_cached(&expected) {
+            let message = build_assertion_message(
+                "assert_has_no_only_cached",
+                Self::rolify_type(),
+                &holder,
+                &expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
+
+    /// Cached role-names negative assertion (D-05 plus D-06 legs): passes
+    /// exactly when the snapshot name set differs from the expected set,
+    /// else panics through the shared names-set message. Zero I/O.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the snapshot name set equals the expected set.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # fn main() {
+    /// let player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    /// let rows = [RoleRecord::global("admin")];
+    /// let snapshot = RoleSet::new(&rows);
+    /// let expected = [RoleName::from("admin"), RoleName::from("moderator")];
+    /// player.assert_has_no_cached_role_names(&snapshot, &expected, "moderator is missing");
+    /// # }
+    /// ```
+    fn assert_has_no_cached_role_names(
+        &self,
+        snapshot: &RoleSet<'_>,
+        expected: &[RoleName],
+        context: impl Into<String>,
+    ) {
+        let context_text: String = context.into();
+        let holder = self.rolify_id();
+        let expected_texts = sorted_unique_texts(expected.iter().map(RoleName::as_str));
+        let held_texts =
+            sorted_unique_texts(snapshot.rows().iter().map(|record| record.name.as_str()));
+        if expected_texts == held_texts {
+            let message = build_names_assertion_message(
+                "assert_has_no_cached_role_names",
+                Self::rolify_type(),
+                &holder,
+                expected,
+                snapshot.rows(),
+                &context_text,
+                None,
+            );
+            panic!("{message}");
+        }
+    }
 }
 
 impl<Holder> RoleAssertions for Holder where Holder: RolifyUser {}
@@ -1434,7 +2189,7 @@ mod tests {
     use rolify_core::config::RolifyConfig;
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::resource::ResourceRef;
-use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
+    use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
     use rolify_core::user::RolifyUser;
 
     struct Player {
@@ -2112,8 +2867,7 @@ use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
         let admin = role_name("admin");
         let rows: [RoleRecord; 0] = [];
         let snapshot = RoleSet::new(&rows);
-        let class_query =
-            RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
+        let class_query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
         player.assert_has_no_cached_role(
             &snapshot,
             &admin,
