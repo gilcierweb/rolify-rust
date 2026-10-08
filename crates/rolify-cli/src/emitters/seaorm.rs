@@ -93,11 +93,17 @@ fn render_array_body(statements: &[String]) -> String {
         .join("\n")
 }
 
-/// Splits a SQL script into individual statements, accumulating lines until
-/// one ends with a semicolon. Comment lines stay attached to the statement
-/// that follows them (valid SQL), and only a NON-comment line can terminate
-/// a statement: the canonical mysql header has a prose line ending in a
-/// semicolon, which must never split the script.
+/// Splits a SQL script into individual statements, breaking on every
+/// semicolon that terminates a NON-comment line. Comment lines stay
+/// attached to the statement that follows them (valid SQL), and only a
+/// NON-comment line can terminate a statement: the canonical mysql header
+/// has a prose line ending in a semicolon, which must never split the
+/// script.
+///
+/// Splitting per semicolon (not per line) keeps multi-command prepared
+/// statements out of the emitted arrays: a line carrying two commands
+/// yields two statements, because the Postgres extended protocol rejects
+/// multiple commands inside a single prepared statement.
 ///
 /// Fails loudly on an unterminated tail (WR-05): a script whose remaining
 /// content after the last semicolon is non-empty would otherwise be silently
@@ -107,14 +113,27 @@ fn split_statements(sql: &str) -> Result<Vec<String>, CliError> {
     let mut current = String::new();
 
     for line in sql.lines() {
-        current.push_str(line);
-        current.push('\n');
+        if line.trim().starts_with("--") {
+            current.push_str(line);
+            current.push('\n');
+            continue;
+        }
 
-        let terminates_statement = !line.trim().starts_with("--") && line.trim().ends_with(';');
-        if terminates_statement {
+        let mut remainder = line;
+        while let Some(semi) = remainder.find(';') {
+            let (head, tail) = remainder.split_at(semi + 1);
+            current.push_str(head);
             statements.push(current.trim().to_owned());
             current.clear();
+            remainder = tail;
         }
+        // Preserve every byte the old line accumulator kept: the
+        // post-semicolon remainder (even whitespace-only) and the line
+        // break ride along into the next statement buffer, so canonical
+        // output stays byte-identical and only same-line multi-commands
+        // change shape (they now split instead of merging).
+        current.push_str(remainder);
+        current.push('\n');
     }
 
     if !current.trim().is_empty() {
@@ -398,6 +417,32 @@ mod tests {
     }
 
     #[test]
+    fn split_statements_splits_same_line_commands() {
+        // Two commands on one line must never merge into a single prepared
+        // statement (the Postgres extended protocol rejects multi-command
+        // strings): each semicolon terminates exactly one statement.
+        let script = "DROP TABLE IF EXISTS users_roles; DROP TABLE IF EXISTS roles;";
+
+        let statements = split_statements(script).unwrap();
+
+        assert_eq!(
+            statements.len(),
+            2,
+            "same-line commands must split, got: {statements:?}"
+        );
+        assert!(
+            statements[0].ends_with("users_roles;"),
+            "first command truncated: {}",
+            statements[0]
+        );
+        assert!(
+            statements[1].ends_with("roles;"),
+            "second command truncated: {}",
+            statements[1]
+        );
+    }
+
+    #[test]
     fn split_statements_accepts_canonical_scripts() {
         for engine in ENGINES {
             let up_statements = split_statements(templates::up(engine)).unwrap();
@@ -443,7 +488,10 @@ mod tests {
 
     #[test]
     fn extract_down_statements_rejects_multi_drop_statement() {
-        let script = "DROP TABLE IF EXISTS users_roles; DROP TABLE IF EXISTS roles;";
+        // Two DROP TABLE clauses with no semicolon between them cannot be
+        // split into separate statements, so the extractor guard must fail
+        // loudly instead of emitting a multi-command prepared statement.
+        let script = "DROP TABLE IF EXISTS users_roles DROP TABLE IF EXISTS roles;";
         let default_plan = plan("roles", "users_roles");
 
         let error = extract_down_statements(script, &default_plan).unwrap_err();
