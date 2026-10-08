@@ -4,7 +4,7 @@
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
 use crate::args::Backend;
-use crate::emitters::{render_mongo, seaorm::render_seaorm, sql::render_sql};
+use crate::emitters::{mongo::render_mongo, seaorm::render_seaorm, sql::render_sql};
 use crate::error::CliError;
 use crate::templates::scaffolding::{config_example, holder_stub, readme, role_stub};
 use std::collections::BTreeMap;

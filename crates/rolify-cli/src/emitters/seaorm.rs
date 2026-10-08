@@ -13,14 +13,15 @@
 //! - ON DELETE CASCADE on join foreign key
 //! - Join-first drop order in `down()`
 
+use crate::emitters::substitute_table_names;
 use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates;
 
 /// Renders the `SeaORM` migration file.
 ///
-/// Substitutes validated table names with longest-first replacement order
-/// (same rule as SQL renderer). Returns the migration file content.
+/// Substitutes validated table names through the shared re-scan-free helper
+/// (same rule as the SQL renderer). Returns the migration file content.
 ///
 /// # Errors
 ///
@@ -30,12 +31,7 @@ pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
 
     // Get the canonical up SQL (SeaORM raw-SQL path reuses the Postgres dialect
     // template; engine selection happens at runtime via SchemaManager backend)
-    let up_sql = templates::up("postgres");
-
-    // Longest-first replacement: join_table before roles_table
-    let up_sql = up_sql
-        .replace("users_roles", &plan.join_table)
-        .replace("roles", &plan.roles_table);
+    let up_sql = substitute_table_names(templates::up("postgres"), plan);
 
     // Extract DROP statements from the ORIGINAL canonical down.sql
     // (before substitution), then substitute with custom names
@@ -91,7 +87,9 @@ fn split_statements(sql: &str) -> Vec<String> {
 }
 
 /// Extracts a DROP TABLE IF EXISTS statement for the given table from the SQL
-/// and substitutes the table names with longest-first replacement order.
+/// and substitutes the table names per line. Each line goes through a single
+/// `str::replace` pass, which never re-scans its own insertions, so an
+/// explicit join name embedding the roles stem survives verbatim.
 fn extract_and_substitute_drop(sql: &str, plan: &RenderPlan) -> (String, String) {
     let mut down_join = String::new();
     let mut down_roles = String::new();

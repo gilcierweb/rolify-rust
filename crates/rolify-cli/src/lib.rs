@@ -12,8 +12,10 @@
 //!   handles all filesystem I/O with dry-run and force semantics (D-04, D-22).
 //! - **Single renderer**: Diesel and Sqlx share the same SQL renderer
 //!   (emitters/sql.rs) - D-11 identity by construction.
-//! - **Longest-first replacement**: join table name replaced before roles table
-//!   name to avoid partial replacement (D-14).
+//! - **Re-scan-free substitution**: one shared helper splits the template on
+//!   the canonical join sentinel before the roles stem is replaced, so
+//!   substituted text is never re-scanned and an explicit join table name
+//!   survives verbatim (D-14).
 //! - **Validation at boundaries**: all interpolated names pass through
 //!   `RolifyConfigBuilder::validate_identifier` before substitution (T-06-01).
 //!

@@ -160,6 +160,31 @@ fn seaorm_renderer_custom_names_longest_first() {
     );
 }
 
+/// Tests that an explicit join table embedding the roles stem survives the
+/// `SeaORM` substitution verbatim: the rendered migration carries the
+/// requested name, never the re-scanned mangled variant (WR-01).
+#[test]
+fn seaorm_explicit_join_name_survives_substitution() {
+    let plan = RenderPlan {
+        backend: Backend::Seaorm,
+        role_name: "Privilege".to_string(),
+        holder_name: "Customer".to_string(),
+        roles_table: "privileges".to_string(),
+        join_table: "member_roles_archive".to_string(),
+    };
+
+    let rendered = render_seaorm(&plan).unwrap();
+
+    assert!(
+        rendered.contains("member_roles_archive"),
+        "explicit join name missing from the seaorm migration"
+    );
+    assert!(
+        !rendered.contains("member_privileges_archive"),
+        "explicit join name mangled by a re-scan in the seaorm migration"
+    );
+}
+
 /// Tests `SeaORM` semantic checklist (Pitfall 7).
 #[test]
 fn seaorm_renderer_semantic_checklist() {
@@ -312,6 +337,35 @@ fn mongo_renderer_custom_names_substitution() {
         !role_doc.contains("users_roles"),
         "default join table should not appear"
     );
+}
+
+/// Tests that an explicit join table embedding the roles stem survives the
+/// Mongo substitution verbatim: the role document carries the requested
+/// name (the template's table-name reference block lives in its module
+/// docs), and the mangled variant appears in neither emitted document
+/// (WR-01).
+#[test]
+fn mongo_explicit_join_name_survives_substitution() {
+    let plan = RenderPlan {
+        backend: Backend::Mongodb,
+        role_name: "Privilege".to_string(),
+        holder_name: "Customer".to_string(),
+        roles_table: "privileges".to_string(),
+        join_table: "member_roles_archive".to_string(),
+    };
+
+    let (role_doc, index_notes) = render_mongo(&plan).unwrap();
+
+    assert!(
+        role_doc.contains("member_roles_archive"),
+        "explicit join name missing from the mongo role document"
+    );
+    for (name, document) in [("role_doc", &role_doc), ("index_notes", &index_notes)] {
+        assert!(
+            !document.contains("member_privileges_archive"),
+            "explicit join name mangled by a re-scan in the mongo {name}"
+        );
+    }
 }
 
 /// Tests that malicious identifiers are rejected by `validate_identifier`.

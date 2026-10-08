@@ -886,3 +886,105 @@ fn generated_readmes_cite_no_planning_docs() {
         }
     }
 }
+
+/// Tests that `--roles-table` WITHOUT `--join-table` derives the join table
+/// as holder plural + _ + roles-table value (the args.rs help contract), so
+/// the migration and the scaffolding config agree everywhere (CR-01, D-05).
+#[test]
+fn roles_table_without_join_table_agrees_everywhere() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--roles-table",
+            "privileges",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // SQL: the derived join table is users_privileges on every engine
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let up_sql = fs::read_to_string(dir.join(format!(
+            "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
+        )))
+        .unwrap();
+        assert!(
+            up_sql.contains("CREATE TABLE users_privileges"),
+            "derived join table users_privileges missing from {engine} up.sql"
+        );
+        assert!(
+            !up_sql.contains("users_roles"),
+            "stale derived join name users_roles in {engine} up.sql"
+        );
+    }
+
+    // Scaffolding: config_example documents the SAME derived join name
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let config = fs::read_to_string(dir.join(format!("{engine}/config_example.rs"))).unwrap();
+        assert!(
+            config.contains("users_privileges"),
+            "config_example missing the derived join table for {engine}"
+        );
+        assert!(
+            !config.contains("users_roles"),
+            "config_example documents a join table the migration never created ({engine})"
+        );
+    }
+}
+
+/// Tests that an explicit `--join-table` embedding the roles stem survives
+/// verbatim in every emitted artifact: the re-scan-free substitution never
+/// lets the roles pass touch the inserted join name (WR-01).
+#[test]
+fn explicit_join_table_with_roles_substring_survives() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Privilege",
+            "Customer",
+            "--roles-table",
+            "privileges",
+            "--join-table",
+            "member_roles_archive",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    for engine in ["postgres", "mysql", "sqlite"] {
+        for file_name in ["up.sql", "down.sql"] {
+            let sql = fs::read_to_string(dir.join(format!(
+                "migrations/{engine}/0000000001_rolify_create_tables/{file_name}"
+            )))
+            .unwrap();
+            assert!(
+                sql.contains("member_roles_archive"),
+                "explicit join table missing from {engine} {file_name}"
+            );
+            assert!(
+                !sql.contains("member_privileges_archive"),
+                "explicit join table mangled by a re-scan in {engine} {file_name}"
+            );
+        }
+    }
+
+    let config = fs::read_to_string(dir.join("postgres/config_example.rs")).unwrap();
+    assert!(
+        config.contains("member_roles_archive"),
+        "config_example must carry the requested join name"
+    );
+}

@@ -84,34 +84,40 @@ pub mod scaffolding {
     }
 }
 
-/// Returns the up migration for the given engine.
+/// Returns the up migration for the given engine (postgres, mysql, sqlite).
+///
+/// Internal invariant: every call site pre-validates the engine to one of
+/// the three SQL engines, so the panic below is an unreachable-in-practice
+/// guard against future call-site drift, not input validation (IN-02).
 ///
 /// # Panics
 ///
-/// Panics when the engine is not one of postgres, mysql, sqlite, seaorm, mongodb.
+/// Panics when the engine is not one of postgres, mysql, sqlite.
 #[must_use]
-pub fn up(engine: &str) -> &str {
+pub(crate) fn up(engine: &str) -> &str {
     match engine {
-        "postgres" | "seaorm" => POSTGRES_UP, // SeaORM uses the Postgres dialect
+        "postgres" => POSTGRES_UP,
         "mysql" => MYSQL_UP,
         "sqlite" => SQLITE_UP,
-        "mongodb" => "", // MongoDB uses document templates, not SQL
         _ => panic!("unknown engine: {engine}"),
     }
 }
 
-/// Returns the down migration for the given engine.
+/// Returns the down migration for the given engine (postgres, mysql, sqlite).
+///
+/// Internal invariant: every call site pre-validates the engine to one of
+/// the three SQL engines, so the panic below is an unreachable-in-practice
+/// guard against future call-site drift, not input validation (IN-02).
 ///
 /// # Panics
 ///
-/// Panics when the engine is not one of postgres, mysql, sqlite, seaorm, mongodb.
+/// Panics when the engine is not one of postgres, mysql, sqlite.
 #[must_use]
-pub fn down(engine: &str) -> &str {
+pub(crate) fn down(engine: &str) -> &str {
     match engine {
-        "postgres" | "seaorm" => POSTGRES_DOWN, // SeaORM uses the Postgres dialect
+        "postgres" => POSTGRES_DOWN,
         "mysql" => MYSQL_DOWN,
         "sqlite" => SQLITE_DOWN,
-        "mongodb" => "", // MongoDB uses document templates, not SQL
         _ => panic!("unknown engine: {engine}"),
     }
 }

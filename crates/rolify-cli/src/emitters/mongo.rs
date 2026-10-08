@@ -10,6 +10,7 @@
 //! PROVISIONAL: Converges with `rolify-mongodb` `document.rs` when Phase 5
 //! executes (D-17). No BSON-type invention beyond the spec.
 
+use crate::emitters::substitute_table_names;
 use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates;
@@ -24,11 +25,9 @@ use crate::templates;
 pub fn render_mongo(plan: &RenderPlan) -> Result<(String, String), CliError> {
     let template = templates::mongo_docs();
 
-    // Substitute table name references in comments
-    // Longest-first: join_table before roles_table
-    let substituted = template
-        .replace("users_roles", &plan.join_table)
-        .replace("roles", &plan.roles_table);
+    // Substitute the table name references in comments through the shared
+    // re-scan-free helper, so an explicit join name survives verbatim.
+    let substituted = substitute_table_names(template, plan);
 
     // Split the template into role_doc (complete Rust source) and
     // index_notes (pure Markdown)

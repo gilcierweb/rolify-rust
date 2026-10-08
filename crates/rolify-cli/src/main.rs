@@ -10,9 +10,18 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Generate(args) => {
-            let join_table = args
-                .join_table
-                .unwrap_or_else(|| format!("{}_roles", args.holder_name.to_lowercase() + "s"));
+            // Default join table derives as holder plural + _ + roles_table,
+            // exactly the derivation documented in the args.rs help text:
+            // the derived value is computed BEFORE validation and then flows
+            // as the single RenderPlan join_table into SQL and scaffolding
+            // alike (CR-01, D-05).
+            let join_table = args.join_table.unwrap_or_else(|| {
+                format!(
+                    "{}_{}",
+                    args.holder_name.to_lowercase() + "s",
+                    args.roles_table
+                )
+            });
 
             // Validate identifiers before any rendering
             rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.roles_table)?;
