@@ -1,8 +1,9 @@
 //! Pure writer: writes the rendered plan to disk.
 //!
-//! Dry-run short-circuits before any filesystem call. Fail-if-exists default
-//!
-//! names every colliding file; --force overwrites.
+//! Dry-run prints the file plan and returns before any filesystem call, so
+//! a preview works whether or not the target tree already exists. A write
+//! run without --force fails naming every colliding file; --force
+//! overwrites.
 
 use crate::error::CliError;
 use crate::render::FileEntry;
@@ -19,8 +20,9 @@ pub struct WriteOptions {
 
 /// Writes the rendered plan to disk.
 ///
-/// Returns Ok(()) on success. On collision without --force, returns
-/// `CliError::AlreadyExists` naming every colliding file.
+/// Dry-run prints the file plan and returns before any filesystem call, so
+/// it previews even over an existing tree. On collision without --force,
+/// returns `CliError::AlreadyExists` naming every colliding file.
 ///
 /// # Errors
 ///
@@ -31,7 +33,21 @@ pub fn write_plan(
     rendered: &std::collections::BTreeMap<String, Vec<FileEntry>>,
     options: &WriteOptions,
 ) -> Result<(), CliError> {
-    // Collect all target paths first
+    // Dry-run previews the plan and returns before any filesystem call:
+    // previewing over an existing tree is exactly when a preview is
+    // useful, so the collision scan must not run first (WR-04).
+    if options.dry_run {
+        println!("DRY RUN - would create:");
+        for (engine, files) in rendered {
+            println!("  Engine: {engine}");
+            for file in files {
+                println!("    {}", options.out_dir.join(&file.path).display());
+            }
+        }
+        return Ok(());
+    }
+
+    // Collect all target paths, then scan for collisions (write path only)
     let mut all_paths = Vec::new();
     for files in rendered.values() {
         for file in files {
@@ -39,7 +55,8 @@ pub fn write_plan(
         }
     }
 
-    // Check for collisions
+    // Fail-if-exists default: a write run without --force names every
+    // colliding file instead of touching anything.
     if !options.force {
         let mut collisions = Vec::new();
         for path in &all_paths {
@@ -52,18 +69,6 @@ pub fn write_plan(
                 files: collisions.join(", "),
             });
         }
-    }
-
-    // Dry-run: print the file plan and exit
-    if options.dry_run {
-        println!("DRY RUN - would create:");
-        for (engine, files) in rendered {
-            println!("  Engine: {engine}");
-            for file in files {
-                println!("    {}", options.out_dir.join(&file.path).display());
-            }
-        }
-        return Ok(());
     }
 
     // Write all files

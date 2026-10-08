@@ -194,6 +194,49 @@ fn force_overwrites_existing() {
         .success();
 }
 
+/// Tests that --dry-run previews an existing tree instead of failing with
+/// the collision error (WR-04): a preview is most useful exactly when the
+/// target tree already exists, and the documented contract says
+/// print-then-exit, not fail.
+#[test]
+fn dry_run_over_existing_tree_previews() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    // First run: a real write that creates the tree.
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    // Second run with --dry-run (no --force) over the existing tree:
+    // exits 0, prints the plan, and the collision error must not fire.
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--out-dir",
+            out_dir,
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"))
+        .stdout(predicate::str::contains("migrations/postgres"))
+        .stderr(predicate::str::contains("already exists").not());
+}
+
 #[test]
 fn init_alias_produces_identical_tree() {
     let dir1 = test_temp_dir();
