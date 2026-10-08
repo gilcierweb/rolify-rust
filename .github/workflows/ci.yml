@@ -250,35 +250,197 @@ jobs:
           DOCKER_HOST: unix:///var/run/docker.sock
 
   msrv:
-    name: MSRV check (1.86)
+    name: MSRV floors (per-crate)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        backend: [postgres, mysql, sqlite]
+        include:
+          # D-21: every published floor checked on its own toolchain.
+          # Legs are check-only on lib targets (the 03-06 rationale), so
+          # dev-only deps (testcontainers, 1.88 floor) never gate the
+          # 1.85 crates.
+          - floor: "1.85"
+            label: rolify-core
+            args: -p rolify-core
+          - floor: "1.85"
+            label: rolify-cli
+            args: -p rolify-cli
+          - floor: "1.85"
+            label: rolify-test
+            args: -p rolify-test
+          - floor: "1.86"
+            label: rolify-diesel sync,postgres
+            args: -p rolify-diesel --no-default-features --features sync,postgres
+          - floor: "1.86"
+            label: rolify-diesel sync,mysql
+            args: -p rolify-diesel --no-default-features --features sync,mysql
+          - floor: "1.86"
+            label: rolify-diesel sync,sqlite
+            args: -p rolify-diesel --no-default-features --features sync,sqlite
+          - floor: "1.86"
+            label: rolify-diesel async,bb8,postgres
+            args: -p rolify-diesel --no-default-features --features async,bb8,postgres
+          - floor: "1.88"
+            label: rolify-mongodb async
+            args: -p rolify-mongodb
+          - floor: "1.88"
+            label: rolify-mongodb sync
+            args: -p rolify-mongodb --features sync
+          - floor: "1.94"
+            label: rolify-sqlx
+            args: -p rolify-sqlx --features postgres,mysql,sqlite
+          - floor: "1.94"
+            label: rolify-seaorm
+            args: -p rolify-seaorm --features postgres,mysql
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libpq-dev libmysqlclient-dev libsqlite3-dev
-      - uses: dtolnay/rust-toolchain@1.86
-      - name: cargo +1.86 check (rolify-diesel ${{ matrix.backend }})
-        run: cargo +1.86 check -p rolify-diesel --no-default-features --features "sync,${{ matrix.backend }}"
-      # D-10: both ratified floors, both modes, check-only on lib targets
-      # (the 03-06 rationale). Both added legs are backend-independent, so
-      # they run once on the postgres matrix leg.
-      - uses: dtolnay/rust-toolchain@1.94
-      - name: cargo +1.94 check (rolify-sqlx)
-        if: matrix.backend == 'postgres'
-        run: cargo +1.94 check -p rolify-sqlx --features postgres,mysql,sqlite
-      - name: cargo +1.86 check (rolify-diesel async,bb8,postgres)
-        if: matrix.backend == 'postgres'
-        run: cargo +1.86 check -p rolify-diesel --no-default-features --features async,bb8,postgres
-      # D-10 phase 05.1 floor: 1.88 for rolify-mongodb (mongodb 3.9.1).
-      # Both sync and async mode check-only on lib targets.
-      - uses: dtolnay/rust-toolchain@1.88
-      - name: cargo +1.88 check (rolify-mongodb async)
-        run: cargo +1.88 check -p rolify-mongodb
-      - name: cargo +1.88 check (rolify-mongodb sync)
-        run: cargo +1.88 check -p rolify-mongodb --features sync
+      # The dtolnay action ref pins the ACTION version; the toolchain input
+      # selects the floor this leg checks (expressions are not allowed in
+      # the uses position itself).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.floor }}
+      - name: cargo +${{ matrix.floor }} check (${{ matrix.label }})
+        run: cargo +${{ matrix.floor }} check ${{ matrix.args }}
+
+  semver:
+    name: Semver deny (cargo-semver-checks)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Pinned tool install (T-7-SC): exact known name plus version from
+      # crates.io; any replacement needs the Package Legitimacy Gate first.
+      - name: Install cargo-semver-checks 0.50.0
+        run: cargo install cargo-semver-checks --version 0.50.0 --locked
+      # Deny mode (D-20): no continue-on-error anywhere, so any reported
+      # breaking change fails the build. The baseline resolves on crates.io
+      # once 0.1.0 publishes; the sealed-SPI rules in
+      # crates/rolify-core/src/store.rs keep trait growth minor-safe under
+      # the seal. Pre-publish the baseline is missing, so these legs report
+      # the missing baseline until the first release lands.
+      - name: semver check (rolify-core)
+        run: cargo semver-checks check-release -p rolify-core
+      - name: semver check (rolify-test)
+        run: cargo semver-checks check-release -p rolify-test
+      - name: semver check (rolify-cli)
+        run: cargo semver-checks check-release -p rolify-cli
+      - name: semver check (rolify-diesel)
+        run: cargo semver-checks check-release -p rolify-diesel
+      - name: semver check (rolify-sqlx)
+        run: cargo semver-checks check-release -p rolify-sqlx
+      - name: semver check (rolify-seaorm)
+        run: cargo semver-checks check-release -p rolify-seaorm
+      - name: semver check (rolify-mongodb)
+        run: cargo semver-checks check-release -p rolify-mongodb
+
+  docsrs:
+    name: Docs.rs replication (all-features, docsrs cfg)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Replicates docs.rs per the [package.metadata.docs.rs] blocks
+      # (all-features plus --cfg docsrs, SC-2); metadata drift fails the
+      # build here instead of on docs.rs (T-7-12). No -D warnings: a few
+      # pre-existing intra-doc link warnings fail deny until the
+      # doc-warning cleanup lands (docs.rs itself renders with warnings).
+      - name: cargo doc docsrs (rolify-core)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-core --all-features --no-deps
+      - name: cargo doc docsrs (rolify-test)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-test --all-features --no-deps
+      - name: cargo doc docsrs (rolify-cli)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-cli --all-features --no-deps
+      # rolify-diesel builds its default (sync) surface, never --all-features:
+      # all-features enables sync plus async together, which the intentional
+      # compile_error! mode guard rejects (see the adapters job guard step).
+      - name: cargo doc docsrs (rolify-diesel sync default)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-diesel --no-deps
+      - name: cargo doc docsrs (rolify-sqlx)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-sqlx --all-features --no-deps
+      - name: cargo doc docsrs (rolify-seaorm)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-seaorm --all-features --no-deps
+      - name: cargo doc docsrs (rolify-mongodb)
+        run: RUSTDOCFLAGS="--cfg docsrs" cargo doc -p rolify-mongodb --all-features --no-deps
+
+  feature-matrix:
+    name: Feature matrix (rolify-test)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Every rolify-test feature surface in both modes (SC-3): default,
+      # suite, faker, and all-features async, plus is_sync, suite plus
+      # is_sync, and all-features plus is_sync. all-features already
+      # unifies is_sync on, so its legs cover both modes at once.
+      - name: cargo test (rolify-test default)
+        run: cargo test -p rolify-test
+      - name: cargo test (rolify-test suite)
+        run: cargo test -p rolify-test --features suite
+      - name: cargo test (rolify-test faker)
+        run: cargo test -p rolify-test --features faker
+      - name: cargo test (rolify-test all-features)
+        run: cargo test -p rolify-test --all-features
+      - name: cargo test (rolify-test is_sync)
+        run: cargo test -p rolify-test --features is_sync
+      - name: cargo test (rolify-test suite,is_sync)
+        run: cargo test -p rolify-test --features "suite is_sync"
+      - name: cargo test (rolify-test all-features,is_sync)
+        run: cargo test -p rolify-test --all-features --features is_sync
+      # Per-feature doc builds: every documented surface must render.
+      - name: cargo doc (rolify-test default)
+        run: cargo doc -p rolify-test --no-deps
+      - name: cargo doc (rolify-test suite)
+        run: cargo doc -p rolify-test --no-deps --features suite
+      - name: cargo doc (rolify-test faker)
+        run: cargo doc -p rolify-test --no-deps --features faker
+      - name: cargo doc (rolify-test all-features)
+        run: cargo doc -p rolify-test --no-deps --all-features
+
+  package:
+    name: Package plus publish dry-run
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # File-inclusion proof (T-7-14): the exact file set that would ship;
+      # a missing template or migration fails here. (cargo package has no
+      # --dry-run flag; --list is the non-mutating equivalent.)
+      - name: cargo package list (rolify-core)
+        run: cargo package -p rolify-core --list
+      - name: cargo package list (rolify-test)
+        run: cargo package -p rolify-test --list
+      - name: cargo package list (rolify-cli)
+        run: cargo package -p rolify-cli --list
+      - name: cargo package list (rolify-diesel)
+        run: cargo package -p rolify-diesel --list
+      - name: cargo package list (rolify-sqlx)
+        run: cargo package -p rolify-sqlx --list
+      - name: cargo package list (rolify-seaorm)
+        run: cargo package -p rolify-seaorm --list
+      - name: cargo package list (rolify-mongodb)
+        run: cargo package -p rolify-mongodb --list
+      # Publish-metadata proof (D-23, deny, no continue-on-error): per-crate
+      # publish dry-run. Six legs are RED at HEAD by design, not by accident:
+      # workspace path deps carry no version requirement yet (publishing
+      # needs version plus path), so only rolify-core passes until the
+      # publish sweep qualifies the versions. The red is the gate working.
+      - name: cargo publish dry-run (rolify-core)
+        run: cargo publish -p rolify-core --dry-run
+      - name: cargo publish dry-run (rolify-test)
+        run: cargo publish -p rolify-test --dry-run
+      - name: cargo publish dry-run (rolify-cli)
+        run: cargo publish -p rolify-cli --dry-run
+      - name: cargo publish dry-run (rolify-diesel)
+        run: cargo publish -p rolify-diesel --dry-run
+      - name: cargo publish dry-run (rolify-sqlx)
+        run: cargo publish -p rolify-sqlx --dry-run
+      - name: cargo publish dry-run (rolify-seaorm)
+        run: cargo publish -p rolify-seaorm --dry-run
+      - name: cargo publish dry-run (rolify-mongodb)
+        run: cargo publish -p rolify-mongodb --dry-run

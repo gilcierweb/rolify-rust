@@ -615,6 +615,15 @@ where the ecosystem forces it:
 checkout builds every crate. CI checks each crate against its documented
 floor (for example `cargo +1.86 check -p rolify-diesel`).
 
+### Sealed-SPI evolution policy
+
+The `RoleStore` / `ResourceStore` traits are soft-sealed: only workspace
+crates can implement them, so adding a required method is minor-safe.
+Changing a member signature or removing a member is major. New optional
+surface ships as provided methods first. The `semver` CI job
+(cargo-semver-checks in deny mode) enforces this, and every SPI growth
+records a parity-matrix entry in PARITY.md.
+
 ## Roadmap
 
 Delivery is kernel-first: semantics are locked in memory before any SQL
