@@ -19,6 +19,10 @@
 //! Table name references (substituted at generate time):
 //! - Roles table: roles
 //! - Join table: users_roles
+//!
+//! The template ends with the Markdown index notes: everything before the
+//! level-one heading below ships as `mongo/role.rs`, and the notes section
+//! itself ships as `mongo/INDEX_NOTES.md`.
 
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
@@ -27,7 +31,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// Sentinel nulls (not absent) for resource_type/resource_id when scope is
 /// global or class - matches the gem's Mongoid `''` sentinel strategy
-/// translated to MongoDB explicit null (05-CONTEXT D-08).
+/// translated to MongoDB explicit null (05-CONTEXT D-08). A `None` scope
+/// serializes as explicit BSON null, never as an omitted field, so the
+/// derive agrees with the locked `rolify-mongodb` `document.rs` contract
+/// (D-07 convergence).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoleDoc {
     #[serde(rename = "_id")]
@@ -35,10 +42,8 @@ pub struct RoleDoc {
 
     pub name: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_type: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
 
     #[serde(default)]
@@ -55,14 +60,12 @@ pub struct ConsumerRoleIds {
     #[serde(default)]
     pub role_ids: Vec<ObjectId>,
 }
+# MongoDB index setup notes
 
-/// Index setup notes (CLI documents; adapter executes at startup).
-///
-/// The unique compound index on (name, resource_type, resource_id) must be
-/// created idempotently at store initialization. The adapter (rolify-mongodb)
-/// owns this convergence per Phase 5 D-10.
-pub const INDEX_NOTES: &str = r#"
-Unique compound index: (name: 1, resource_type: 1, resource_id: 1)
-  - Ensured idempotently at store setup
-  - Deduplicates identically to the SQL sentinel '' strategy
-"#;
+The unique compound index on (name, resource_type, resource_id) must be
+created idempotently at store initialization. The adapter (`rolify-mongodb`)
+owns this convergence per Phase 5 D-10; the CLI only documents it.
+
+- Unique compound index: (name: 1, resource_type: 1, resource_id: 1)
+- Ensured idempotently at store setup
+- Deduplicates identically to the SQL sentinel '' strategy

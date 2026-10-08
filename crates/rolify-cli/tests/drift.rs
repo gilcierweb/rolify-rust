@@ -221,6 +221,71 @@ fn mongo_renderer_matches_snapshot() {
     assert_eq!(reconstructed, expected, "Mongo template snapshot mismatch");
 }
 
+/// Tests the emitted Mongo halves are structurally well-formed: role.rs is
+/// complete Rust closing on the consumer role-ids struct with one trailing
+/// newline, `INDEX_NOTES.md` is pure Markdown, and neither half carries the
+/// conditional-skip serde attribute that would contradict the explicit-null
+/// contract (WR-02, WR-03).
+#[test]
+fn mongo_emitted_files_are_well_formed() {
+    let plan = RenderPlan {
+        backend: Backend::Mongodb,
+        role_name: "Role".to_string(),
+        holder_name: "User".to_string(),
+        roles_table: "roles".to_string(),
+        join_table: "users_roles".to_string(),
+    };
+
+    let (role_doc, index_notes) = render_mongo(&plan).unwrap();
+
+    // role.rs ends with exactly one trailing newline, and its final
+    // non-empty line is not a doc-comment marker: the consumer struct, not
+    // an orphaned doc block, closes the file (WR-02).
+    assert!(role_doc.ends_with('\n'), "role_doc must end with a newline");
+    assert!(
+        !role_doc.ends_with("\n\n"),
+        "role_doc must end with a single trailing newline, not a blank line"
+    );
+    let final_non_empty = role_doc
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .expect("role_doc must have a non-empty final line");
+    assert!(
+        !final_non_empty.starts_with("///"),
+        "orphaned doc comment at role_doc tail: {final_non_empty}"
+    );
+    assert_eq!(
+        final_non_empty, "}",
+        "role_doc must close on the consumer role-ids struct"
+    );
+    assert!(
+        role_doc.contains("pub struct ConsumerRoleIds"),
+        "consumer role-ids struct missing from role_doc"
+    );
+
+    // The notes half is pure Markdown: opens on a level-one heading and
+    // carries no Rust item declaration (WR-02).
+    assert!(
+        index_notes.starts_with("# "),
+        "index notes must open with a Markdown level-one heading"
+    );
+    assert!(
+        !index_notes.contains("const"),
+        "index notes must not carry a Rust const declaration"
+    );
+
+    // The derive agrees with the documented explicit-null contract: absent
+    // scope persists as BSON null, never as an omitted field (WR-03, D-07).
+    assert!(
+        !role_doc.contains("skip_serializing_if"),
+        "conditional-skip serde attribute must not appear on the scope fields"
+    );
+    assert!(
+        !index_notes.contains("skip_serializing_if"),
+        "conditional-skip serde attribute must not appear in the notes"
+    );
+}
+
 /// Tests Mongo custom names substitution.
 #[test]
 fn mongo_renderer_custom_names_substitution() {

@@ -30,34 +30,37 @@ pub fn render_mongo(plan: &RenderPlan) -> Result<(String, String), CliError> {
         .replace("users_roles", &plan.join_table)
         .replace("roles", &plan.roles_table);
 
-    // Split the template into role_doc (before INDEX_NOTES const) and index_notes
+    // Split the template into role_doc (complete Rust source) and
+    // index_notes (pure Markdown)
     let (role_doc, index_notes) = split_template(&substituted);
 
     Ok((role_doc, index_notes))
 }
 
-/// Splits the template into `role_doc` (before `INDEX_NOTES` const) and `index_notes`.
+/// Splits the template into `role_doc` (complete Rust source) and
+/// `index_notes` (pure Markdown).
+///
+/// The boundary is the Markdown level-one heading that opens the notes
+/// section: a Rust line never starts with `# ` (attribute lines open with
+/// `#[`), so the first such line is unambiguous. Both halves end with
+/// exactly one trailing newline: the role doc closes on the consumer
+/// struct instead of an orphaned doc comment, and the notes open on the
+/// heading instead of a blank line or a `const` wrapper (WR-02).
 fn split_template(template: &str) -> (String, String) {
-    // Find the start of the INDEX_NOTES const definition
-    if let Some(idx) = template.find("pub const INDEX_NOTES:") {
-        // Include any preceding blank line in the role_doc
-        let role_doc_end = if idx > 0 && &template[idx - 1..idx] == "\n" {
-            // Check if there's a blank line before (two newlines)
-            if idx > 1 && &template[idx - 2..idx] == "\n\n" {
-                idx - 1 // Include the blank line
-            } else {
-                idx
-            }
-        } else {
-            idx
-        };
-        let role_doc = template[..role_doc_end].trim_end().to_string();
-        let index_notes = template[role_doc_end..].to_string();
-        (role_doc, index_notes)
-    } else {
-        // Fallback: no INDEX_NOTES found
-        (template.to_string(), String::new())
-    }
+    // The heading is preceded by a newline; +1 lands on the heading start.
+    let Some(heading_start) = template
+        .find("\n# ")
+        .map(|newline_position| newline_position + 1)
+    else {
+        // No Markdown heading: the whole template is the role doc and the
+        // notes half is empty. The drift suite's well-formedness test fails
+        // loudly on the empty notes, so a missing boundary cannot ship.
+        return (format!("{}\n", template.trim_end()), String::new());
+    };
+
+    let role_doc = format!("{}\n", template[..heading_start].trim_end());
+    let index_notes = format!("{}\n", template[heading_start..].trim_end());
+    (role_doc, index_notes)
 }
 
 #[cfg(test)]
