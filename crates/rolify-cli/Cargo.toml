@@ -22,7 +22,11 @@ tokio = { workspace = true }
 tempfile = "3.17"
 walkdir = "2.5"
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "mysql", "sqlite", "migrate"] }
-sea-orm-migration = "2.0.4"
+# Engine + runtime features mirror rolify-seaorm's proven sea-orm spellings
+# (the 2.0 line forwards the same feature names): dev-only, so the live
+# dialect legs can connect MySQL and SQLite through sea-orm. The runtime
+# dependency tree of the crate stays exactly clap/thiserror/anyhow/rolify-core.
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-mysql", "sqlx-sqlite", "runtime-tokio", "runtime-tokio-rustls"] }
 
 [features]
 default = []
