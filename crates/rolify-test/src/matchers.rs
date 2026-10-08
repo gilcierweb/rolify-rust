@@ -352,7 +352,7 @@ mod tests {
     use super::{RoleAssertions, build_assertion_message};
     use crate::InMemoryStore;
     use rolify_core::config::RolifyConfig;
-use rolify_core::query::{ResourceFilter, RoleQuery};
+    use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName, RoleRecord};
     use rolify_core::user::RolifyUser;
@@ -436,7 +436,11 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
     async fn assert_has_no_role_passes_on_empty_holder() {
         let mut player = Player::fresh(2);
         player
-            .assert_has_no_role(&role_name("ghost"), ResourceFilter::Any, "empty holder holds nothing")
+            .assert_has_no_role(
+                &role_name("ghost"),
+                ResourceFilter::Any,
+                "empty holder holds nothing",
+            )
             .await;
     }
 
