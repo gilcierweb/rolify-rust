@@ -1,8 +1,347 @@
 //! [`RoleAssertions`] - consumer test assertions over [`RolifyUser`].
 //!
-//! RED: the test module below pins the tracer contract first; the trait,
-//! the provided assert methods, and the shared panic-message builder land
-//! in GREEN.
+//! Blanket trait (D-01): every holder implementing [`RolifyUser`] gains
+//! `assert_has_role` plus `assert_has_no_role` with no extra wiring. Both
+//! methods delegate every decision to the existing `has_role` predicate, so
+//! the kernel ladder (global override, strict gate, class-covers-instance)
+//! is inherited, never reimplemented.
+//!
+//! Failure shape (D-02, D-11): mismatches panic (no `Result` return) with
+//! the full context on one `key = value` line each: holder type plus id,
+//! expected name plus scope, the complete held-role list in insertion
+//! order, and the trailing caller context (D-08, passed as `format!`
+//! output the way `assert_eq!` takes custom messages). Store failures panic
+//! through the same builder with a `store_error` line; the held list then
+//! renders empty because it could not be read.
+//!
+//! Argument shape (D-09): borrowed [`RoleName`] plus [`ResourceFilter`],
+//! exactly the `has_role` query halves, so callers reuse the queries they
+//! already build. User-side only (D-10): no resource-side matchers.
+//!
+//! Dual-mode: the trait carries `maybe_async` AFIT exactly like
+//! [`RolifyUser`]; it compiles in both default async and `is_sync` builds
+//! with no `block_on` anywhere.
+//!
+//! Test-output note (T-7-01): failure messages list role names, so CI logs
+//! of failing tests contain them. Names render through `Display` only and
+//! are never interpreted (T-7-02); the byte-exact comparison stays inside
+//! `has_role`, untouched by formatting.
+
+// `Future` is named in the provided signatures in async mode only;
+// maybe-async strips the `impl Future` return type in `is_sync` mode. See
+// the matching gate in `lib.rs` for why the allow rides along.
+#[cfg(not(feature = "is_sync"))]
+#[allow(unused_imports)]
+use core::future::Future;
+
+use rolify_core::query::ResourceFilter;
+use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+use rolify_core::store::RoleStore;
+use rolify_core::user::RolifyUser;
+
+/// Consumer assertions over [`RolifyUser`] (TOOL-02, D-01).
+///
+/// Blanket-implemented for every holder type: implement [`RolifyUser`] and
+/// the asserts resolve with no further wiring. Every decision delegates to
+/// [`RolifyUser::has_role`]; the methods only add the panic-on-mismatch
+/// shell plus the full-context message.
+///
+/// # Example
+///
+/// Grant plus assert through the published mock, live in BOTH modes (the
+/// `maybe_async` attribute rewrites the example's own `await`s when
+/// `is_sync` is active):
+///
+/// ```rust
+/// use rolify_core::config::RolifyConfig;
+/// use rolify_core::query::ResourceFilter;
+/// use rolify_core::resource::ResourceRef;
+/// use rolify_core::role::{ResourceId, RoleName};
+/// use rolify_core::user::RolifyUser;
+/// use rolify_test::{InMemoryStore, RoleAssertions};
+///
+/// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+///
+/// impl RolifyUser for Player {
+///     type Store = InMemoryStore;
+///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+///     fn rolify_type() -> &'static str { "Player" }
+///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+///         (&mut self.store, &mut self.conn)
+///     }
+/// }
+///
+/// # #[cfg(not(feature = "is_sync"))]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() { usage().await; }
+/// # #[cfg(feature = "is_sync")]
+/// # fn main() { usage(); }
+/// #
+/// #[maybe_async::maybe_async]
+/// async fn usage() {
+///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+///     player.add_role(&RoleName::from("admin"), ResourceRef::Global).await.unwrap();
+///     player.assert_has_role(&RoleName::from("admin"), ResourceFilter::Global, "seeded admin").await;
+///     player.assert_has_no_role(&RoleName::from("ghost"), ResourceFilter::Any, "never granted").await;
+/// }
+/// ```
+#[maybe_async::maybe_async(AFIT)]
+pub trait RoleAssertions: RolifyUser {
+    /// Positive assertion (D-03 `assert_has_role` naming leg): passes when
+    /// [`RolifyUser::has_role`] holds, else panics with the full context
+    /// (holder type plus id, expected name plus scope, held-role list, and
+    /// `context`). Store failures panic through the same message with a
+    /// `store_error` line instead of returning.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the holder lacks the role at the queried scope, or when
+    /// the underlying store read fails.
+    ///
+    /// # Example
+    ///
+    /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+    /// example's own `await`s when `is_sync` is active):
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::resource::ResourceRef;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     let forum_id = ResourceId::from(7_i64);
+    ///     player.add_role(&RoleName::from("moderator"), ResourceRef::Class("Forum")).await.unwrap();
+    ///     player.assert_has_role(&RoleName::from("moderator"), ResourceFilter::Instance("Forum", &forum_id), "class covers instance").await;
+    /// }
+    /// ```
+    fn assert_has_role(
+        &mut self,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let satisfied = match self.has_role(name, filter).await {
+                Ok(satisfied) => satisfied,
+                Err(store_error) => {
+                    let message = build_assertion_message(
+                        "assert_has_role",
+                        Self::rolify_type(),
+                        &holder,
+                        name,
+                        filter,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            if !satisfied {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_assertion_message(
+                    "assert_has_role",
+                    Self::rolify_type(),
+                    &holder,
+                    name,
+                    filter,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
+
+    /// Negative assertion (D-05 symmetry leg): passes when
+    /// [`RolifyUser::has_role`] is false, else panics with the same
+    /// full-context message shape as [`RoleAssertions::assert_has_role`].
+    /// Store failures panic through the same message with a `store_error`
+    /// line instead of returning.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the holder unexpectedly holds the role at the queried
+    /// scope, or when the underlying store read fails.
+    ///
+    /// # Example
+    ///
+    /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+    /// example's own `await`s when `is_sync` is active):
+    ///
+    /// ```rust
+    /// use rolify_core::config::RolifyConfig;
+    /// use rolify_core::query::ResourceFilter;
+    /// use rolify_core::role::{ResourceId, RoleName};
+    /// use rolify_core::user::RolifyUser;
+    /// use rolify_test::{InMemoryStore, RoleAssertions};
+    ///
+    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    ///
+    /// impl RolifyUser for Player {
+    ///     type Store = InMemoryStore;
+    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    ///     fn rolify_type() -> &'static str { "Player" }
+    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    ///         (&mut self.store, &mut self.conn)
+    ///     }
+    /// }
+    ///
+    /// # #[cfg(not(feature = "is_sync"))]
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() { usage().await; }
+    /// # #[cfg(feature = "is_sync")]
+    /// # fn main() { usage(); }
+    /// #
+    /// #[maybe_async::maybe_async]
+    /// async fn usage() {
+    ///     let mut player = Player { id: 1, store: InMemoryStore::new(), conn: (), config: RolifyConfig::default() };
+    ///     player.assert_has_no_role(&RoleName::from("ghost"), ResourceFilter::Any, "nothing granted yet").await;
+    /// }
+    /// ```
+    fn assert_has_no_role(
+        &mut self,
+        name: &RoleName,
+        filter: ResourceFilter<'_>,
+        context: impl Into<String> + Send,
+    ) -> impl Future<Output = ()> + Send {
+        async move {
+            let context_text: String = context.into();
+            let holder = self.rolify_id();
+            let satisfied = match self.has_role(name, filter).await {
+                Ok(satisfied) => satisfied,
+                Err(store_error) => {
+                    let message = build_assertion_message(
+                        "assert_has_no_role",
+                        Self::rolify_type(),
+                        &holder,
+                        name,
+                        filter,
+                        &[],
+                        &context_text,
+                        Some(store_error.to_string()),
+                    );
+                    panic!("{message}");
+                }
+            };
+            if satisfied {
+                let (store, conn) = self.store_with_conn();
+                let held_read = store.roles_of(&mut *conn, &holder).await;
+                let (held, read_error) = match held_read {
+                    Ok(held) => (held, None),
+                    Err(store_error) => (Vec::new(), Some(store_error.to_string())),
+                };
+                let message = build_assertion_message(
+                    "assert_has_no_role",
+                    Self::rolify_type(),
+                    &holder,
+                    name,
+                    filter,
+                    &held,
+                    &context_text,
+                    read_error,
+                );
+                panic!("{message}");
+            }
+        }
+    }
+}
+
+impl<Holder> RoleAssertions for Holder where Holder: RolifyUser {}
+
+/// Shared panic-message builder (D-11): one `key = value` line each for the
+/// assert operation, the holder type plus id, the expected name plus scope,
+/// the complete held-role list in insertion order, the optional store
+/// failure, and the caller context. ASCII only. Names render through
+/// `Display` and are never interpreted (T-7-02).
+#[must_use]
+fn build_assertion_message(
+    operation: &str,
+    holder_type: &str,
+    holder_id: &ResourceId,
+    expected_name: &RoleName,
+    filter: ResourceFilter<'_>,
+    held: &[RoleRecord],
+    context: &str,
+    store_error: Option<String>,
+) -> String {
+    let held_text = held
+        .iter()
+        .map(render_role_record)
+        .collect::<Vec<String>>()
+        .join(", ");
+    let error_line = store_error
+        .map(|error_text| format!("store_error = {error_text}\n"))
+        .unwrap_or_default();
+    format!(
+        "operation = {operation}\nholder_type = {holder_type}\nholder_id = {holder_id}\nexpected_name = {expected_name}\nexpected_scope = {}\nheld_roles = [{held_text}]\n{error_line}context = {context}",
+        render_scope(filter),
+    )
+}
+
+/// Human-readable scope half of the expected query: `Global`, `Any`,
+/// `Class(Type)`, or `Instance(Type, id)`.
+#[must_use]
+fn render_scope(filter: ResourceFilter<'_>) -> String {
+    match filter {
+        ResourceFilter::Global => "Global".to_owned(),
+        ResourceFilter::Any => "Any".to_owned(),
+        ResourceFilter::Class(type_name) => format!("Class({type_name})"),
+        ResourceFilter::Instance(type_name, resource_id) => {
+            format!("Instance({type_name}, {resource_id})")
+        }
+    }
+}
+
+/// Human-readable held row: `name (global)`, `name (class Type)`, or
+/// `name (instance Type#id)`.
+#[must_use]
+fn render_role_record(record: &RoleRecord) -> String {
+    match (&record.resource_type, &record.resource_id) {
+        (None, None) => format!("{} (global)", record.name),
+        (Some(type_name), None) => format!("{} (class {type_name})", record.name),
+        (Some(type_name), Some(resource_id)) => {
+            format!("{} (instance {type_name}#{resource_id})", record.name)
+        }
+        (None, Some(resource_id)) => format!("{} (instance #{resource_id})", record.name),
+    }
+}
 
 #[cfg(test)]
 mod tests {
