@@ -35,7 +35,7 @@
 use core::future::Future;
 
 use rolify_core::query::{ResourceFilter, RoleQuery};
-use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+    use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
 use rolify_core::store::RoleStore;
 use rolify_core::user::RolifyUser;
 
@@ -1434,7 +1434,7 @@ mod tests {
     use rolify_core::config::RolifyConfig;
     use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::resource::ResourceRef;
-    use rolify_core::role::{ResourceId, RoleName, RoleRecord};
+use rolify_core::role::{ResourceId, RoleName, RoleRecord, RoleSet};
     use rolify_core::user::RolifyUser;
 
     struct Player {
@@ -1987,5 +1987,186 @@ mod tests {
         player
             .assert_has_no_role_names(&expected, "exact set unexpectedly held")
             .await;
+    }
+
+    #[test]
+    fn cached_assert_passes_on_snapshot_hit() {
+        let player = Player::fresh(31);
+        let rows = [RoleRecord::global("admin")];
+        let snapshot = RoleSet::new(&rows);
+        player.assert_has_cached_role(
+            &snapshot,
+            &role_name("admin"),
+            ResourceFilter::Global,
+            "snapshot hit",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "held_roles")]
+    fn cached_assert_panics_with_held_list_on_miss() {
+        let player = Player::fresh(31);
+        let rows = [RoleRecord::global("admin")];
+        let snapshot = RoleSet::new(&rows);
+        player.assert_has_cached_role(
+            &snapshot,
+            &role_name("ghost"),
+            ResourceFilter::Global,
+            "snapshot miss",
+        );
+    }
+
+    #[test]
+    fn cached_non_strict_accepts_global_override() {
+        let player = Player::fresh(32);
+        let rows = [RoleRecord::global("admin")];
+        let snapshot = RoleSet::new(&rows);
+        player.assert_has_cached_role(
+            &snapshot,
+            &role_name("admin"),
+            ResourceFilter::Class("Forum"),
+            "global covers class without I/O",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_has_strict_cached_role")]
+    fn cached_strict_panics_on_global_override() {
+        let player = Player::fresh(32);
+        let rows = [RoleRecord::global("admin")];
+        let snapshot = RoleSet::new(&rows);
+        player.assert_has_strict_cached_role(
+            &snapshot,
+            &role_name("admin"),
+            ResourceFilter::Class("Forum"),
+            "global is not the class row",
+        );
+    }
+
+    #[test]
+    fn cached_all_any_only_pass_on_matching_snapshot() {
+        let player = Player::fresh(33);
+        let admin = role_name("admin");
+        let moderator = role_name("moderator");
+        let ghost = role_name("ghost");
+        let rows = [
+            RoleRecord::global("admin"),
+            RoleRecord::for_class("moderator", "Forum"),
+        ];
+        let snapshot = RoleSet::new(&rows);
+        let both = [
+            RoleQuery::with_role(&admin),
+            RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Class("Forum")),
+        ];
+        player.assert_has_all_cached(&snapshot, &both, "both queries cached");
+        let either = [RoleQuery::with_role(&ghost), RoleQuery::with_role(&admin)];
+        player.assert_has_any_cached(&snapshot, &either, "one cached hit suffices");
+        let solo_rows = [RoleRecord::global("admin")];
+        let solo_snapshot = RoleSet::new(&solo_rows);
+        player.assert_only_has_cached(
+            &solo_snapshot,
+            &admin,
+            ResourceFilter::Global,
+            "solo cached role",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_only_has_cached")]
+    fn cached_only_panics_on_two_row_snapshot() {
+        let player = Player::fresh(33);
+        let admin = role_name("admin");
+        let rows = [
+            RoleRecord::global("admin"),
+            RoleRecord::for_class("moderator", "Forum"),
+        ];
+        let snapshot = RoleSet::new(&rows);
+        player.assert_only_has_cached(&snapshot, &admin, ResourceFilter::Global, "duo breaks only");
+    }
+
+    #[test]
+    fn cached_names_passes_regardless_of_snapshot_order() {
+        let player = Player::fresh(34);
+        let rows = [
+            RoleRecord::for_class("moderator", "Forum"),
+            RoleRecord::global("admin"),
+        ];
+        let snapshot = RoleSet::new(&rows);
+        let expected = [role_name("admin"), role_name("moderator")];
+        player.assert_cached_role_names(&snapshot, &expected, "order-insensitive cached set");
+    }
+
+    #[test]
+    #[should_panic(expected = "unexpected_names")]
+    fn cached_names_panics_showing_unexpected() {
+        let player = Player::fresh(34);
+        let rows = [RoleRecord::global("admin"), RoleRecord::global("ghost")];
+        let snapshot = RoleSet::new(&rows);
+        let expected = [role_name("admin"), role_name("moderator")];
+        player.assert_cached_role_names(&snapshot, &expected, "ghost is unexpected");
+    }
+
+    #[test]
+    fn every_cached_negative_passes_on_empty_snapshot() {
+        let player = Player::fresh(35);
+        let admin = role_name("admin");
+        let rows: [RoleRecord; 0] = [];
+        let snapshot = RoleSet::new(&rows);
+        let class_query =
+            RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
+        player.assert_has_no_cached_role(
+            &snapshot,
+            &admin,
+            ResourceFilter::Global,
+            "empty snapshot",
+        );
+        player.assert_has_no_strict_cached_role(
+            &snapshot,
+            &admin,
+            ResourceFilter::Class("Forum"),
+            "empty snapshot",
+        );
+        player.assert_has_no_all_cached(
+            &snapshot,
+            core::slice::from_ref(&class_query),
+            "empty snapshot",
+        );
+        player.assert_has_no_any_cached(
+            &snapshot,
+            core::slice::from_ref(&class_query),
+            "empty snapshot",
+        );
+        player.assert_has_no_only_cached(
+            &snapshot,
+            &admin,
+            ResourceFilter::Global,
+            "empty snapshot",
+        );
+        let expected = [role_name("admin")];
+        player.assert_has_no_cached_role_names(&snapshot, &expected, "empty set differs");
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_has_no_cached_role")]
+    fn cached_negative_panics_once_the_role_is_cached() {
+        let player = Player::fresh(35);
+        let rows = [RoleRecord::global("admin")];
+        let snapshot = RoleSet::new(&rows);
+        player.assert_has_no_cached_role(
+            &snapshot,
+            &role_name("admin"),
+            ResourceFilter::Global,
+            "cached admin",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "assert_has_no_cached_role_names")]
+    fn cached_names_negative_panics_when_sets_match() {
+        let player = Player::fresh(36);
+        let rows = [RoleRecord::global("admin")];
+        let snapshot = RoleSet::new(&rows);
+        let expected = [role_name("admin")];
+        player.assert_has_no_cached_role_names(&snapshot, &expected, "exact cached set");
     }
 }
