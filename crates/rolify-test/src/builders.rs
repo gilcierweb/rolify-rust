@@ -218,6 +218,190 @@ where
     Ok(records)
 }
 
+/// One seeded holder inside the standard preset: its fixture login plus
+/// its literal holder id plus every grant the preset gives it.
+///
+/// # Example
+///
+/// ```
+/// use rolify_core::role::ResourceId;
+/// use rolify_test::builders::{PresetHolder, standard_preset};
+///
+/// let preset = standard_preset();
+/// assert_eq!(preset[0].login, "preset-admin");
+/// assert_eq!(preset[0].holder_id, ResourceId::from(9001_i64));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetHolder {
+    /// The holder login (fixture data, lookup key in consumer tests).
+    pub login: &'static str,
+    /// The holder id (deterministic literal, reproducible seeds).
+    pub holder_id: ResourceId,
+    /// Every grant the preset gives this holder.
+    pub grants: Vec<FixtureGrant>,
+}
+
+/// The standard preset (D-13): one call seeding the suite fixture graph
+/// (`spec/support/data.rb` shape: a global admin plus a scoped
+/// moderator). Fully deterministic: holder logins (`preset-admin`,
+/// `preset-moderator`), holder ids (9001, 9002), role names, and scopes
+/// are literals, so seeds reproduce exactly (no faker inside).
+///
+/// * `preset-admin` (id 9001): global `admin` plus class `manager` on
+///   `Forum`.
+/// * `preset-moderator` (id 9002): instance `moderator` on `Forum` id 3.
+///
+/// # Example
+///
+/// ```
+/// use rolify_test::builders::standard_preset;
+///
+/// let preset = standard_preset();
+/// assert_eq!(preset.len(), 2);
+/// assert_eq!(preset[1].login, "preset-moderator");
+/// ```
+#[must_use]
+pub fn standard_preset() -> Vec<PresetHolder> {
+    vec![
+        PresetHolder {
+            login: "preset-admin",
+            holder_id: ResourceId::from(9001_i64),
+            grants: vec![
+                FixtureGrant::global("admin"),
+                FixtureGrant::for_class("manager", "Forum"),
+            ],
+        },
+        PresetHolder {
+            login: "preset-moderator",
+            holder_id: ResourceId::from(9002_i64),
+            grants: vec![FixtureGrant::for_instance(
+                "moderator",
+                "Forum",
+                ResourceId::from(3_i64),
+            )],
+        },
+    ]
+}
+
+/// Seed a whole preset against any consumer store: every holder's grants
+/// through [`grant_all`], in slice order, returning all created rows in
+/// seeding order.
+///
+/// # Errors
+///
+/// Propagates the store errors of the first failing `grant_all` call.
+///
+/// # Example
+///
+/// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
+/// example's own `await`s when `is_sync` is active):
+///
+/// ```rust
+/// use rolify_core::role::ResourceId;
+/// use rolify_core::store::RoleStore;
+/// use rolify_test::builders::{apply_preset, standard_preset};
+/// use rolify_test::InMemoryStore;
+///
+/// # #[cfg(not(feature = "is_sync"))]
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() { usage().await; }
+/// # #[cfg(feature = "is_sync")]
+/// # fn main() { usage(); }
+/// #
+/// #[maybe_async::maybe_async]
+/// async fn usage() {
+///     let mut store = InMemoryStore::new();
+///     let mut conn = ();
+///     let preset = standard_preset();
+///     let records = apply_preset(&mut store, &mut conn, &preset).await.unwrap();
+///     assert_eq!(records.len(), 3);
+///     let admin_rows = store
+///         .roles_of(&mut conn, &ResourceId::from(9001_i64))
+///         .await
+///         .unwrap();
+///     assert_eq!(admin_rows.len(), 2);
+/// }
+/// ```
+#[maybe_async::maybe_async]
+pub async fn apply_preset<Store>(
+    store: &mut Store,
+    conn: &mut Store::Conn,
+    preset: &[PresetHolder],
+) -> Result<Vec<RoleRecord>, Store::Error>
+where
+    Store: RoleStore,
+{
+    let mut records = Vec::new();
+    for preset_holder in preset {
+        let created =
+            grant_all(store, conn, &preset_holder.holder_id, &preset_holder.grants).await?;
+        records.extend(created);
+    }
+    Ok(records)
+}
+
+// ---- Faker generators (opt-in `faker` feature, D-14) ----
+//
+// Second builder layer behind `faker = ["dep:faker-rust"]`, lighter than
+// `suite` (which also pulls `rstest`). Built on the same `faker_rust`
+// call paths as the suite fixtures (`fixtures.rs` `display_name`):
+// `faker_rust::internet::username` plus `faker_rust::number::between`.
+// Generated values suit negative-path and uniqueness probes; positive
+// assertions pin literal names (T-7-07: generated display values never
+// serve as expected lookup keys).
+
+/// A random holder id for uniqueness probes (inert display value, never
+/// an expected lookup key).
+///
+/// # Example
+///
+/// ```rust
+/// use rolify_test::builders::fake_holder_id;
+///
+/// assert!(!fake_holder_id().as_str().is_empty());
+/// ```
+#[cfg(feature = "faker")]
+#[must_use]
+pub fn fake_holder_id() -> ResourceId {
+    ResourceId::from(faker_rust::number::between(1, 1_000_000_000))
+}
+
+/// A random role name carrying the caller prefix for uniqueness probes
+/// (inert display value, never an expected lookup key).
+///
+/// # Example
+///
+/// ```rust
+/// use rolify_test::builders::fake_role_name;
+///
+/// assert!(fake_role_name("reviewer").as_str().starts_with("reviewer-"));
+/// ```
+#[cfg(feature = "faker")]
+#[must_use]
+pub fn fake_role_name(prefix: &str) -> RoleName {
+    RoleName::from(format!(
+        "{prefix}-{}-{}",
+        faker_rust::internet::username(None),
+        faker_rust::number::between(1, 9999)
+    ))
+}
+
+/// A random forum id for uniqueness probes (inert display value, never
+/// an expected lookup key).
+///
+/// # Example
+///
+/// ```rust
+/// use rolify_test::builders::fake_forum_id;
+///
+/// assert!(!fake_forum_id().as_str().is_empty());
+/// ```
+#[cfg(feature = "faker")]
+#[must_use]
+pub fn fake_forum_id() -> ResourceId {
+    ResourceId::from(faker_rust::number::between(1, 1_000_000))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,7 +518,11 @@ mod tests {
         let mut conn = ();
         let preset = standard_preset();
         let records = apply_preset(&mut store, &mut conn, &preset).await.unwrap();
-        assert_eq!(records.len(), 3, "two admin grants plus one moderator grant");
+        assert_eq!(
+            records.len(),
+            3,
+            "two admin grants plus one moderator grant"
+        );
         let admin_id = ResourceId::from(9001_i64);
         let admin_rows = store.roles_of(&mut conn, &admin_id).await.unwrap();
         assert_eq!(
