@@ -25,3 +25,7 @@ rolify-test = { path = "../rolify-test" }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
