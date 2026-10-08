@@ -34,7 +34,7 @@
 #[allow(unused_imports)]
 use core::future::Future;
 
-use rolify_core::query::ResourceFilter;
+use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::role::{ResourceId, RoleName, RoleRecord};
 use rolify_core::store::RoleStore;
 use rolify_core::user::RolifyUser;
@@ -140,6 +140,9 @@ pub trait RoleAssertions: RolifyUser {
     ///     player.assert_has_role(&RoleName::from("moderator"), ResourceFilter::Instance("Forum", &forum_id), "class covers instance").await;
     /// }
     /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
     fn assert_has_role(
         &mut self,
         name: &RoleName,
@@ -149,15 +152,15 @@ pub trait RoleAssertions: RolifyUser {
         async move {
             let context_text: String = context.into();
             let holder = self.rolify_id();
-            let satisfied = match self.has_role(name, filter).await {
+            let expected = RoleQuery { name, filter };
+            let satisfied = match self.has_role(expected.name, expected.filter).await {
                 Ok(satisfied) => satisfied,
                 Err(store_error) => {
                     let message = build_assertion_message(
                         "assert_has_role",
                         Self::rolify_type(),
                         &holder,
-                        name,
-                        filter,
+                        &expected,
                         &[],
                         &context_text,
                         Some(store_error.to_string()),
@@ -176,8 +179,7 @@ pub trait RoleAssertions: RolifyUser {
                     "assert_has_role",
                     Self::rolify_type(),
                     &holder,
-                    name,
-                    filter,
+                    &expected,
                     &held,
                     &context_text,
                     read_error,
@@ -235,6 +237,9 @@ pub trait RoleAssertions: RolifyUser {
     ///     player.assert_has_no_role(&RoleName::from("ghost"), ResourceFilter::Any, "nothing granted yet").await;
     /// }
     /// ```
+    // The `Output = ()` reads as an unneeded unit return once maybe-async
+    // rewrites the signature for `is_sync` builds.
+    #[allow(clippy::unused_unit)]
     fn assert_has_no_role(
         &mut self,
         name: &RoleName,
@@ -244,15 +249,15 @@ pub trait RoleAssertions: RolifyUser {
         async move {
             let context_text: String = context.into();
             let holder = self.rolify_id();
-            let satisfied = match self.has_role(name, filter).await {
+            let expected = RoleQuery { name, filter };
+            let satisfied = match self.has_role(expected.name, expected.filter).await {
                 Ok(satisfied) => satisfied,
                 Err(store_error) => {
                     let message = build_assertion_message(
                         "assert_has_no_role",
                         Self::rolify_type(),
                         &holder,
-                        name,
-                        filter,
+                        &expected,
                         &[],
                         &context_text,
                         Some(store_error.to_string()),
@@ -271,8 +276,7 @@ pub trait RoleAssertions: RolifyUser {
                     "assert_has_no_role",
                     Self::rolify_type(),
                     &holder,
-                    name,
-                    filter,
+                    &expected,
                     &held,
                     &context_text,
                     read_error,
@@ -295,8 +299,7 @@ fn build_assertion_message(
     operation: &str,
     holder_type: &str,
     holder_id: &ResourceId,
-    expected_name: &RoleName,
-    filter: ResourceFilter<'_>,
+    expected: &RoleQuery<'_>,
     held: &[RoleRecord],
     context: &str,
     store_error: Option<String>,
@@ -310,8 +313,9 @@ fn build_assertion_message(
         .map(|error_text| format!("store_error = {error_text}\n"))
         .unwrap_or_default();
     format!(
-        "operation = {operation}\nholder_type = {holder_type}\nholder_id = {holder_id}\nexpected_name = {expected_name}\nexpected_scope = {}\nheld_roles = [{held_text}]\n{error_line}context = {context}",
-        render_scope(filter),
+        "operation = {operation}\nholder_type = {holder_type}\nholder_id = {holder_id}\nexpected_name = {}\nexpected_scope = {}\nheld_roles = [{held_text}]\n{error_line}context = {context}",
+        expected.name,
+        render_scope(expected.filter),
     )
 }
 
@@ -348,7 +352,7 @@ mod tests {
     use super::{RoleAssertions, build_assertion_message};
     use crate::InMemoryStore;
     use rolify_core::config::RolifyConfig;
-    use rolify_core::query::ResourceFilter;
+use rolify_core::query::{ResourceFilter, RoleQuery};
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName, RoleRecord};
     use rolify_core::user::RolifyUser;
@@ -485,12 +489,15 @@ mod tests {
         ];
         let expected = role_name("ghost");
         let holder = ResourceId::from(9_i64);
+        let query = RoleQuery {
+            name: &expected,
+            filter: ResourceFilter::Global,
+        };
         let message = build_assertion_message(
             "assert_has_role",
             "Player",
             &holder,
-            &expected,
-            ResourceFilter::Global,
+            &query,
             &held,
             "probe context",
             None,
@@ -533,12 +540,15 @@ mod tests {
     fn panic_message_includes_store_error_when_present() {
         let expected = role_name("ghost");
         let holder = ResourceId::from(9_i64);
+        let query = RoleQuery {
+            name: &expected,
+            filter: ResourceFilter::Any,
+        };
         let message = build_assertion_message(
             "assert_has_role",
             "Player",
             &holder,
-            &expected,
-            ResourceFilter::Any,
+            &query,
             &[],
             "probe context",
             Some("connection refused".to_owned()),
@@ -563,12 +573,15 @@ mod tests {
         )];
         let expected = role_name("moderator");
         let holder = ResourceId::from(9_i64);
+        let query = RoleQuery {
+            name: &expected,
+            filter: ResourceFilter::Instance("Forum", &forum_id),
+        };
         let message = build_assertion_message(
             "assert_has_role",
             "Player",
             &holder,
-            &expected,
-            ResourceFilter::Instance("Forum", &forum_id),
+            &query,
             &held,
             "probe context",
             None,

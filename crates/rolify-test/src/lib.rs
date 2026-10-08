@@ -22,6 +22,37 @@
 //! propagate: the fixture seeding code must compile inside the adapters'
 //! own test binaries (manifests carry no comments, so the rationale lives
 //! here).
+//!
+//! ## Consumer mock quickstart
+//!
+//! [`InMemoryStore`] doubles as the published consumer mock: `Conn` is
+//! `()`, so a test spins it up with no handle, seeds it through
+//! [`InMemoryStore::grant`] / [`InMemoryStore::insert`] /
+//! [`InMemoryStore::register_resource`] / [`InMemoryStore::register_holder`],
+//! and asserts through [`RoleAssertions`]. The surface ships as-is with no
+//! storage redesign: the same rows, links, and registries the reference
+//! implementation validates.
+//!
+//! ```rust
+//! use rolify_core::role::{ResourceId, RoleRecord};
+//! use rolify_core::store::RoleStore;
+//! use rolify_test::InMemoryStore;
+//!
+//! # #[cfg(not(feature = "is_sync"))]
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() { usage().await; }
+//! # #[cfg(feature = "is_sync")]
+//! # fn main() { usage(); }
+//! #
+//! #[maybe_async::maybe_async]
+//! async fn usage() {
+//!     let mut store = InMemoryStore::new();
+//!     let holder = ResourceId::from(1_i64);
+//!     store.grant(&holder, RoleRecord::global("admin"));
+//!     let held = store.roles_of(&mut (), &holder).await.unwrap();
+//!     assert_eq!(held, vec![RoleRecord::global("admin")]);
+//! }
+//! ```
 
 // `Future` is named in the impl signatures in async mode only; maybe-async
 // strips the `impl Future` return type in `is_sync` mode. The cfg gate can
@@ -59,7 +90,19 @@ pub mod matchers;
 pub use matchers::RoleAssertions;
 
 /// In-memory [`RoleStore`] + [`ResourceStore`] - the workspace's reference
-/// implementation and validation target.
+/// implementation, validation target, and published consumer mock.
+///
+/// Mock framing: `Conn` is `()` (no external connection to manage), so a
+/// test builds the mock with [`InMemoryStore::new`] and seeds it through
+/// [`InMemoryStore::grant`] (insert plus link in one step),
+/// [`InMemoryStore::insert`] (verbatim row, no dedupe, no links),
+/// [`InMemoryStore::register_resource`] (finder targets), and
+/// [`InMemoryStore::register_holder`] (holder-table rows feeding the finder
+/// reads). Rows follow the gem `roles` table shape (`name`,
+/// `resource_type`, `resource_id` as [`RoleRecord`]). The surface ships
+/// as-is with no storage redesign: the same rows, links, and registries
+/// the reference implementation validates. Pair it with
+/// [`RoleAssertions`] for the assertion half.
 ///
 /// * `rows` - the role rows table (`find_or_create_by`'s dedupe target).
 /// * `links` - the join table: `(holder, role-row)` pairs (the gem's
