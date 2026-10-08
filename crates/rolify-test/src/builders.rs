@@ -293,4 +293,95 @@ mod tests {
             ResourceRef::Instance("Forum", &forum_id)
         );
     }
+
+    /// The standard preset mirrors the suite fixture graph: a global admin
+    /// holder plus a scoped moderator holder with deterministic literals
+    /// (RED: `standard_preset` does not exist yet).
+    #[test]
+    fn standard_preset_mirrors_suite_graph_with_deterministic_literals() {
+        let preset = standard_preset();
+        assert_eq!(preset.len(), 2, "exactly the admin plus moderator holders");
+        let admin = &preset[0];
+        assert_eq!(admin.login, "preset-admin");
+        assert_eq!(admin.holder_id, ResourceId::from(9001_i64));
+        assert_eq!(
+            admin.grants,
+            vec![
+                FixtureGrant::global("admin"),
+                FixtureGrant::for_class("manager", "Forum"),
+            ],
+            "admin carries global admin plus class manager on Forum"
+        );
+        let moderator = &preset[1];
+        assert_eq!(moderator.login, "preset-moderator");
+        assert_eq!(moderator.holder_id, ResourceId::from(9002_i64));
+        assert_eq!(
+            moderator.grants,
+            vec![FixtureGrant::for_instance(
+                "moderator",
+                "Forum",
+                ResourceId::from(3_i64)
+            )],
+            "moderator carries the Forum instance grant"
+        );
+    }
+
+    /// Apply-preset seeds both holders so every grant reads back through
+    /// `roles_of` (RED: `apply_preset` does not exist yet).
+    #[maybe_async::test(feature = "is_sync", async(not(feature = "is_sync"), tokio::test))]
+    async fn apply_preset_seeds_both_holders_readably() {
+        let mut store = InMemoryStore::new();
+        let mut conn = ();
+        let preset = standard_preset();
+        let records = apply_preset(&mut store, &mut conn, &preset).await.unwrap();
+        assert_eq!(records.len(), 3, "two admin grants plus one moderator grant");
+        let admin_id = ResourceId::from(9001_i64);
+        let admin_rows = store.roles_of(&mut conn, &admin_id).await.unwrap();
+        assert_eq!(
+            admin_rows,
+            vec![
+                rolify_core::role::RoleRecord::global("admin"),
+                rolify_core::role::RoleRecord::for_class("manager", "Forum"),
+            ],
+            "admin holder reads back both seeded grants"
+        );
+        let moderator_id = ResourceId::from(9002_i64);
+        let moderator_rows = store.roles_of(&mut conn, &moderator_id).await.unwrap();
+        assert_eq!(
+            moderator_rows,
+            vec![rolify_core::role::RoleRecord::for_instance(
+                "moderator",
+                "Forum",
+                ResourceId::from(3_i64)
+            )],
+            "moderator holder reads back the instance grant"
+        );
+    }
+
+    /// Faker generators produce distinct ids and prefixed names across
+    /// calls (RED: the `faker` generators do not exist yet).
+    #[cfg(feature = "faker")]
+    #[test]
+    fn faker_generators_produce_distinct_ids_and_prefixed_names() {
+        let first_holder = fake_holder_id();
+        let second_holder = fake_holder_id();
+        assert_ne!(
+            first_holder, second_holder,
+            "two holder ids collide almost never: {first_holder:?} vs {second_holder:?}"
+        );
+        let first_name = fake_role_name("reviewer");
+        let second_name = fake_role_name("reviewer");
+        for generated in [&first_name, &second_name] {
+            assert!(
+                generated.as_str().starts_with("reviewer-"),
+                "prefixed name keeps the caller prefix: {generated:?}"
+            );
+        }
+        assert_ne!(first_name, second_name, "two names collide almost never");
+        let forum_id = fake_forum_id();
+        assert!(
+            !forum_id.as_str().is_empty(),
+            "forum id is a usable identifier"
+        );
+    }
 }
