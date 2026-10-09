@@ -5,7 +5,7 @@
 //! diesel-async connections (mirrored execution, Phase 3 D-06). Pool
 //! checkouts and caller-owned transactions work via `DerefMut`.
 
-use rolify_core::config::{RolifyConfig, RolifyConfigBuilder};
+use rolify_core::config::{HolderIdKind, RolifyConfig, RolifyConfigBuilder};
 // The SPI value types below reach SQL only through the engine-gated impl
 // blocks; the inert stub (no engine feature) never names them.
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
@@ -38,6 +38,7 @@ pub struct DieselStore {
     join_table: String,
     holder_table: Option<String>,
     resource_tables: Vec<(String, String, String)>, // (type_name, table_name, pk_column)
+    holder_id_kind: HolderIdKind,
 }
 
 impl DieselStore {
@@ -49,6 +50,7 @@ impl DieselStore {
             join_table: quote_identifier(config.join_table()),
             holder_table: None,
             resource_tables: Vec::new(),
+            holder_id_kind: config.holder_id_kind(),
         }
     }
 
@@ -73,6 +75,7 @@ impl DieselStore {
             join_table: quote_identifier(join_table),
             holder_table: None,
             resource_tables: Vec::new(),
+            holder_id_kind: HolderIdKind::default(),
         }
     }
 
@@ -89,6 +92,16 @@ impl DieselStore {
         RolifyConfigBuilder::validate_identifier(holder_table)
             .expect("holder table name must pass validation");
         self.holder_table = Some(quote_identifier(holder_table));
+        self
+    }
+
+    /// Override the holder-id kind (used when constructing via `with_tables` directly).
+    ///
+    /// Defaults come from the consuming `RolifyConfig` (D-08-03 coherence);
+    /// this setter is the explicit multi-pair bypass.
+    #[must_use]
+    pub fn with_holder_id_kind(mut self, kind: HolderIdKind) -> Self {
+        self.holder_id_kind = kind;
         self
     }
 
@@ -141,6 +154,12 @@ impl DieselStore {
     #[must_use]
     pub fn resource_tables(&self) -> &[(String, String, String)] {
         &self.resource_tables
+    }
+
+    /// The holder-id kind this store binds with (D-08-05).
+    #[must_use]
+    pub fn holder_id_kind(&self) -> HolderIdKind {
+        self.holder_id_kind
     }
 
     // Both helpers below serve the engine-gated impl blocks only (sync and
@@ -323,16 +342,22 @@ mod pg_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
@@ -342,7 +367,7 @@ mod pg_impl {
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -354,7 +379,7 @@ mod pg_impl {
                         .map_err(Error::Diesel)?
                 }
                 rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .load(conn)
                     .map_err(Error::Diesel)?,
@@ -382,16 +407,22 @@ mod pg_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>(type_name)
                     .bind::<Text, _>("")
@@ -399,7 +430,7 @@ mod pg_impl {
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>(type_name)
                         .bind::<Text, _>(resource_id.as_str())
@@ -407,7 +438,7 @@ mod pg_impl {
                         .map_err(Error::Diesel)?
                 }
                 rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .load(conn)
                     .map_err(Error::Diesel)?,
@@ -856,7 +887,10 @@ mod pg_impl {
             holder: &ResourceId,
             role: &RoleRecord,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
@@ -909,7 +943,10 @@ mod pg_impl {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let name_owned = name.as_str().to_owned();
             let target_owned = target;
             let role_table = self.role_table.clone();
@@ -1044,7 +1081,10 @@ mod pg_impl {
                 #[diesel(sql_type = diesel::sql_types::Integer)]
                 dummy: i32,
             }
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
             // below would swallow into a wrong `false`).
@@ -1071,7 +1111,10 @@ mod pg_impl {
             conn: &mut Self::Conn,
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let sql = format!(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
@@ -1799,16 +1842,22 @@ mod mysql_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
@@ -1818,7 +1867,7 @@ mod mysql_impl {
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -1830,7 +1879,7 @@ mod mysql_impl {
                         .map_err(Error::Diesel)?
                 }
                 rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .load(conn)
                     .map_err(Error::Diesel)?,
@@ -1858,16 +1907,22 @@ mod mysql_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>(type_name)
                     .bind::<Text, _>("")
@@ -1875,7 +1930,7 @@ mod mysql_impl {
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>(type_name)
                         .bind::<Text, _>(resource_id.as_str())
@@ -1883,7 +1938,7 @@ mod mysql_impl {
                         .map_err(Error::Diesel)?
                 }
                 rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .load(conn)
                     .map_err(Error::Diesel)?,
@@ -2332,7 +2387,10 @@ mod mysql_impl {
             holder: &ResourceId,
             role: &RoleRecord,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
@@ -2385,7 +2443,10 @@ mod mysql_impl {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let name_owned = name.as_str().to_owned();
             let target_owned = target;
             let role_table = self.role_table.clone();
@@ -2520,7 +2581,10 @@ mod mysql_impl {
                 #[diesel(sql_type = diesel::sql_types::Integer)]
                 dummy: i32,
             }
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
             // below would swallow into a wrong `false`).
@@ -2546,7 +2610,10 @@ mod mysql_impl {
             conn: &mut Self::Conn,
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let sql = format!(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
@@ -3275,16 +3342,22 @@ mod sqlite_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
@@ -3294,7 +3367,7 @@ mod sqlite_impl {
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -3306,7 +3379,7 @@ mod sqlite_impl {
                         .map_err(Error::Diesel)?
                 }
                 rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .load(conn)
                     .map_err(Error::Diesel)?,
@@ -3334,16 +3407,22 @@ mod sqlite_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rows: Vec<RoleRow> = match &query.filter {
                 rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>("")
                     .bind::<Text, _>("")
                     .load(conn)
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .bind::<Text, _>(type_name)
                     .bind::<Text, _>("")
@@ -3351,7 +3430,7 @@ mod sqlite_impl {
                     .map_err(Error::Diesel)?,
                 rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                     diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>(type_name)
                         .bind::<Text, _>(resource_id.as_str())
@@ -3359,7 +3438,7 @@ mod sqlite_impl {
                         .map_err(Error::Diesel)?
                 }
                 rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(holder.as_str())
+                    .bind::<Text, _>(&holder_canonical)
                     .bind::<Text, _>(name)
                     .load(conn)
                     .map_err(Error::Diesel)?,
@@ -3808,7 +3887,10 @@ mod sqlite_impl {
             holder: &ResourceId,
             role: &RoleRecord,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rt = to_storage(role.resource_type.as_deref());
             let rid = resource_id_to_storage(role.resource_id.as_ref());
 
@@ -3861,7 +3943,10 @@ mod sqlite_impl {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let name_owned = name.as_str().to_owned();
             let target_owned = target;
             let role_table = self.role_table.clone();
@@ -3996,7 +4081,10 @@ mod sqlite_impl {
                 #[diesel(sql_type = diesel::sql_types::Integer)]
                 dummy: i32,
             }
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
             // below would swallow into a wrong `false`).
@@ -4022,7 +4110,10 @@ mod sqlite_impl {
             conn: &mut Self::Conn,
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let sql = format!(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
@@ -4766,10 +4857,16 @@ mod pg_async_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             async move {
                 let rows: Vec<RoleRow> = match &query.filter {
                     rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -4777,7 +4874,7 @@ mod pg_async_impl {
                         .await
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -4788,7 +4885,7 @@ mod pg_async_impl {
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         diesel::sql_query(sql)
-                            .bind::<Text, _>(holder.as_str())
+                            .bind::<Text, _>(&holder_canonical)
                             .bind::<Text, _>(name)
                             .bind::<Text, _>("")
                             .bind::<Text, _>("")
@@ -4801,7 +4898,7 @@ mod pg_async_impl {
                             .map_err(Error::Diesel)?
                     }
                     rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .load(conn)
                         .await
@@ -4834,7 +4931,7 @@ mod pg_async_impl {
             async move {
                 let rows: Vec<RoleRow> = match &query.filter {
                     rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -4842,7 +4939,7 @@ mod pg_async_impl {
                         .await
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>(type_name)
                         .bind::<Text, _>("")
@@ -4851,7 +4948,7 @@ mod pg_async_impl {
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         diesel::sql_query(sql)
-                            .bind::<Text, _>(holder.as_str())
+                            .bind::<Text, _>(&holder_canonical)
                             .bind::<Text, _>(name)
                             .bind::<Text, _>(type_name)
                             .bind::<Text, _>(resource_id.as_str())
@@ -4860,7 +4957,7 @@ mod pg_async_impl {
                             .map_err(Error::Diesel)?
                     }
                     rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .load(conn)
                         .await
@@ -5347,7 +5444,10 @@ mod pg_async_impl {
             holder: &ResourceId,
             role: &RoleRecord,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rt = to_storage(role.resource_type.as_deref()).to_owned();
             let rid = resource_id_to_storage(role.resource_id.as_ref()).to_owned();
             let role_table = self.role_table.clone();
@@ -5397,7 +5497,10 @@ mod pg_async_impl {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let name_owned = name.as_str().to_owned();
             // Own the target pieces: the borrowed RemovalTarget cannot
             // live inside the returned future (the sync path's
@@ -5551,7 +5654,10 @@ mod pg_async_impl {
             holder: &ResourceId,
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
             // below would swallow into a wrong `false`).
@@ -5592,7 +5698,10 @@ mod pg_async_impl {
             conn: &mut Self::Conn,
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let sql = format!(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
@@ -6390,10 +6499,16 @@ mod mysql_async_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             async move {
                 let rows: Vec<RoleRow> = match &query.filter {
                     rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -6401,7 +6516,7 @@ mod mysql_async_impl {
                         .await
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -6412,7 +6527,7 @@ mod mysql_async_impl {
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         diesel::sql_query(sql)
-                            .bind::<Text, _>(holder.as_str())
+                            .bind::<Text, _>(&holder_canonical)
                             .bind::<Text, _>(name)
                             .bind::<Text, _>("")
                             .bind::<Text, _>("")
@@ -6425,7 +6540,7 @@ mod mysql_async_impl {
                             .map_err(Error::Diesel)?
                     }
                     rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .load(conn)
                         .await
@@ -6458,7 +6573,7 @@ mod mysql_async_impl {
             async move {
                 let rows: Vec<RoleRow> = match &query.filter {
                     rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -6466,7 +6581,7 @@ mod mysql_async_impl {
                         .await
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>(type_name)
                         .bind::<Text, _>("")
@@ -6475,7 +6590,7 @@ mod mysql_async_impl {
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         diesel::sql_query(sql)
-                            .bind::<Text, _>(holder.as_str())
+                            .bind::<Text, _>(&holder_canonical)
                             .bind::<Text, _>(name)
                             .bind::<Text, _>(type_name)
                             .bind::<Text, _>(resource_id.as_str())
@@ -6484,7 +6599,7 @@ mod mysql_async_impl {
                             .map_err(Error::Diesel)?
                     }
                     rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .load(conn)
                         .await
@@ -6969,7 +7084,10 @@ mod mysql_async_impl {
             holder: &ResourceId,
             role: &RoleRecord,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rt = to_storage(role.resource_type.as_deref()).to_owned();
             let rid = resource_id_to_storage(role.resource_id.as_ref()).to_owned();
             let role_table = self.role_table.clone();
@@ -7017,7 +7135,10 @@ mod mysql_async_impl {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let name_owned = name.as_str().to_owned();
             // Own the target pieces: the borrowed RemovalTarget cannot
             // live inside the returned future (the sync path's
@@ -7171,7 +7292,10 @@ mod mysql_async_impl {
             holder: &ResourceId,
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
             // below would swallow into a wrong `false`).
@@ -7212,7 +7336,10 @@ mod mysql_async_impl {
             conn: &mut Self::Conn,
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let sql = format!(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \
@@ -8013,10 +8140,16 @@ mod sqlite_async_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
+            // D-08-05: parse the holder id at the SPI boundary; invalid input
+            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
+            let holder_canonical = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             async move {
                 let rows: Vec<RoleRow> = match &query.filter {
                     rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -8024,7 +8157,7 @@ mod sqlite_async_impl {
                         .await
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -8035,7 +8168,7 @@ mod sqlite_async_impl {
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         diesel::sql_query(sql)
-                            .bind::<Text, _>(holder.as_str())
+                            .bind::<Text, _>(&holder_canonical)
                             .bind::<Text, _>(name)
                             .bind::<Text, _>("")
                             .bind::<Text, _>("")
@@ -8048,7 +8181,7 @@ mod sqlite_async_impl {
                             .map_err(Error::Diesel)?
                     }
                     rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .load(conn)
                         .await
@@ -8081,7 +8214,7 @@ mod sqlite_async_impl {
             async move {
                 let rows: Vec<RoleRow> = match &query.filter {
                     rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>("")
                         .bind::<Text, _>("")
@@ -8089,7 +8222,7 @@ mod sqlite_async_impl {
                         .await
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .bind::<Text, _>(type_name)
                         .bind::<Text, _>("")
@@ -8098,7 +8231,7 @@ mod sqlite_async_impl {
                         .map_err(Error::Diesel)?,
                     rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
                         diesel::sql_query(sql)
-                            .bind::<Text, _>(holder.as_str())
+                            .bind::<Text, _>(&holder_canonical)
                             .bind::<Text, _>(name)
                             .bind::<Text, _>(type_name)
                             .bind::<Text, _>(resource_id.as_str())
@@ -8107,7 +8240,7 @@ mod sqlite_async_impl {
                             .map_err(Error::Diesel)?
                     }
                     rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                        .bind::<Text, _>(holder.as_str())
+                        .bind::<Text, _>(&holder_canonical)
                         .bind::<Text, _>(name)
                         .load(conn)
                         .await
@@ -8592,7 +8725,10 @@ mod sqlite_async_impl {
             holder: &ResourceId,
             role: &RoleRecord,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let rt = to_storage(role.resource_type.as_deref()).to_owned();
             let rid = resource_id_to_storage(role.resource_id.as_ref()).to_owned();
             let role_table = self.role_table.clone();
@@ -8640,7 +8776,10 @@ mod sqlite_async_impl {
             target: RemovalTarget<'_>,
             remove_role_if_empty: bool,
         ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let name_owned = name.as_str().to_owned();
             // Own the target pieces: the borrowed RemovalTarget cannot
             // live inside the returned future (the sync path's
@@ -8794,7 +8933,10 @@ mod sqlite_async_impl {
             holder: &ResourceId,
             column: ScopeColumn,
         ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-            let holder_id = holder.as_str().to_owned();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             // One complete condition per column: interpolating an empty
             // half would emit `AND  AND` (a syntax error the `is_ok`
             // below would swallow into a wrong `false`).
@@ -8835,7 +8977,10 @@ mod sqlite_async_impl {
             conn: &mut Self::Conn,
             holder: &ResourceId,
         ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
-            let holder_id = holder.as_str();
+            let holder_id = match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
+                Ok(canonical) => canonical,
+                Err(e) => return async move { Err(Error::Core(e)) },
+            };
             let sql = format!(
                 "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
                  FROM {role_table} AS role_row \

@@ -143,6 +143,7 @@ pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
 
 pub mod dialect;
 pub mod error;
+pub mod holder;
 pub mod rows;
 pub mod sentinel;
 pub mod sql;

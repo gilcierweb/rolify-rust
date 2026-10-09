@@ -14,6 +14,7 @@ bb8 = { workspace = true, optional = true }
 deadpool = { workspace = true, optional = true }
 thiserror = { workspace = true }
 maybe-async = { workspace = true }
+uuid = { workspace = true }
 libsqlite3-sys = { version = ">=0.17.2, <0.39.0", features = ["bundled"], optional = true }
 
 [dev-dependencies]
@@ -42,7 +43,7 @@ sync = ["is_sync"]
 async = ["dep:diesel-async"]
 bb8 = ["diesel-async/bb8", "dep:bb8"]
 deadpool = ["diesel-async/deadpool", "dep:deadpool"]
-postgres = ["diesel/postgres", "diesel-async?/postgres", "dep:diesel_migrations"]
+postgres = ["diesel/postgres", "diesel/uuid", "diesel-async?/postgres", "dep:diesel_migrations"]
 mysql = ["diesel/mysql", "diesel-async?/mysql", "dep:diesel_migrations"]
 sqlite = ["diesel/sqlite", "diesel-async?/sqlite", "dep:diesel_migrations", "dep:libsqlite3-sys"]
 suite = ["rolify-test/suite"]

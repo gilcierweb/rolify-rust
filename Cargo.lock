@@ -1117,6 +1117,7 @@ dependencies = [
  "sqlite-wasm-rs",
  "time",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3444,6 +3445,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
