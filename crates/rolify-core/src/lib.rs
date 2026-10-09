@@ -59,6 +59,7 @@ pub mod catalog;
 pub mod config;
 pub mod error;
 pub mod finders;
+pub mod holder;
 pub mod kernel;
 pub mod manager;
 pub mod query;
@@ -67,6 +68,8 @@ pub mod role;
 pub mod store;
 pub mod user;
 
+pub use config::HolderIdKind;
 pub use error::RolifyError;
+pub use holder::{holder_id_to_string, parse_holder_id, ParsedHolderId};
 pub use kernel::RemovalTarget;
 pub use role::SCOPE_SENTINEL;

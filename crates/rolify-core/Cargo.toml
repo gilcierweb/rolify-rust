@@ -9,6 +9,7 @@ license = "MIT"
 thiserror.workspace = true
 maybe-async.workspace = true
 serde = { version = "1.0", optional = true, features = ["derive"] }
+uuid = { workspace = true }
 
 [features]
 default = []

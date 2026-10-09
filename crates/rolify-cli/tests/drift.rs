@@ -35,6 +35,8 @@ fn renderer_matches_canonical_default_names() {
             holder_name: "User".to_string(),
             roles_table: "roles".to_string(),
             join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
         };
 
         let rendered = render_all(&plan)
@@ -76,6 +78,8 @@ fn renderer_custom_names_longest_first() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_all(&plan).unwrap();
@@ -125,6 +129,8 @@ fn seaorm_renderer_matches_snapshot() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -142,6 +148,8 @@ fn seaorm_renderer_custom_names_longest_first() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -180,6 +188,8 @@ fn seaorm_explicit_join_name_survives_substitution() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "member_roles_archive".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -203,6 +213,8 @@ fn seaorm_renderer_semantic_checklist() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -363,6 +375,8 @@ fn seaorm_dialect_arrays_match_canonical_per_engine() {
         holder_name: "Customer".to_string(),
         roles_table: roles_table.to_string(),
         join_table: join_table.to_string(),
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -438,6 +452,8 @@ fn mongo_renderer_matches_snapshot() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -462,6 +478,8 @@ fn mongo_emitted_files_are_well_formed() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -523,6 +541,8 @@ fn mongo_renderer_custom_names_substitution() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let (role_doc, _) = render_mongo(&plan).unwrap();
@@ -555,6 +575,8 @@ fn mongo_explicit_join_name_survives_substitution() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "member_roles_archive".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -620,6 +642,8 @@ fn rendered_sql_carries_no_em_dash() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_all(&plan).unwrap();
@@ -651,6 +675,8 @@ fn custom_names_postgres_matches_snapshots() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
     };
 
     let rendered = render_all(&plan).unwrap();

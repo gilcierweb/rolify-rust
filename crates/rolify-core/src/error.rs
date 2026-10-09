@@ -21,7 +21,7 @@
 /// };
 /// assert!(matches!(err, RolifyError::CallbackVeto { .. }));
 /// ```
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RolifyError {
     /// The requested role does not exist (at the queried scope).
@@ -46,6 +46,15 @@ pub enum RolifyError {
     InvalidConfig {
         /// What is wrong with the configuration.
         reason: String,
+    },
+
+    /// A holder id failed to parse for the configured kind.
+    #[error("invalid holder id for {expected} kind: {got}")]
+    InvalidHolderId {
+        /// The expected kind ("integer", "uuid", or "string").
+        expected: &'static str,
+        /// The raw input that failed to parse.
+        got: String,
     },
 }
 
@@ -80,6 +89,14 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid rolify configuration: empty table name"
+        );
+        let err = RolifyError::InvalidHolderId {
+            expected: "integer",
+            got: "abc".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid holder id for integer kind: abc"
         );
     }
 }

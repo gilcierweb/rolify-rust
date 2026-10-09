@@ -5,7 +5,7 @@
 //! mangle an explicit join table embedding the roles stem. Names are already
 //! validated by `validate_identifier`.
 
-use crate::emitters::substitute_table_names;
+use crate::emitters::{holder_id_type_sql, substitute_table_names};
 use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates::{down, up};

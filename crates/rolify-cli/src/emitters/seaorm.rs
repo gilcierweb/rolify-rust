@@ -258,6 +258,8 @@ mod tests {
             holder_name: "User".to_string(),
             roles_table: roles_table.to_string(),
             join_table: join_table.to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
         }
     }
 

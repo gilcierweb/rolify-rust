@@ -76,6 +76,8 @@ mod tests {
             holder_name: "User".to_string(),
             roles_table: "roles".to_string(),
             join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
         };
 
         let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -119,6 +121,8 @@ mod tests {
             holder_name: "Customer".to_string(),
             roles_table: "privileges".to_string(),
             join_table: "customers_privileges".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
         };
 
         let (role_doc, _) = render_mongo(&plan).unwrap();
@@ -146,6 +150,8 @@ mod tests {
             holder_name: "User".to_string(),
             roles_table: "roles".to_string(),
             join_table: "users_roles".to_string(),
+            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            with_holder_fk: false,
         };
 
         let (role_doc, _) = render_mongo(&plan).unwrap();

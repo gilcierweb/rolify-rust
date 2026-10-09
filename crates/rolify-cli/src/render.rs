@@ -3,7 +3,8 @@
 //! No filesystem I/O, no runtime DB access - just path computation and
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
-use crate::args::Backend;
+use crate::args::{Backend, CliHolderIdKind};
+use rolify_core::HolderIdKind;
 use crate::emitters::{mongo::render_mongo, seaorm::render_seaorm, sql::render_sql};
 use crate::error::CliError;
 use crate::templates::scaffolding::{config_example, holder_stub, readme, role_stub};
@@ -17,6 +18,31 @@ pub struct RenderPlan {
     pub holder_name: String,
     pub roles_table: String,
     pub join_table: String,
+    pub holder_id_kind: HolderIdKind,
+    pub with_holder_fk: bool,
+}
+
+impl RenderPlan {
+    /// Creates a RenderPlan from CLI args.
+    pub fn from_args(args: crate::args::GenerateArgs) -> Self {
+        let join_table = args.join_table.clone().unwrap_or_else(|| {
+            let holder_plural = if args.holder_name.ends_with('s') {
+                format!("{}_", args.holder_name.to_lowercase())
+            } else {
+                format!("{}s_", args.holder_name.to_lowercase())
+            };
+            format!("{}{}", holder_plural, args.roles_table)
+        });
+        Self {
+            backend: args.backend,
+            role_name: args.role_name,
+            holder_name: args.holder_name,
+            roles_table: args.roles_table,
+            join_table,
+            holder_id_kind: args.holder_id_type.into(),
+            with_holder_fk: args.with_holder_fk,
+        }
+    }
 }
 
 /// A single file entry in the render output.
@@ -166,6 +192,12 @@ fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry
         .replace("{holder_name}", &plan.holder_name)
         .replace("{backend}", plan.backend.as_str());
 
+    let holder_id_kind_str = match plan.holder_id_kind {
+        HolderIdKind::Integer => "Integer",
+        HolderIdKind::Uuid => "Uuid",
+        HolderIdKind::String => "String",
+    };
+
     let mut files = vec![
         FileEntry {
             path: format!("{engine}/role_stub.rs"),
@@ -173,7 +205,12 @@ fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry
         },
         FileEntry {
             path: format!("{engine}/holder_stub.rs"),
-            content: holder_stub(&plan.holder_name, plan.backend.as_str(), &plan.role_name),
+            content: holder_stub(
+                &plan.holder_name,
+                plan.backend.as_str(),
+                &plan.role_name,
+                holder_id_kind_str,
+            ),
         },
         FileEntry {
             path: format!("{engine}/config_example.rs"),
@@ -183,6 +220,7 @@ fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry
                 &plan.holder_name,
                 &plan.roles_table,
                 &plan.join_table,
+                holder_id_kind_str,
             ),
         },
         FileEntry {

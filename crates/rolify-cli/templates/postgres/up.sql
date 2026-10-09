@@ -14,6 +14,7 @@
 -- D-03: VARCHAR sizes: name(255), resource_type(191), resource_id(191).
 -- D-12: roles.id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY.
 -- D-13: timestamps NOT NULL DEFAULT CURRENT_TIMESTAMP (updated_at static; roles never UPDATE).
+-- D-08: holder_id_type substitution: {{holder_id_type}} expands to BIGINT (integer), UUID (uuid), or VARCHAR(191) (string).
 
 CREATE TABLE roles (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -28,7 +29,7 @@ CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
 CREATE INDEX idx_roles_name ON roles (name);
 
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL,
+    user_id {{holder_id_type}} NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );

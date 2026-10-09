@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use rolify_core::config::HolderIdKind;
 
 #[derive(Parser, Debug)]
 #[command(name = "rolify-cli", version, about = "Rolify migration generator")]
@@ -47,6 +48,14 @@ pub struct GenerateArgs {
     /// Join table name (default: derived from holder plural + _ + `roles_table`)
     #[arg(long)]
     pub join_table: Option<String>,
+
+    /// Holder id type: integer (default), uuid, or string
+    #[arg(long, value_enum, default_value = "integer")]
+    pub holder_id_type: CliHolderIdKind,
+
+    /// Emit REFERENCES to holder table (default: false)
+    #[arg(long, default_value = "false")]
+    pub with_holder_fk: bool,
 }
 
 #[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
@@ -65,6 +74,26 @@ impl Backend {
             Backend::Sqlx => "sqlx",
             Backend::Seaorm => "seaorm",
             Backend::Mongodb => "mongodb",
+        }
+    }
+}
+
+/// CLI-facing wrapper for `HolderIdKind` that implements `ValueEnum`.
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq, Default)]
+#[clap(rename_all = "lowercase")]
+pub enum CliHolderIdKind {
+    #[default]
+    Integer,
+    Uuid,
+    String,
+}
+
+impl From<CliHolderIdKind> for HolderIdKind {
+    fn from(kind: CliHolderIdKind) -> Self {
+        match kind {
+            CliHolderIdKind::Integer => HolderIdKind::Integer,
+            CliHolderIdKind::Uuid => HolderIdKind::Uuid,
+            CliHolderIdKind::String => HolderIdKind::String,
         }
     }
 }

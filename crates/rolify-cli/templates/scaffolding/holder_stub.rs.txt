@@ -13,8 +13,8 @@ use std::collections::HashSet;
 /// The actual implementation depends on your ORM and the rolify adapter you use.
 #[derive(Debug, Clone)]
 pub struct {holder_name} {
-    /// Unique identifier (type depends on your schema: i64, String, UUID, etc.).
-    pub id: i64,
+    /// Unique identifier (type depends on holder_id_kind: i64, String, or uuid::Uuid).
+    pub id: {holder_id_type},
 
     /// Holder name/username.
     pub name: String,
@@ -25,7 +25,7 @@ pub struct {holder_name} {
 
 impl {holder_name} {
     /// Creates a new holder.
-    pub fn new(id: i64, name: impl Into<String>) -> Self {
+    pub fn new(id: {holder_id_type}, name: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),

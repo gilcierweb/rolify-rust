@@ -43,11 +43,24 @@ pub mod scaffolding {
 
     /// Renders the holder stub with substitutions.
     #[must_use]
-    pub fn holder_stub(holder_name: &str, backend: &str, role_name: &str) -> String {
+    pub fn holder_stub(
+        holder_name: &str,
+        backend: &str,
+        role_name: &str,
+        holder_id_kind: &str,
+    ) -> String {
+        let holder_id_type = match holder_id_kind {
+            "Integer" => "i64",
+            "Uuid" => "uuid::Uuid",
+            "String" => "String",
+            _ => "i64",
+        };
         HOLDER_STUB
             .replace("{holder_name}", holder_name)
             .replace("{backend}", backend)
             .replace("{role_name}", role_name)
+            .replace("{holder_id_kind}", holder_id_kind)
+            .replace("{holder_id_type}", holder_id_type)
     }
 
     /// Renders the config example with substitutions.
@@ -58,6 +71,7 @@ pub mod scaffolding {
         holder_name: &str,
         roles_table: &str,
         join_table: &str,
+        holder_id_kind: &str,
     ) -> String {
         CONFIG_EXAMPLE
             .replace("{backend}", backend)
@@ -65,6 +79,7 @@ pub mod scaffolding {
             .replace("{holder_name}", holder_name)
             .replace("{roles_table}", roles_table)
             .replace("{join_table}", join_table)
+            .replace("{holder_id_kind}", holder_id_kind)
     }
 
     /// Returns the README template for the given backend-keyed name

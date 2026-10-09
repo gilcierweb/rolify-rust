@@ -3,14 +3,52 @@
 //! (`lib/rolify/configure.rb`, `lib/rolify.rb:14-36`).
 //!
 //! Everything a consumer tunes lives here: strict mode, empty-role cleanup,
-//! table names, and the four lifecycle hooks with Result-veto semantics
-//! (CONF-05 - see [`RolifyConfig::run_before_add`]).
+//! table names, holder id kind, and the four lifecycle hooks with Result-veto
+//! semantics (CONF-05 - see [`RolifyConfig::run_before_add`]).
 
 use std::sync::Arc;
 
 use crate::error::RolifyError;
 use crate::query::ResourceFilter;
 use crate::role::RoleRecord;
+
+/// Holder id kind - selects the physical column type for `users_roles.user_id`
+/// (and the corresponding bind/parse behavior).
+///
+/// Default is `Integer` (matches ActiveRecord `t.references` -> BIGINT).
+///
+/// ```
+/// use rolify_core::config::HolderIdKind;
+///
+/// assert_eq!(HolderIdKind::default(), HolderIdKind::Integer);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
+pub enum HolderIdKind {
+    /// 64-bit integer column: BIGINT (Postgres/MySQL), INTEGER (SQLite)
+    #[default]
+    Integer,
+    /// Native UUID column: UUID (Postgres), BINARY(16) (MySQL), TEXT (SQLite)
+    Uuid,
+    /// Canonical string column: VARCHAR(191) (all engines)
+    String,
+}
+
+impl HolderIdKind {
+    /// Returns the lowercase string representation used in CLI flags.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HolderIdKind::Integer => "integer",
+            HolderIdKind::Uuid => "uuid",
+            HolderIdKind::String => "string",
+        }
+    }
+}
 
 /// A `before_*` hook: returning `Err` **vetoes** the operation - the write
 /// is aborted and the corresponding `after_*` hook never runs (CONF-05:
@@ -55,6 +93,7 @@ pub struct RolifyConfig {
     remove_role_if_empty: bool,
     role_table: String,
     join_table: String,
+    holder_id_kind: HolderIdKind,
     before_add: Option<BeforeHook>,
     before_remove: Option<BeforeHook>,
     after_add: Option<AfterHook>,
@@ -93,6 +132,13 @@ impl RolifyConfig {
     #[must_use]
     pub fn join_table(&self) -> &str {
         &self.join_table
+    }
+
+    /// The holder id kind for the `users_roles.user_id` column.
+    /// Default `HolderIdKind::Integer`.
+    #[must_use]
+    pub fn holder_id_kind(&self) -> HolderIdKind {
+        self.holder_id_kind
     }
 
     /// Whether strict predicates should engage for this filter (CONF-01
@@ -173,6 +219,7 @@ impl core::fmt::Debug for RolifyConfig {
             .field("remove_role_if_empty", &self.remove_role_if_empty)
             .field("role_table", &self.role_table)
             .field("join_table", &self.join_table)
+            .field("holder_id_kind", &self.holder_id_kind)
             .field("before_add", &self.before_add.as_ref().map(|_| "<hook>"))
             .field(
                 "before_remove",
@@ -206,6 +253,7 @@ pub struct RolifyConfigBuilder {
     remove_role_if_empty: Option<bool>,
     role_table: Option<String>,
     join_table: Option<String>,
+    holder_id_kind: Option<HolderIdKind>,
     before_add: Option<BeforeHook>,
     before_remove: Option<BeforeHook>,
     after_add: Option<AfterHook>,
@@ -238,6 +286,13 @@ impl RolifyConfigBuilder {
     #[must_use]
     pub fn join_table(mut self, name: &str) -> Self {
         self.join_table = Some(name.to_owned());
+        self
+    }
+
+    /// Override the holder id kind (default `HolderIdKind::Integer`).
+    #[must_use]
+    pub fn holder_id_kind(mut self, kind: HolderIdKind) -> Self {
+        self.holder_id_kind = Some(kind);
         self
     }
 
@@ -342,6 +397,7 @@ impl RolifyConfigBuilder {
             remove_role_if_empty: self.remove_role_if_empty.unwrap_or(true),
             role_table,
             join_table,
+            holder_id_kind: self.holder_id_kind.unwrap_or_default(),
             before_add: self.before_add,
             before_remove: self.before_remove,
             after_add: self.after_add,
@@ -358,6 +414,7 @@ impl core::fmt::Debug for RolifyConfigBuilder {
             .field("remove_role_if_empty", &self.remove_role_if_empty)
             .field("role_table", &self.role_table)
             .field("join_table", &self.join_table)
+            .field("holder_id_kind", &self.holder_id_kind)
             .field("before_add", &self.before_add.as_ref().map(|_| "<hook>"))
             .field(
                 "before_remove",

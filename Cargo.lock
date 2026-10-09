@@ -3405,6 +3405,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror",
  "tokio",
+ "uuid",
  "walkdir",
 ]
 
@@ -3421,6 +3422,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
