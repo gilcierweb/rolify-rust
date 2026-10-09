@@ -68,10 +68,12 @@ When `false`: Role rows persist even with zero members.
 ```rust
 // Defaults: role_table = "roles", join_table = "users_roles"
 let config = RolifyConfig::builder()
-    .role_table("app_roles")
-    .join_table("accounts_app_roles")
+    .role_table("privileges")
+    .join_table("users_privileges")
     .build()?;
 ```
+
+Gem mapping: `rolify :role_cname => 'Privilege'` sets `role_table_name = "privileges"` and derives `role_join_table_name = "users_privileges"` (user table + "_" + role table). Rust has no tableize conventions, so both names are given explicitly here; the values are identical.
 
 **Validation rules** (D-08 identifier allow-list):
 - Must start with ASCII letter (A-Z, a-z) or underscore (_)
@@ -275,16 +277,16 @@ mod tests {
 
 | Ruby rolify | rolify-rust |
 |-------------|-------------|
-| `config.role_cname = 'Role'` | `role_table("roles")` (table name) |
-| `config.user_cname = 'User'` | N/A (consumer defines `rolify_type()`) |
-| `config.join_table_name = 'users_roles'` | `join_table("users_roles")` |
-| `config.use_dynamic_shortcuts` | N/A (not ported) |
-| `config.strict_rolify = true` | `strict(true)` |
+| `rolify` on `User` (generator `rails g rolify Role User`) | consumer implements `rolify_type()` returning `"User"` |
+| `rolify :role_cname => 'Privilege'` | `role_table("privileges")` (table name) |
+| `rolify :role_join_table_name => 'users_privileges'` | `join_table("users_privileges")` |
+| `config.use_dynamic_shortcuts` | N/A (not ported; no `method_missing`) |
+| `rolify :strict => true` | `strict(true)` |
 | `config.remove_role_if_empty = false` | `remove_role_if_empty(false)` |
-| `config.before_add` | `before_add(Arc::new(...))` |
-| `config.after_add` | `after_add(Arc::new(...))` |
-| `config.before_remove` | `before_remove(Arc::new(...))` |
-| `config.after_remove` | `after_remove(Arc::new(...))` |
+| `rolify :before_add => :hook` | `before_add(Arc::new(...))` |
+| `rolify :after_add => :hook` | `after_add(Arc::new(...))` |
+| `rolify :before_remove => :hook` | `before_remove(Arc::new(...))` |
+| `rolify :after_remove => :hook` | `after_remove(Arc::new(...))` |
 
 **Key differences:**
 - No global mutable state - config is explicit and passed around

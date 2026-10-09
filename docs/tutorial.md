@@ -545,9 +545,11 @@ fn test_resource_side_finders() {
 
 ```rust
 // src/db.rs
-use rolify_diesel::DieselRoleStore;
+use rolify_core::config::RolifyConfig;
+use rolify_diesel::{DieselStore, MIGRATIONS};
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
+use diesel_migrations::MigrationHarness;
 
 pub type DbPool = Pool<ConnectionManager<PgConnection>>;
 
@@ -558,13 +560,14 @@ pub fn create_pool(database_url: &str) -> DbPool {
 
 pub async fn run_with_diesel(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
     let mut conn = pool.get()?;
-    
-    // Run migrations (rolify-diesel provides them)
-    diesel_migrations::run_pending_migrations(&mut conn)?;
-    
-    // Create store
-    let mut store = DieselRoleStore::new(conn);
-    
+
+    // Run migrations explicitly (rolify-diesel embeds them; it never auto-migrates)
+    conn.run_pending_migrations(MIGRATIONS)?;
+
+    // Create store from the config (reads table names)
+    let config = RolifyConfig::default();
+    let mut store = DieselStore::new(&config);
+
     // Use with RolifyUser...
     Ok(())
 }
@@ -579,5 +582,5 @@ Key takeaways:
 3. **Zero-I/O caching**: `RoleSet` for borrowed-row checks
 4. **Dual API**: User-side (`RolifyUser`) + Resource-side (`Resource`) finders
 5. **Callbacks**: `before_add`/`after_add`/`before_remove`/`after_remove` with veto semantics
-6. **Adapters**: Swap `InMemoryStore` for `DieselRoleStore`, `SqlxRoleStore`, etc. - same API
+6. **Adapters**: Swap `InMemoryStore` for `DieselStore`, `SqlxStore`, `SeaormStore`, `MongoStore` - same API
 7. **No authorization enforcement**: rolify-rust only manages roles; you decide what roles mean

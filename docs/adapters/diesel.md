@@ -99,7 +99,7 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::user::RolifyUser;
-use rolify_diesel::DieselRoleStore;
+use rolify_diesel::DieselStore;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::PgConnection;
 
@@ -107,13 +107,13 @@ type DbPool = Pool<ConnectionManager<PgConnection>>;
 
 struct Player {
     id: i64,
-    store: DieselRoleStore<PgConnection>,
+    store: DieselStore,
     conn: PgConnection,
     config: RolifyConfig,
 }
 
 impl RolifyUser for Player {
-    type Store = DieselRoleStore<PgConnection>;
+    type Store = DieselStore;
 
     fn store(&mut self) -> &mut Self::Store {
         &mut self.store
@@ -142,8 +142,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_migrations(&pool)?;
 
     let mut conn = pool.get()?;
-    let store = DieselRoleStore::new(conn);
     let config = RolifyConfig::default();
+    let store = DieselStore::new(&config);
 
     let mut player = Player { id: 1, store, conn, config };
     // ... use player.add_role(), player.has_role(), etc.
@@ -155,11 +155,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use rolify_core::manager::Rolify;
-use rolify_diesel::DieselRoleStore;
+use rolify_diesel::DieselStore;
 
 let mut conn = pool.get()?;
-let store = DieselRoleStore::new(conn);
 let config = RolifyConfig::default();
+let store = DieselStore::new(&config);
 
 let mut engine = Rolify::new(store, conn, config);
 
@@ -189,7 +189,7 @@ tokio = { version = "1.53", features = ["full"] }
 ```rust
 use rolify_core::config::RolifyConfig;
 use rolify_core::manager::Rolify;
-use rolify_diesel::AsyncDieselRoleStore;
+use rolify_diesel::DieselStore; // async feature: SAME store type, async SPI
 use diesel_async::pooled_connection::bb8::Pool;
 use diesel_async::AsyncPgConnection;
 
@@ -197,13 +197,13 @@ type AsyncPool = Pool<AsyncPgConnection>;
 
 struct Player {
     id: i64,
-    store: AsyncDieselRoleStore<AsyncPgConnection>,
+    store: DieselStore,
     conn: AsyncPgConnection,
     config: RolifyConfig,
 }
 
 impl RolifyUser for Player {
-    type Store = AsyncDieselRoleStore<AsyncPgConnection>;
+    type Store = DieselStore;
 
     fn store(&mut self) -> &mut Self::Store { &mut self.store }
     fn rolify_config(&self) -> &RolifyConfig { &self.config }
@@ -221,8 +221,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = Pool::builder().build(config).await?;
 
     let mut conn = pool.get().await?;
-    let store = AsyncDieselRoleStore::new(conn);
     let config = RolifyConfig::default();
+    let store = DieselStore::new(&config);
 
     let mut player = Player { id: 1, store, conn, config };
     player.add_role(&RoleName::from("admin"), ResourceRef::Global).await?;
@@ -247,9 +247,10 @@ fn create_pool(url: &str) -> Pool<ConnectionManager<PgConnection>> {
         .expect("Failed to create pool")
 }
 
-// Per-request checkout
+// Per-request checkout: build the store once from config, reuse per request
+let config = RolifyConfig::default();
+let store = DieselStore::new(&config);
 let mut conn = pool.get()?;
-let store = DieselRoleStore::new(conn);
 ```
 
 ### Async (bb8)
@@ -270,21 +271,24 @@ fn create_async_pool(url: &str) -> Pool<AsyncPgConnection> {
 }
 
 // Per-request checkout
+let config = RolifyConfig::default();
+let store = DieselStore::new(&config);
 let mut conn = pool.get().await?;
-let store = AsyncDieselRoleStore::new(conn);
 ```
 
 ## Custom Table Names
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_diesel::DieselStore;
 
 let config = RolifyConfig::builder()
-    .role_table("app_roles")
-    .join_table("accounts_app_roles")
+    .role_table("privileges")
+    .join_table("users_privileges")
     .build()?;
 
-let store = DieselRoleStore::new(conn);  // Uses config from RolifyUser::rolify_config()
+// The store reads the table names from the config (defaults: "roles" / "users_roles")
+let store = DieselStore::new(&config);
 ```
 
 The adapter reads table names from `RolifyConfig` at runtime.
@@ -354,5 +358,5 @@ Ensure you're using the correct schema. The adapter expects the columns from the
 | `user.roles` | `user.roles_name().await?` |
 | `Forum.with_role(:admin)` | `Forum::with_role(&mut engine, &[RoleName::from("admin")], None).await?` |
 | `Forum.find_roles(:admin, user)` | `Forum::find_roles(&mut engine, Some(&RoleName::from("admin")), Some(&user.rolify_id())).await?` |
-| `config.role_cname` | `role_table("roles")` |
-| `config.join_table_name` | `join_table("users_roles")` |
+| `rolify :role_cname => 'Privilege'` | `role_table("privileges")` |
+| `rolify :role_join_table_name => 'users_privileges'` | `join_table("users_privileges")` |

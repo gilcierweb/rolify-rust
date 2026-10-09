@@ -85,20 +85,20 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::user::RolifyUser;
-use rolify_sqlx::SqlxRoleStore;
+use rolify_sqlx::SqlxStore;
 use sqlx::PgPool;
 
 struct Player {
     id: i64,
-    store: SqlxRoleStore,
+    store: SqlxStore<sqlx::Postgres>,
     pool: PgPool,
     config: RolifyConfig,
 }
 
 impl RolifyUser for Player {
-    type Store = SqlxRoleStore;
+    type Store = SqlxStore<sqlx::Postgres>;
 
-    fn store(&mut self) -> &mut SqlxRoleStore {
+    fn store(&mut self) -> &mut SqlxStore<sqlx::Postgres> {
         &mut self.store
     }
 
@@ -114,7 +114,7 @@ impl RolifyUser for Player {
         "Player"
     }
 
-    fn store_with_conn(&mut self) -> (&mut SqlxRoleStore, &mut sqlx::PgConnection) {
+    fn store_with_conn(&mut self) -> (&mut SqlxStore<sqlx::Postgres>, &mut sqlx::PgConnection) {
         // SQLx uses pool directly; we borrow a connection from the pool
         // For proper usage, see the connection handling section below
         unimplemented!("See connection handling section")
@@ -139,27 +139,27 @@ struct Player {
 impl Player {
     async fn with_store<F, R>(&mut self, f: F) -> Result<R, sqlx::Error>
     where
-        F: for<'c> FnOnce(&'c mut SqlxRoleStore, &'c mut sqlx::PgConnection) -> std::pin::Pin<Box<dyn Future<Output = Result<R, sqlx::Error>> + Send + 'c>>,
+        F: for<'c> FnOnce(&'c mut SqlxStore<sqlx::Postgres>, &'c mut sqlx::PgConnection) -> std::pin::Pin<Box<dyn Future<Output = Result<R, sqlx::Error>> + Send + 'c>>,
     {
         let mut conn = self.pool.acquire().await?;
-        let mut store = SqlxRoleStore::new();  // Stateless - no connection held
+        let mut store = SqlxStore::<sqlx::Postgres>::new(&self.config);
         f(&mut store, &mut conn).await
     }
 }
 
 impl RolifyUser for Player {
-    type Store = SqlxRoleStore;
+    type Store = SqlxStore<sqlx::Postgres>;
 
-    fn store(&mut self) -> &mut SqlxRoleStore {
-        // SqlxRoleStore is stateless; create on demand
-        Box::leak(Box::new(SqlxRoleStore::new()))  // Not ideal - see better pattern below
+    fn store(&mut self) -> &mut SqlxStore<sqlx::Postgres> {
+        // SqlxStore is small; create on demand from the config
+        Box::leak(Box::new(SqlxStore::<sqlx::Postgres>::new(&self.config)))  // Leaks - see the Rolify engine pattern below
     }
 
     fn rolify_config(&self) -> &RolifyConfig { &self.config }
     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
     fn rolify_type() -> &'static str { "Player" }
 
-    fn store_with_conn(&mut self) -> (&mut SqlxRoleStore, &mut sqlx::PgConnection) {
+    fn store_with_conn(&mut self) -> (&mut SqlxStore<sqlx::Postgres>, &mut sqlx::PgConnection) {
         // This is tricky with SQLx because we need a connection
         // Better: use the Rolify engine pattern
         unimplemented!("Use Rolify engine instead")
@@ -171,7 +171,7 @@ impl RolifyUser for Player {
 
 ```rust
 use rolify_core::manager::Rolify;
-use rolify_sqlx::SqlxRoleStore;
+use rolify_sqlx::SqlxStore;
 use sqlx::{PgPool, Acquire};
 
 struct AppState {
@@ -181,9 +181,9 @@ struct AppState {
 
 impl AppState {
     // Create a Rolify engine per request/task
-    async fn rolify_engine(&self) -> Result<Rolify<SqlxRoleStore>, sqlx::Error> {
+    async fn rolify_engine(&self) -> Result<Rolify<SqlxStore<sqlx::Postgres>>, sqlx::Error> {
         let mut conn = self.pool.acquire().await?;
-        let store = SqlxRoleStore::new();
+        let store = SqlxStore::<sqlx::Postgres>::new(&self.config);
         Ok(Rolify::new(store, conn, self.config.clone()))
     }
 }
@@ -199,17 +199,17 @@ async fn make_moderator(state: &AppState, user_id: i64, forum_id: i64) -> Result
 // User adapter that borrows the engine
 struct UserAdapter<'a> {
     id: i64,
-    engine: &'a mut Rolify<SqlxRoleStore>,
+    engine: &'a mut Rolify<SqlxStore<sqlx::Postgres>>,
 }
 
 impl<'a> RolifyUser for UserAdapter<'a> {
-    type Store = SqlxRoleStore;
+    type Store = SqlxStore<sqlx::Postgres>;
 
-    fn store(&mut self) -> &mut SqlxRoleStore { &mut self.engine.store }
+    fn store(&mut self) -> &mut SqlxStore<sqlx::Postgres> { self.engine.store_with_conn().0 }
     fn rolify_config(&self) -> &RolifyConfig { self.engine.config() }
     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
     fn rolify_type() -> &'static str { "Player" }
-    fn store_with_conn(&mut self) -> (&mut SqlxRoleStore, &mut sqlx::PgConnection) {
+    fn store_with_conn(&mut self) -> (&mut SqlxStore<sqlx::Postgres>, &mut sqlx::PgConnection) {
         self.engine.store_with_conn()
     }
 }
@@ -234,14 +234,17 @@ let pool = PgPoolOptions::new()
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_core::manager::Rolify;
+use rolify_sqlx::SqlxStore;
 
 let config = RolifyConfig::builder()
-    .role_table("app_roles")
-    .join_table("accounts_app_roles")
+    .role_table("privileges")
+    .join_table("users_privileges")
     .build()?;
 
-// The store reads these from config at query time
-let mut engine = Rolify::new(SqlxRoleStore::new(), conn, config);
+// The store reads these from the config (defaults: "roles" / "users_roles")
+let store = SqlxStore::<sqlx::Postgres>::new(&config);
+let mut engine = Rolify::new(store, conn, config);
 ```
 
 ## STI Support
@@ -265,8 +268,8 @@ use sqlx::{PgPool, Transaction};
 
 async fn atomic_role_grant(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let store = SqlxRoleStore::new();
     let config = RolifyConfig::default();
+    let store = SqlxStore::<sqlx::Postgres>::new(&config);
     let mut engine = Rolify::new(store, &mut *tx, config);
     
     let mut user = UserAdapter { id: user_id, engine: &mut engine };
@@ -355,8 +358,8 @@ Ensure migrations run in order. The adapter expects the exact schema from the pr
 | `user.add_role(:admin)` | `user.add_role(&RoleName::from("admin"), ResourceRef::Global).await?` |
 | `user.has_role?(:admin, forum)` | `user.has_role(&RoleName::from("admin"), ResourceFilter::Instance("Forum", &forum.resource_id())).await?` |
 | `Forum.with_role(:admin)` | `Forum::with_role(&mut engine, &[RoleName::from("admin")], None).await?` |
-| `config.role_cname` | `role_table("roles")` |
-| `config.join_table_name` | `join_table("users_roles")` |
+| `rolify :role_cname => 'Privilege'` | `role_table("privileges")` |
+| `rolify :role_join_table_name => 'users_privileges'` | `join_table("users_privileges")` |
 | `ActiveRecord::Base.transaction` | `pool.begin().await?` + `tx.commit().await?` |
 
 **Key difference:** SQLx is not an ORM - you write the queries (or use the adapter's provided methods). The adapter provides the rolify-specific queries; you handle connections/transactions.

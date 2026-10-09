@@ -86,7 +86,7 @@ If you want to customize entities, generate them from your database:
 sea-orm-cli generate entity -o src/entities -u postgres://user:pass@localhost/db
 ```
 
-Then implement the adapter's `SeaOrmRoleStore` with your custom entities.
+Then wire the adapter's `SeaormStore` to those entity tables through `RolifyConfig`.
 
 ## Basic Usage
 
@@ -97,20 +97,20 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::user::RolifyUser;
-use rolify_seaorm::SeaOrmRoleStore;
+use rolify_seaorm::SeaormStore;
 use sea_orm::{Database, DatabaseConnection};
 
 struct Player {
     id: i64,
-    store: SeaOrmRoleStore,
+    store: SeaormStore<DatabaseConnection>,
     db: DatabaseConnection,
     config: RolifyConfig,
 }
 
 impl RolifyUser for Player {
-    type Store = SeaOrmRoleStore;
+    type Store = SeaormStore<DatabaseConnection>;
 
-    fn store(&mut self) -> &mut SeaOrmRoleStore {
+    fn store(&mut self) -> &mut SeaormStore<DatabaseConnection> {
         &mut self.store
     }
 
@@ -126,7 +126,7 @@ impl RolifyUser for Player {
         "Player"
     }
 
-    fn store_with_conn(&mut self) -> (&mut SeaOrmRoleStore, &mut DatabaseConnection) {
+    fn store_with_conn(&mut self) -> (&mut SeaormStore<DatabaseConnection>, &mut DatabaseConnection) {
         (&mut self.store, &mut self.db)
     }
 }
@@ -138,9 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run migrations
     rolify_seaorm::migration::Migrator::up(&db, None).await?;
     
-    let store = SeaOrmRoleStore::new();
     let config = RolifyConfig::default();
-    
+    let store = SeaormStore::<DatabaseConnection>::new(&config);
+
     let mut player = Player { id: 1, store, db, config };
     player.add_role(&RoleName::from("admin"), ResourceRef::Global).await?;
     
@@ -152,12 +152,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use rolify_core::manager::Rolify;
-use rolify_seaorm::SeaOrmRoleStore;
+use rolify_seaorm::SeaormStore;
 use sea_orm::DatabaseConnection;
 
 let db = Database::connect("postgres://user:pass@localhost/db").await?;
-let store = SeaOrmRoleStore::new();
 let config = RolifyConfig::default();
+let store = SeaormStore::<DatabaseConnection>::new(&config);
 
 let mut engine = Rolify::new(store, db, config);
 
@@ -178,17 +178,19 @@ let forums = Forum::with_role(&mut engine, &[RoleName::from("moderator")], Some(
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_seaorm::SeaormStore;
+use sea_orm::DatabaseConnection;
 
 let config = RolifyConfig::builder()
-    .role_table("app_roles")
-    .join_table("accounts_app_roles")
+    .role_table("privileges")
+    .join_table("users_privileges")
     .build()?;
 
-// The entities use these names at runtime
-let store = SeaOrmRoleStore::with_table_names("app_roles", "accounts_app_roles");
+// The store reads the table names from the config (defaults: "roles" / "users_roles")
+let store = SeaormStore::<DatabaseConnection>::new(&config);
 ```
 
-Or set via environment/config before generating entities.
+The generated migration templates and the store both key off the same `RolifyConfig`, so names never disagree.
 
 ## STI Support
 
@@ -217,30 +219,30 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 async fn atomic_role_grant(db: &DatabaseConnection, user_id: i64) -> Result<(), sea_orm::DbErr> {
     let tx = db.begin().await?;
-    let store = SeaOrmRoleStore::new();
     let config = RolifyConfig::default();
+    let store = SeaormStore::<DatabaseTransaction>::new(&config);
     let mut engine = Rolify::new(store, tx, config);
     
     let mut user = UserAdapter { id: user_id, engine: &mut engine };
     user.add_role(&RoleName::from("admin"), ResourceRef::Global).await?;
     user.add_role(&RoleName::from("moderator"), ResourceRef::Class("Forum")).await?;
     
-    engine.conn().commit().await?;
+    engine.store_with_conn().1.commit().await?;
     Ok(())
 }
 
 struct UserAdapter<'a> {
     id: i64,
-    engine: &'a mut Rolify<SeaOrmRoleStore, DatabaseTransaction>,
+    engine: &'a mut Rolify<SeaormStore<DatabaseTransaction>>,
 }
 
 impl<'a> RolifyUser for UserAdapter<'a> {
-    type Store = SeaOrmRoleStore;
-    fn store(&mut self) -> &mut SeaOrmRoleStore { &mut self.engine.store }
+    type Store = SeaormStore<DatabaseTransaction>;
+    fn store(&mut self) -> &mut SeaormStore<DatabaseTransaction> { self.engine.store_with_conn().0 }
     fn rolify_config(&self) -> &RolifyConfig { self.engine.config() }
     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
     fn rolify_type() -> &'static str { "Player" }
-    fn store_with_conn(&mut self) -> (&mut SeaOrmRoleStore, &mut DatabaseTransaction) {
+    fn store_with_conn(&mut self) -> (&mut SeaormStore<DatabaseTransaction>, &mut DatabaseTransaction) {
         self.engine.store_with_conn()
     }
 }
@@ -317,8 +319,8 @@ sea-orm = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio", "macr
 | `user.add_role(:admin)` | `user.add_role(&RoleName::from("admin"), ResourceRef::Global).await?` |
 | `user.has_role?(:admin, forum)` | `user.has_role(&RoleName::from("admin"), ResourceFilter::Instance("Forum", &forum.resource_id())).await?` |
 | `Forum.with_role(:admin)` | `Forum::with_role(&mut engine, &[RoleName::from("admin")], None).await?` |
-| `config.role_cname` | `role_table("roles")` |
-| `config.join_table_name` | `join_table("users_roles")` |
+| `rolify :role_cname => 'Privilege'` | `role_table("privileges")` |
+| `rolify :role_join_table_name => 'users_privileges'` | `join_table("users_privileges")` |
 | `ActiveRecord::Base.transaction` | `db.begin().await?` + `tx.commit().await?` |
 
 **Key difference:** SeaORM is an async ORM with entities. The adapter provides SeaORM entities for roles/join table; you use SeaORM's query builder for your domain models.

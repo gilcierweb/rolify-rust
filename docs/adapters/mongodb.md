@@ -89,20 +89,20 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::user::RolifyUser;
-use rolify_mongodb::MongoRoleStore;
+use rolify_mongodb::MongoStore;
 use mongodb::{Client, Database, options::ClientOptions};
 
 struct Player {
     id: i64,
-    store: MongoRoleStore,
+    store: MongoStore,
     db: Database,
     config: RolifyConfig,
 }
 
 impl RolifyUser for Player {
-    type Store = MongoRoleStore;
+    type Store = MongoStore;
 
-    fn store(&mut self) -> &mut MongoRoleStore {
+    fn store(&mut self) -> &mut MongoStore {
         &mut self.store
     }
 
@@ -118,7 +118,7 @@ impl RolifyUser for Player {
         "Player"
     }
 
-    fn store_with_conn(&mut self) -> (&mut MongoRoleStore, &mut Database) {
+    fn store_with_conn(&mut self) -> (&mut MongoStore, &mut Database) {
         (&mut self.store, &mut self.db)
     }
 }
@@ -129,11 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::with_options(client_options)?;
     let db = client.database("myapp");
 
-    // Create indexes
-    let store = MongoRoleStore::new(db.clone());
-    store.create_indexes().await?;
-
     let config = RolifyConfig::default();
+    let store = MongoStore::new(&db, &config);
+    store.ensure_indexes().await?;
+
     let mut player = Player { id: 1, store, db, config };
 
     player.add_role(&RoleName::from("admin"), ResourceRef::Global).await?;
@@ -158,25 +157,25 @@ use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
 use rolify_core::user::RolifyUser;
-use rolify_mongodb::SyncMongoRoleStore;
+use rolify_mongodb::MongoStore; // sync feature: same store type over mongodb::sync::Database
 use mongodb::sync::{Client, Database};
 use mongodb::options::ClientOptions;
 
 struct Player {
     id: i64,
-    store: SyncMongoRoleStore,
+    store: MongoStore,
     db: Database,
     config: RolifyConfig,
 }
 
 impl RolifyUser for Player {
-    type Store = SyncMongoRoleStore;
+    type Store = MongoStore;
 
-    fn store(&mut self) -> &mut SyncMongoRoleStore { &mut self.store }
+    fn store(&mut self) -> &mut MongoStore { &mut self.store }
     fn rolify_config(&self) -> &RolifyConfig { &self.config }
     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
     fn rolify_type() -> &'static str { "Player" }
-    fn store_with_conn(&mut self) -> (&mut SyncMongoRoleStore, &mut Database) {
+    fn store_with_conn(&mut self) -> (&mut MongoStore, &mut Database) {
         (&mut self.store, &mut self.db)
     }
 }
@@ -186,10 +185,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::with_options(client_options)?;
     let db = client.database("myapp");
 
-    let store = SyncMongoRoleStore::new(db.clone());
-    store.create_indexes()?;  // Blocking call
-
     let config = RolifyConfig::default();
+    let store = MongoStore::new(&db, &config);
+    store.ensure_indexes()?;  // Blocking call under the sync feature
+
     let mut player = Player { id: 1, store, db, config };
 
     player.add_role(&RoleName::from("admin"), ResourceRef::Global)?;
@@ -204,15 +203,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use rolify_core::manager::Rolify;
-use rolify_mongodb::MongoRoleStore;
+use rolify_mongodb::MongoStore;
 use mongodb::Database;
 
 let client = Client::with_options(ClientOptions::parse("mongodb://localhost:27017").await?)?;
 let db = client.database("myapp");
-let store = MongoRoleStore::new(db.clone());
-store.create_indexes().await?;
-
 let config = RolifyConfig::default();
+let store = MongoStore::new(&db, &config);
+store.ensure_indexes().await?;
+
 let mut engine = Rolify::new(store, db, config);
 
 // Resource-side finders
@@ -232,14 +231,19 @@ let forums = Forum::with_role(&mut engine, &[RoleName::from("moderator")], Some(
 
 ```rust
 use rolify_core::config::RolifyConfig;
+use rolify_mongodb::MongoStore;
 
 let config = RolifyConfig::builder()
-    .role_table("app_roles")        // roles collection
-    .join_table("accounts_roles")   // users_roles collection
+    .role_table("privileges")    // roles collection name
     .build()?;
 
-let store = MongoRoleStore::with_collection_names(db, "app_roles", "accounts_roles");
+// Gem parity: role_cname 'Privilege' -> tableize -> "privileges".
+let store = MongoStore::new(&db, &config);
+// Or bypass config with an explicit name (re-validated against the same allow-list):
+let store = MongoStore::with_role_collection(&db, "privileges");
 ```
+
+MongoDB has no join table: memberships live inside the role document's `user_ids` array (and the consumer document's `role_ids`), so `join_table` does not apply to this adapter.
 
 ## STI Support
 
@@ -265,8 +269,8 @@ async fn atomic_role_grant(client: &Client, user_id: i64) -> Result<(), mongodb:
     session.start_transaction(None).await?;
 
     let db = client.database("myapp");
-    let store = MongoRoleStore::new(db.clone());
     let config = RolifyConfig::default();
+    let store = MongoStore::new(&db, &config);
     let mut engine = Rolify::new(store, db, config);
     
     // Pass session through store (if supported) or use session-aware methods
@@ -280,17 +284,17 @@ async fn atomic_role_grant(client: &Client, user_id: i64) -> Result<(), mongodb:
 
 struct UserAdapter<'a> {
     id: i64,
-    engine: &'a mut Rolify<MongoRoleStore, Database>,
+    engine: &'a mut Rolify<MongoStore>,
     session: &'a mut ClientSession,
 }
 
 impl<'a> RolifyUser for UserAdapter<'a> {
-    type Store = MongoRoleStore;
-    fn store(&mut self) -> &mut MongoRoleStore { &mut self.engine.store }
+    type Store = MongoStore;
+    fn store(&mut self) -> &mut MongoStore { self.engine.store_with_conn().0 }
     fn rolify_config(&self) -> &RolifyConfig { self.engine.config() }
     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
     fn rolify_type() -> &'static str { "Player" }
-    fn store_with_conn(&mut self) -> (&mut MongoRoleStore, &mut Database) {
+    fn store_with_conn(&mut self) -> (&mut MongoStore, &mut Database) {
         self.engine.store_with_conn()
     }
 }
@@ -371,7 +375,7 @@ The adapter uses `find_one_and_update` with upsert for `find_or_create_by`.
 
 ### "Index build failed"
 
-Run `store.create_indexes().await?` after connecting. Ensure no duplicate data exists.
+Run `store.ensure_indexes().await?` after connecting. Ensure no duplicate data exists.
 
 ### "BSON serialization error"
 
@@ -393,8 +397,8 @@ Enable `serde` feature on `mongodb` crate and ensure your types implement `Seria
 | `user.add_role(:admin)` | `user.add_role(&RoleName::from("admin"), ResourceRef::Global).await?` |
 | `user.has_role?(:admin, forum)` | `user.has_role(&RoleName::from("admin"), ResourceFilter::Instance("Forum", &forum.resource_id())).await?` |
 | `Forum.with_role(:admin)` | `Forum::with_role(&mut engine, &[RoleName::from("admin")], None).await?` |
-| `config.role_cname` | `role_table("roles")` |
-| `config.join_table_name` | `join_table("users_roles")` |
+| `rolify :role_cname => 'Privilege'` | `role_table("privileges")` |
+| `rolify :role_join_table_name => 'users_privileges'` | `join_table("users_privileges")` |
 | `Mongoid::Config.clients` | `ClientOptions::parse(...)` |
 | `field :name, type: String` | BSON serialization via `serde` |
 

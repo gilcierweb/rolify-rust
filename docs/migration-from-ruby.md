@@ -9,7 +9,7 @@ This guide helps you port applications from the Ruby [rolify](https://github.com
 | **Philosophy** | Role management only (no enforcement) | Same |
 | **Scopes** | Global, Class, Instance | Same (three levels) |
 | **Match ladder** | Global -> Class -> Instance | Same (non-strict) |
-| **Strict mode** | `config.strict_rolify` | `RolifyConfig::builder().strict(true)` |
+| **Strict mode** | `rolify :strict => true` | `RolifyConfig::builder().strict(true)` |
 | **Callbacks** | `before_add`, `after_add`, `before_remove`, `after_remove` | Same, with veto via `Result` |
 | **Dynamic shortcuts** | `user.is_admin?` | **Not ported** (use `has_role`) |
 | **ORM** | ActiveRecord / Mongoid | Diesel, SQLx, SeaORM, MongoDB |
@@ -25,17 +25,13 @@ gem 'rolify'
 
 # config/initializers/rolify.rb
 Rolify.configure do |config|
-  config.role_cname = 'Role'
-  config.user_cname = 'User'
-  config.join_table_name = 'users_roles'
-  config.use_dynamic_shortcuts = false
-  config.strict_rolify = false
-  config.remove_role_if_empty = true
+  config.remove_role_if_empty = true  # default; roles with zero members are deleted
+  # config.use_dynamic_shortcuts     # optional: is_admin? style methods (not ported)
 end
 
 # app/models/user.rb
 class User < ApplicationRecord
-  rolify
+  rolify  # custom setups: rolify :role_cname => 'Privilege', :strict => true
 end
 
 # app/models/forum.rb
@@ -60,19 +56,19 @@ use rolify_core::config::RolifyConfig;
 use rolify_core::resource::Resource;
 use rolify_core::role::ResourceId;
 use rolify_core::user::RolifyUser;
-use rolify_diesel::DieselRoleStore;
+use rolify_diesel::DieselStore;
 use diesel::PgConnection;
 
 struct User {
     id: i64,
     username: String,
-    store: DieselRoleStore<PgConnection>,
+    store: DieselStore,
     conn: PgConnection,
     config: RolifyConfig,
 }
 
 impl RolifyUser for User {
-    type Store = DieselRoleStore<PgConnection>;
+    type Store = DieselStore;
     fn store(&mut self) -> &mut Self::Store { &mut self.store }
     fn rolify_config(&self) -> &RolifyConfig { &self.config }
     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
@@ -93,11 +89,13 @@ impl Resource for Forum {
 
 | Ruby | Rust |
 |------|------|
-| `config.role_cname = 'Role'` | `role_table("roles")` |
-| `config.user_cname = 'User'` | `rolify_type()` returns `"User"` |
-| `config.join_table_name = 'users_roles'` | `join_table("users_roles")` |
-| `config.strict_rolify = true` | `strict(true)` |
-| `config.remove_role_if_empty = false` | `remove_role_if_empty(false)` |
+| `rolify :role_cname => 'Privilege'` | `.role_table("privileges")` |
+| user class backing (`User` model) | `rolify_type()` returns `"User"` |
+| `rolify :role_join_table_name => 'users_privileges'` | `.join_table("users_privileges")` |
+| `rolify :strict => true` | `.strict(true)` |
+| `config.remove_role_if_empty = false` | `.remove_role_if_empty(false)` |
+| `config.use_dynamic_shortcuts` | not ported (no `method_missing`; use explicit `has_role`) |
+| `resourcify :dependent => :destroy` | not automatic; delete the resource's roles explicitly (or use DB cascade) |
 | `config.before_add { |role| ... }` | `before_add(Arc::new(|record| ...))` |
 | `config.after_add { |role| ... }` | `after_add(Arc::new(|record| ...))` |
 | `config.before_remove { |role| ... }` | `before_remove(Arc::new(|record| ...))` |
