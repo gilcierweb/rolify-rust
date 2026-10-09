@@ -6,3 +6,4 @@ lcov.info/
 *.orig
 .DS_Store
 *.db
+.cargo/config.toml
