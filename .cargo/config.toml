@@ -1,0 +1,7 @@
+[build]
+# Cap parallel rustc jobs: this machine has 12 logical CPUs but 14GB RAM.
+# The default (jobs = nproc) spawns 12 concurrent rustc/linker processes,
+# which combined with rust-analyzer and testcontainers exhausts RAM, forces
+# swap thrash, and freezes the whole machine. Four jobs keep peak build
+# memory around 6GB. Raise only on machines with more headroom.
+jobs = 4
