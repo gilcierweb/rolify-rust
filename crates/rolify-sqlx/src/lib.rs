@@ -85,6 +85,7 @@ pub mod error;
 pub mod rows;
 pub mod sentinel;
 
+mod holder;
 mod sql;
 mod store;
 

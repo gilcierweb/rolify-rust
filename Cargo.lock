@@ -3497,6 +3497,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

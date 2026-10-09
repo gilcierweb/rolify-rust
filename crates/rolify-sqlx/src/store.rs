@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rolify_core::catalog::RoleCatalogQuery;
-use rolify_core::config::{RolifyConfig, RolifyConfigBuilder};
+use rolify_core::config::{HolderIdKind, RolifyConfig, RolifyConfigBuilder};
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
@@ -59,11 +59,11 @@ use rolify_core::store::{
     RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
 };
 use sqlx::database::Database;
-use sqlx::query::Query;
 use sqlx::{AssertSqlSafe, Connection as _, Executor, IntoArguments};
 
 use crate::dialect::{placeholder, quote_identifier};
 use crate::error::Error;
+use crate::holder::{BindValue, holder_bind_value};
 use crate::rows::{HolderIdRow, IdRow, ResourceKeyRow, RoleRow};
 use crate::sentinel::{resource_id_to_storage, to_storage};
 use crate::sql;
@@ -89,6 +89,9 @@ pub struct SqlxStore<DB: Database> {
     join_table: String,
     holder_table: Option<String>,
     resource_tables: Vec<(String, String, String)>,
+    /// The configured holder-id kind (D-08-01): drives the typed bind
+    /// construction in [`holder_bind_value`] at every holder-id site.
+    holder_id_kind: HolderIdKind,
     engine: PhantomData<fn() -> DB>,
     /// Internal statement counter for the TEST-05 query-count seam.
     /// Incremented exactly once per executed statement in the two
@@ -109,6 +112,7 @@ impl<DB: Database> SqlxStore<DB> {
             join_table: quote_identifier::<DB>(config.join_table()),
             holder_table: None,
             resource_tables: Vec::new(),
+            holder_id_kind: config.holder_id_kind(),
             engine: PhantomData,
             query_counter: Arc::new(AtomicUsize::new(0)),
         }
@@ -220,19 +224,6 @@ impl<DB: Database> SqlxStore<DB> {
 
 impl<DB: Database> Sealed for SqlxStore<DB> {}
 
-/// One runtime bind value: the typed, ordered payload of a statement.
-///
-/// Every consumer value (role name, scope columns, holder id, resource
-/// type, resource id) is text; the generated role ids the join table
-/// and the orphan sweep reference are the only integer binds.
-#[derive(Debug, Clone)]
-enum BindValue {
-    /// A text bind (names, scope columns, stringified ids).
-    Text(String),
-    /// A generated role-row id bind.
-    Integer(i64),
-}
-
 impl<DB> SqlxStore<DB>
 where
     DB: Database,
@@ -241,22 +232,13 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> sqlx::types::Uuid: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> sqlx::types::Uuid: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<<DB as Database>::Row>,
     for<'r> usize: sqlx::ColumnIndex<<DB as Database>::Row>,
 {
-    /// Attach one bind to a statement, in order.
-    fn bind_value<'q>(
-        statement: Query<'q, DB, <DB as Database>::Arguments>,
-        value: &BindValue,
-    ) -> Query<'q, DB, <DB as Database>::Arguments> {
-        match value {
-            BindValue::Text(text) => statement.bind(text.clone()),
-            BindValue::Integer(number) => statement.bind(*number),
-        }
-    }
-
     /// Fetch choke point: EVERY select flows through here, so the
     /// query-count seam has one instrumentation point (04-06).
     ///
@@ -274,7 +256,7 @@ where
     ) -> Result<Vec<<DB as Database>::Row>, Error> {
         let mut statement = sqlx::query::<DB>(AssertSqlSafe(sql_text.as_str()));
         for value in binds {
-            statement = Self::bind_value(statement, value);
+            statement = value.apply(statement);
         }
         counter.fetch_add(1, Ordering::Relaxed);
         Ok(statement.fetch_all(&mut *conn).await?)
@@ -290,7 +272,7 @@ where
     ) -> Result<(), Error> {
         let mut statement = sqlx::query::<DB>(AssertSqlSafe(sql_text.as_str()));
         for value in binds {
-            statement = Self::bind_value(statement, value);
+            statement = value.apply(statement);
         }
         counter.fetch_add(1, Ordering::Relaxed);
         statement.execute(&mut *conn).await?;
@@ -494,14 +476,11 @@ fn push_strict_binds(binds: &mut Vec<BindValue>, query: &RoleQuery<'_>) {
     }
 }
 
-/// The removal binds: holder, name, then the target's conjunctive
-/// conditions, in `delete_links_for_target` / `select_affected_roles`
-/// order.
-fn removal_binds(holder: &str, name: &str, target: &RemovalTarget<'_>) -> Vec<BindValue> {
-    let mut binds = vec![
-        BindValue::Text(holder.to_owned()),
-        BindValue::Text(name.to_owned()),
-    ];
+/// The removal binds: the kind-aware holder bind, name, then the
+/// target's conjunctive conditions, in `delete_links_for_target` /
+/// `select_affected_roles` order.
+fn removal_binds(holder_bind: BindValue, name: &str, target: &RemovalTarget<'_>) -> Vec<BindValue> {
+    let mut binds = vec![holder_bind, BindValue::Text(name.to_owned())];
     match target {
         RemovalTarget::NameOnly => {}
         RemovalTarget::TypeSweep(type_name) => {
@@ -535,8 +514,10 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> sqlx::types::Uuid: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> sqlx::types::Uuid: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<<DB as Database>::Row>,
     for<'r> usize: sqlx::ColumnIndex<<DB as Database>::Row>,
 {
@@ -553,12 +534,13 @@ where
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let counter = self.query_counter.clone();
         async move {
             let (where_clause, _) = sql::build_ladder_where::<DB>(query, HOLDER_BIND_COUNT + 1);
             let sql_text =
                 sql::select_roles_for_holder::<DB>(&role_table, &join_table, &where_clause);
-            let mut binds = vec![BindValue::Text(holder.as_str().to_owned())];
+            let mut binds = vec![holder_bind?];
             push_ladder_binds(&mut binds, query);
             let rows = Self::fetch_rows(conn, sql_text, &binds, &counter).await?;
             Self::decode_role_rows(&rows)
@@ -575,12 +557,13 @@ where
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let counter = self.query_counter.clone();
         async move {
             let (where_clause, _) = sql::build_strict_where::<DB>(query, HOLDER_BIND_COUNT + 1);
             let sql_text =
                 sql::select_roles_for_holder::<DB>(&role_table, &join_table, &where_clause);
-            let mut binds = vec![BindValue::Text(holder.as_str().to_owned())];
+            let mut binds = vec![holder_bind?];
             push_strict_binds(&mut binds, query);
             let rows = Self::fetch_rows(conn, sql_text, &binds, &counter).await?;
             Self::decode_role_rows(&rows)
@@ -598,6 +581,7 @@ where
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let counter = self.query_counter.clone();
         async move {
             if queries.is_empty() {
@@ -606,7 +590,7 @@ where
             let (where_clause, _) = sql::build_any_where::<DB>(queries, HOLDER_BIND_COUNT + 1);
             let sql_text =
                 sql::select_roles_for_holder::<DB>(&role_table, &join_table, &where_clause);
-            let mut binds = vec![BindValue::Text(holder.as_str().to_owned())];
+            let mut binds = vec![holder_bind?];
             for query in queries {
                 push_ladder_binds(&mut binds, query);
             }
@@ -660,12 +644,13 @@ where
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
-        let holder_text = holder.as_str().to_owned();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let name_text = role.name.as_str().to_owned();
         let resource_type = to_storage(role.resource_type.as_deref()).to_owned();
         let resource_id = resource_id_to_storage(role.resource_id.as_ref()).to_owned();
         let counter = self.query_counter.clone();
         async move {
+            let holder_bind = holder_bind?;
             // Level-1: the role row must exist even for a hand-built
             // record (the diesel reference ensures the same).
             Self::find_or_create_by_triple(
@@ -688,7 +673,7 @@ where
             .await?;
 
             let sql_text = sql::insert_link::<DB>(&join_table);
-            let binds = [BindValue::Text(holder_text), BindValue::Integer(role_id)];
+            let binds = [holder_bind, BindValue::Integer(role_id)];
             match Self::execute_statement(conn, sql_text, &binds, &counter).await {
                 Ok(()) => Ok(true),
                 // Already linked: the join UNIQUE pair is the arbiter
@@ -713,18 +698,19 @@ where
     ) -> impl Future<Output = Result<RemovalOutcome, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let counter = self.query_counter.clone();
         async move {
+            let holder_bind = holder_bind?;
             // ONE transaction on ONE connection: the affected-roles
             // SELECT, the link DELETE, and the orphan sweep commit or
             // roll back together.
             let mut transaction = conn.begin().await?;
 
-            let holder_text = holder.as_str().to_owned();
             let name_text = name.as_str().to_owned();
 
             let affected_sql = sql::select_affected_roles::<DB>(&role_table, &join_table, &target);
-            let affected_binds = removal_binds(&holder_text, &name_text, &target);
+            let affected_binds = removal_binds(holder_bind, &name_text, &target);
             let rows = Self::fetch_rows(&mut *transaction, affected_sql, &affected_binds, &counter)
                 .await?;
             let affected_records = Self::decode_role_rows(&rows)?;
@@ -800,10 +786,11 @@ where
     ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let counter = self.query_counter.clone();
         async move {
             let sql_text = sql::select_scoped_exists::<DB>(&role_table, &join_table, column);
-            let binds = [BindValue::Text(holder.as_str().to_owned())];
+            let binds = [holder_bind?];
             let rows = Self::fetch_rows(conn, sql_text, &binds, &counter).await?;
             Ok(!rows.is_empty())
         }
@@ -818,10 +805,11 @@ where
     ) -> impl Future<Output = Result<Vec<RoleRecord>, Self::Error>> + Send {
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let counter = self.query_counter.clone();
         async move {
             let sql_text = sql::select_roles_of::<DB>(&role_table, &join_table);
-            let binds = [BindValue::Text(holder.as_str().to_owned())];
+            let binds = [holder_bind?];
             let rows = Self::fetch_rows(conn, sql_text, &binds, &counter).await?;
             Self::decode_role_rows(&rows)
         }
@@ -838,6 +826,7 @@ where
         query: &RoleQuery<'_>,
         strict: bool,
     ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send {
+        let holder_id_kind = self.holder_id_kind;
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
         let holder_table = self.holder_table_sql();
@@ -854,6 +843,7 @@ where
                 sql::build_ladder_where::<DB>(query, fragment_start)
             };
             let sql_text = sql::select_holders_where::<DB>(
+                holder_id_kind,
                 &holder_table,
                 &join_table,
                 &role_table,
@@ -881,6 +871,7 @@ where
         conn: &mut Self::Conn,
         holder_types: &[&str],
     ) -> impl Future<Output = Result<Vec<ResourceId>, Self::Error>> + Send {
+        let holder_id_kind = self.holder_id_kind;
         let holder_table = self.holder_table_sql();
         let counter = self.query_counter.clone();
         async move {
@@ -888,7 +879,8 @@ where
                 return Ok(Vec::new());
             }
             let type_filter = holder_type_filter::<DB>(None, holder_types.len());
-            let sql_text = sql::select_all_holders::<DB>(&holder_table, &type_filter);
+            let sql_text =
+                sql::select_all_holders::<DB>(holder_id_kind, &holder_table, &type_filter);
             let binds: Vec<BindValue> = holder_types
                 .iter()
                 .map(|type_name| BindValue::Text((*type_name).to_owned()))
@@ -909,6 +901,10 @@ where
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
         let holder_table = self.holder_table_sql();
+        let holder_id_kind = self.holder_id_kind;
+        let holder_bind = query
+            .holder
+            .map(|holder| holder_bind_value(holder_id_kind, holder, DB::NAME));
         let counter = self.query_counter.clone();
         async move {
             if query.types.is_empty() {
@@ -916,6 +912,7 @@ where
             }
             let has_holder = query.holder.is_some();
             let base_sql = sql::select_roles_matching::<DB>(
+                holder_id_kind,
                 &role_table,
                 &join_table,
                 has_holder.then_some(holder_table.as_str()),
@@ -930,7 +927,7 @@ where
             let (scope_filter, next_index) =
                 sql::roles_matching_scope_filter::<DB>(&query.scope, next_index);
             let (holder_filter, _) = if has_holder {
-                sql::roles_matching_holder_filter::<DB>(next_index)
+                sql::roles_matching_holder_filter::<DB>(holder_id_kind, next_index)
             } else {
                 (String::new(), next_index)
             };
@@ -958,8 +955,8 @@ where
                 rolify_core::catalog::CatalogScope::InstanceOnly { resource_id: None }
                 | rolify_core::catalog::CatalogScope::ClassAndInstance => {}
             }
-            if let Some(holder) = query.holder {
-                binds.push(BindValue::Text(holder.as_str().to_owned()));
+            if let Some(holder_bind) = holder_bind {
+                binds.push(holder_bind?);
             }
 
             let rows = Self::fetch_rows(conn, sql_text, &binds, &counter).await?;
@@ -1016,8 +1013,10 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> sqlx::types::Uuid: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> sqlx::types::Uuid: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<<DB as Database>::Row>,
     for<'r> usize: sqlx::ColumnIndex<<DB as Database>::Row>,
 {
@@ -1115,7 +1114,7 @@ where
         let role_table = self.role_table.clone();
         let join_table = self.join_table.clone();
         let candidates: Vec<ResourceKey> = candidates.to_vec();
-        let holder_text = holder.as_str().to_owned();
+        let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let names: Vec<RoleName> = names.to_vec();
         let counter = self.query_counter.clone();
         async move {
@@ -1124,7 +1123,7 @@ where
             }
             let rows_sql =
                 sql::select_holder_scope_rows::<DB>(&role_table, &join_table, names.len());
-            let mut binds = vec![BindValue::Text(holder_text)];
+            let mut binds = vec![holder_bind?];
             for name in &names {
                 binds.push(BindValue::Text(name.as_str().to_owned()));
             }

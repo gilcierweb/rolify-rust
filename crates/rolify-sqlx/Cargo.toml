@@ -8,7 +8,8 @@ license = "MIT"
 [dependencies]
 rolify-core = { workspace = true }
 thiserror = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { workspace = true, features = ["uuid"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 rolify-test = { workspace = true, features = ["suite"] }

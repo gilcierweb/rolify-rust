@@ -94,11 +94,14 @@ impl IdRow {
 /// Row for `holders_where` / `all_holders`: a holder id from the
 /// consumer's holder table.
 ///
-/// Holder primary keys are stringified at the SPI boundary, but the
-/// fixture holder tables behind the tests use integer autoincrement keys
-/// while the gem's `teams` case uses a string key. The decoder therefore
-/// tries `String` first and falls back to `i64` (stringified), covering
-/// both shapes on every engine without engine-specific SQL casts.
+/// Holder primary keys are stringified at the SPI boundary, and the
+/// physical column type follows the configured `HolderIdKind` (D-08-04):
+/// `BIGINT`/`INTEGER` under the integer kind, `UUID`/`BINARY(16)`/`TEXT`
+/// under uuid, `VARCHAR(191)` under string. The decoder therefore tries
+/// `String` first (text lanes, plus the Postgres uuid projection's text
+/// cast), falls back to `i64` (integer kind), and finally to `Uuid`
+/// (`MySQL` `BINARY(16)` projections, canonicalized to the hyphenated
+/// form).
 #[derive(Debug, Clone)]
 pub(crate) struct HolderIdRow {
     /// The holder's stringified primary key.
@@ -107,23 +110,27 @@ pub(crate) struct HolderIdRow {
 
 impl HolderIdRow {
     /// Decode one `user_id` projection row (string first, integer
-    /// fallback).
+    /// second, uuid last).
     ///
     /// # Errors
     ///
     /// Propagates `sqlx::Error` when the column is missing or decodable
-    /// as neither `String` nor `i64`.
+    /// as none of `String`, `i64`, or `Uuid`.
     pub(crate) fn from_row<DB>(row: &<DB as Database>::Row) -> Result<Self, sqlx::Error>
     where
         DB: Database,
         for<'r> String: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
         for<'r> i64: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> sqlx::types::Uuid: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
         for<'r> &'r str: sqlx::ColumnIndex<<DB as Database>::Row>,
         for<'r> usize: sqlx::ColumnIndex<<DB as Database>::Row>,
     {
         let user_id = match row.try_get::<String, _>("user_id") {
             Ok(value) => value,
-            Err(_) => row.try_get::<i64, _>("user_id")?.to_string(),
+            Err(_) => match row.try_get::<i64, _>("user_id") {
+                Ok(number) => number.to_string(),
+                Err(_) => row.try_get::<sqlx::types::Uuid, _>("user_id")?.to_string(),
+            },
         };
         Ok(Self { user_id })
     }

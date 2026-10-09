@@ -47,12 +47,47 @@
 //!   depends on every statement being built here).
 
 use rolify_core::catalog::CatalogScope;
+use rolify_core::config::HolderIdKind;
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::store::ScopeColumn;
 use sqlx::database::Database;
 
 use crate::dialect::{cast_to_text, placeholder};
+
+/// The holder primary-key expression for a COMPARISON against
+/// `link.user_id` (D-08-04, RESEARCH Pattern 3): typed kinds compare
+/// natively (`BIGINT`, `UUID`, `BINARY(16)`, or `TEXT` on both sides of
+/// the join), so the column stands bare; the string kind keeps the
+/// historical text cast because the fixture holder keys are integers
+/// while the string link column stores text (Postgres rejects
+/// `integer = text`).
+fn holder_compare_expr<DB: Database>(kind: HolderIdKind, column: &str) -> String {
+    match kind {
+        HolderIdKind::Integer | HolderIdKind::Uuid => column.to_owned(),
+        HolderIdKind::String => cast_to_text::<DB>(column),
+    }
+}
+
+/// The holder primary-key PROJECTION feeding the SPI's stringified-id
+/// output contract (RESEARCH Pattern 3): integer projects bare (the row
+/// decoder falls back to `i64`); uuid projects the text cast on Postgres
+/// (uuid output is the canonical hyphenated form) and the raw column on
+/// `MySQL`/`SQLite` (`Uuid` bytes / `TEXT` decodes); the string kind
+/// keeps today's text cast.
+fn holder_project_expr<DB: Database>(kind: HolderIdKind, column: &str) -> String {
+    match kind {
+        HolderIdKind::Integer => column.to_owned(),
+        HolderIdKind::Uuid => {
+            if DB::NAME == "PostgreSQL" {
+                cast_to_text::<DB>(column)
+            } else {
+                column.to_owned()
+            }
+        }
+        HolderIdKind::String => cast_to_text::<DB>(column),
+    }
+}
 
 /// The explicit role-row projection shared by every read template.
 const ROLE_PROJECTION: &str = "role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id";
@@ -567,23 +602,26 @@ pub(crate) fn select_scoped_exists<DB: Database>(
 ///
 /// `type_filter` and `where_clause` arrive pre-built; the placeholder
 /// sequence is types first, then the fragment (the caller threads the
-/// index accordingly). The holder primary key is an integer column while
-/// the link table stores stringified ids, so both the projection and the
-/// join cast it to text (the same repair the diesel reference carries;
-/// Postgres has no implicit varchar = bigint coercion).
+/// index accordingly). The holder-side projection and join follow the
+/// configured kind (D-08-04): typed kinds compare the primary key
+/// natively, the string kind keeps the historical `cast_to_text` repair
+/// (the diesel reference carries the same repair; Postgres has no
+/// implicit varchar = bigint coercion).
 #[must_use]
 pub(crate) fn select_holders_where<DB: Database>(
+    kind: HolderIdKind,
     holder_table: &str,
     join_table: &str,
     role_table: &str,
     type_filter: &str,
     where_clause: &str,
 ) -> String {
-    let holder_id_text = cast_to_text::<DB>("holder.id");
+    let holder_projection = holder_project_expr::<DB>(kind, "holder.id");
+    let holder_join_key = holder_compare_expr::<DB>(kind, "holder.id");
     format!(
-        "SELECT DISTINCT {holder_id_text} AS user_id \
+        "SELECT DISTINCT {holder_projection} AS user_id \
          FROM {holder_table} AS holder \
-         INNER JOIN {join_table} AS link ON link.user_id = {holder_id_text} \
+         INNER JOIN {join_table} AS link ON link.user_id = {holder_join_key} \
          INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
          WHERE {type_filter} AND {where_clause}"
     )
@@ -591,13 +629,19 @@ pub(crate) fn select_holders_where<DB: Database>(
 
 /// SELECT every holder id of the given types: the FULL holder universe
 /// including never-rolificated holders (`User.all` behind `all_except`,
-/// `finders.rb:13`). `type_filter` arrives pre-built. The integer
-/// primary key is cast to text for the stringified-id output contract.
+/// `finders.rb:13`). `type_filter` arrives pre-built. The primary-key
+/// projection follows the configured kind (integer decodes via the
+/// row's `i64` fallback; uuid decodes per engine; string keeps the
+/// historical text cast).
 #[must_use]
-pub(crate) fn select_all_holders<DB: Database>(holder_table: &str, type_filter: &str) -> String {
+pub(crate) fn select_all_holders<DB: Database>(
+    kind: HolderIdKind,
+    holder_table: &str,
+    type_filter: &str,
+) -> String {
     format!(
         "SELECT {} AS user_id FROM {holder_table} WHERE {type_filter}",
-        cast_to_text::<DB>("id")
+        holder_project_expr::<DB>(kind, "id")
     )
 }
 
@@ -609,11 +653,14 @@ pub(crate) fn select_all_holders<DB: Database>(holder_table: &str, type_filter: 
 ///
 /// The holder join is appended only when `has_holder` (the gem's
 /// `user.roles` branch); `holder_table` must be the quoted name then.
-/// The holder table join key is cast to text (`cast_to_text`): the
-/// fixture holder tables carry integer primary keys while the link
-/// column stores text, and Postgres rejects `integer = text`.
+/// The holder-table join key follows the configured kind (D-08-04):
+/// typed kinds compare natively; the string kind keeps the
+/// `cast_to_text` repair (the fixture holder tables carry integer
+/// primary keys while the string link column stores text, and Postgres
+/// rejects `integer = text`).
 #[must_use]
 pub(crate) fn select_roles_matching<DB: Database>(
+    kind: HolderIdKind,
     role_table: &str,
     join_table: &str,
     holder_table: Option<&str>,
@@ -623,7 +670,7 @@ pub(crate) fn select_roles_matching<DB: Database>(
         format!(
             "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
              INNER JOIN {holder_table} AS holder ON {} = link.user_id",
-            cast_to_text::<DB>("holder.id"),
+            holder_compare_expr::<DB>(kind, "holder.id"),
             holder_table = holder_table.unwrap_or_default(),
         )
     } else {
@@ -711,16 +758,21 @@ pub(crate) fn roles_matching_scope_filter<DB: Database>(
 }
 
 /// Holder filter fragment for `roles_matching` (the `user.roles` join
-/// branch: only rows linked to the holder). The holder primary key is an
-/// integer on the fixture tables while the bind carries the stringified
-/// id, so the comparison binds against the text cast (same rationale as
-/// the holder join in [`select_roles_matching`]).
+/// branch: only rows linked to the holder). The comparison follows the
+/// configured kind (D-08-04): typed kinds bind the parsed holder id
+/// against the bare primary key column; the string kind keeps the text
+/// cast because the bind is text while the fixture holder key is an
+/// integer (same rationale as the holder join in
+/// [`select_roles_matching`]).
 #[must_use]
-pub(crate) fn roles_matching_holder_filter<DB: Database>(start_index: usize) -> (String, usize) {
+pub(crate) fn roles_matching_holder_filter<DB: Database>(
+    kind: HolderIdKind,
+    start_index: usize,
+) -> (String, usize) {
     (
         format!(
             "AND {} = {}",
-            cast_to_text::<DB>("holder.id"),
+            holder_compare_expr::<DB>(kind, "holder.id"),
             placeholder::<DB>(start_index)
         ),
         start_index + 1,
@@ -950,16 +1002,39 @@ mod tests {
             assert!(holder_rows.contains("role_row.name IN ($2, $3)"));
         }
 
-        // The holder join and filter cast the integer holder key to text
-        // (fixture holder tables are integer-keyed, the link column text).
+        // The holder join and filter follow the configured kind
+        // (D-08-04): integer compares the primary key natively (both
+        // sides BIGINT under the D-08-04 column map).
+        let catalog = select_roles_matching::<DB>(
+            HolderIdKind::Integer,
+            &role_table,
+            &join_table,
+            Some("users"),
+            true,
+        );
+        assert!(catalog.contains("holder.id = link.user_id"));
+        assert!(!catalog.contains("CAST(holder.id"));
+        let (holder_filter, _) = roles_matching_holder_filter::<DB>(HolderIdKind::Integer, 4);
+        assert!(holder_filter.contains("AND holder.id = "));
+        assert!(!holder_filter.contains("CAST(holder.id"));
+
+        // The string kind keeps the historical text cast on both sites
+        // (fixture holder tables are integer-keyed, the link column
+        // text) - gem parity preserved for D-08-04's VARCHAR(191) lane.
         let holder_cast = if DB::NAME == "MySQL" {
             "CAST(holder.id AS CHAR)"
         } else {
             "CAST(holder.id AS TEXT)"
         };
-        let catalog = select_roles_matching::<DB>(&role_table, &join_table, Some("users"), true);
+        let catalog = select_roles_matching::<DB>(
+            HolderIdKind::String,
+            &role_table,
+            &join_table,
+            Some("users"),
+            true,
+        );
         assert!(catalog.contains(holder_cast));
-        let (holder_filter, _) = roles_matching_holder_filter::<DB>(4);
+        let (holder_filter, _) = roles_matching_holder_filter::<DB>(HolderIdKind::String, 4);
         assert!(holder_filter.contains(holder_cast));
     }
 
