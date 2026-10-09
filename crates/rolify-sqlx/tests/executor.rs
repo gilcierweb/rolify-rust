@@ -67,7 +67,11 @@ async fn count_role_rows(
 /// (the zero-leak probe for the link table).
 async fn count_holder_links(conn: &mut sqlx::PgConnection, holder: &str) -> i64 {
     sqlx::query("SELECT COUNT(*) FROM users_roles WHERE user_id = $1")
-        .bind(holder)
+        .bind(
+            holder
+                .parse::<i64>()
+                .expect("integer holder id under the default kind"),
+        )
         .fetch_one(conn)
         .await
         .expect("count the holder's join rows")

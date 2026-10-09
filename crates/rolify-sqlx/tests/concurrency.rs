@@ -160,7 +160,11 @@ mod postgres_race {
         raced_role_id: i64,
     ) -> i64 {
         sqlx::query("SELECT COUNT(*) FROM users_roles WHERE user_id = $1 AND role_id = $2")
-            .bind(holder)
+            .bind(
+                holder
+                    .parse::<i64>()
+                    .expect("integer holder id under the default kind"),
+            )
             .bind(raced_role_id)
             .fetch_one(conn)
             .await
@@ -356,7 +360,11 @@ mod mysql_race {
         raced_role_id: i64,
     ) -> i64 {
         sqlx::query("SELECT COUNT(*) FROM users_roles WHERE user_id = ? AND role_id = ?")
-            .bind(holder)
+            .bind(
+                holder
+                    .parse::<i64>()
+                    .expect("integer holder id under the default kind"),
+            )
             .bind(raced_role_id)
             .fetch_one(conn)
             .await

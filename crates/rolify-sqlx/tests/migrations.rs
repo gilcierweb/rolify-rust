@@ -153,13 +153,13 @@ mod pg_migrations {
             .get(0);
 
         // Behavioral: UNIQUE pair rejects a duplicate join row
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', $1)")
+        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9001', $1)")
             .bind(admin_role_id)
             .execute(&pool)
             .await
             .expect("first link insert on Postgres");
         let duplicate_link_error =
-            sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', $1)")
+            sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9001', $1)")
                 .bind(admin_role_id)
                 .execute(&pool)
                 .await
@@ -167,7 +167,7 @@ mod pg_migrations {
         crate::assert_unique_violation(&duplicate_link_error, "23505", "users_roles_pair_unique");
 
         // Give the user role a join row so the cascade probe is real
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u2', $1)")
+        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9002', $1)")
             .bind(user_role_id)
             .execute(&pool)
             .await
@@ -370,13 +370,13 @@ mod mysql_migrations {
             .get(0);
 
         // Behavioral: UNIQUE pair rejects a duplicate join row
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9001', ?)")
             .bind(admin_role_id)
             .execute(&pool)
             .await
             .expect("first link insert on MySQL");
         let duplicate_link_error =
-            sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+            sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9001', ?)")
                 .bind(admin_role_id)
                 .execute(&pool)
                 .await
@@ -384,7 +384,7 @@ mod mysql_migrations {
         crate::assert_unique_violation(&duplicate_link_error, "23000", "users_roles_pair_unique");
 
         // Give the user role a join row so the cascade probe is real
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u2', ?)")
+        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9002', ?)")
             .bind(user_role_id)
             .execute(&pool)
             .await
@@ -569,13 +569,13 @@ mod sqlite_migrations {
             .get(0);
 
         // Behavioral: UNIQUE pair rejects a duplicate join row
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9001', ?)")
             .bind(admin_role_id)
             .execute(&pool)
             .await
             .expect("first link insert on SQLite");
         let duplicate_link_error =
-            sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+            sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9001', ?)")
                 .bind(admin_role_id)
                 .execute(&pool)
                 .await
@@ -583,7 +583,7 @@ mod sqlite_migrations {
         crate::assert_unique_violation(&duplicate_link_error, "2067", "users_roles_pair_unique");
 
         // Give the user role a join row so the cascade probe is real
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('u2', ?)")
+        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('9002', ?)")
             .bind(user_role_id)
             .execute(&pool)
             .await

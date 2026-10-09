@@ -123,7 +123,12 @@ async fn tracer_grant_check_revoke_lifecycle_on_sqlite() {
            (SELECT id FROM roles WHERE name = 'admin' \
              AND resource_type = '' AND resource_id = '')",
     )
-    .bind(user_id.as_str())
+    .bind(
+        user_id
+            .as_str()
+            .parse::<i64>()
+            .expect("integer holder id under the default kind"),
+    )
     .fetch_one(&mut admin_conn)
     .await
     .expect("count the holder's links to the global admin")
