@@ -49,36 +49,41 @@
 //! [`RoleStore`]: rolify_core::store::RoleStore
 //! [`ResourceStore`]: rolify_core::store::ResourceStore
 
-// Vendored migration exports (D-01/D-04/D-05): flat sqlx layout, byte-identical
-// to the canonical `rolify-diesel` trees; `tests/drift_guard.rs` enforces the
-// identity on every `cargo test` run (D-03).
+// Vendored migration exports (D-01/D-04/D-05): flat sqlx layout, with one
+// tree per holder-id kind under `migrations/<engine>/<kind>/` (D-08-04). The
+// embedded default is the `integer` tree (D-08-02); the `uuid` and `string`
+// trees sit alongside at static paths for consumers and for the CLI drift
+// guard (Plan 08-05).
 
-/// Postgres migrations vendored byte-identically from the canonical
-/// `rolify-diesel` tree.
+/// Postgres migrations for the default `integer` holder-id kind (D-08-02),
+/// vendored under `migrations/postgres/integer/`.
 ///
 /// Consumers invoke `MIGRATIONS_POSTGRES.run(&pool).await` themselves; this
 /// crate never migrates automatically (D-02, mirroring rolify-diesel's
-/// Phase 3 D-11).
+/// Phase 3 D-11). Consumers holding `uuid`/`string` holder columns embed
+/// the sibling kind trees with `sqlx::migrate!("migrations/postgres/uuid")`
+/// (or `/string`) instead.
 #[cfg(feature = "postgres")]
-pub static MIGRATIONS_POSTGRES: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+pub static MIGRATIONS_POSTGRES: sqlx::migrate::Migrator =
+    sqlx::migrate!("migrations/postgres/integer");
 
-/// `MySQL` migrations vendored byte-identically from the canonical
-/// `rolify-diesel` tree.
+/// `MySQL` migrations for the default `integer` holder-id kind (D-08-02),
+/// vendored under `migrations/mysql/integer/`.
 ///
 /// Consumers invoke `MIGRATIONS_MYSQL.run(&pool).await` themselves; this
 /// crate never migrates automatically (D-02, mirroring rolify-diesel's
 /// Phase 3 D-11).
 #[cfg(feature = "mysql")]
-pub static MIGRATIONS_MYSQL: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql");
+pub static MIGRATIONS_MYSQL: sqlx::migrate::Migrator = sqlx::migrate!("migrations/mysql/integer");
 
-/// `SQLite` migrations vendored byte-identically from the canonical
-/// `rolify-diesel` tree.
+/// `SQLite` migrations for the default `integer` holder-id kind (D-08-02),
+/// vendored under `migrations/sqlite/integer/`.
 ///
 /// Consumers invoke `MIGRATIONS_SQLITE.run(&pool).await` themselves; this
 /// crate never migrates automatically (D-02, mirroring rolify-diesel's
 /// Phase 3 D-11).
 #[cfg(feature = "sqlite")]
-pub static MIGRATIONS_SQLITE: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
+pub static MIGRATIONS_SQLITE: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite/integer");
 
 pub mod dialect;
 pub mod error;

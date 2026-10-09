@@ -94,13 +94,16 @@ fn vendored_migrations_are_byte_identical_to_canonical() {
         // Direction 2 (vendored-driven): every vendored flat file must map
         // back to the canonical tree, so stray or extra vendored files can
         // never slip past the canonical-driven direction.
+        //
+        // Per-kind subtrees (`integer/`, `uuid/`, `string/`, Phase 08
+        // D-08-04) are directories, not flat migrations: skip them here.
+        // Their byte-identity against the CLI render per kind is the CLI
+        // drift sweep's job (Plan 08-05), and the canonical-side per-kind
+        // comparison lands with the diesel per-kind trees (Plan 08-07).
         for vendored_file in sorted_entries(&vendored_engine_dir) {
-            assert!(
-                vendored_file.is_file(),
-                "vendored migration entry `{}` must be a file (sqlx flat layout), not a \
-                 directory",
-                vendored_file.display(),
-            );
+            if !vendored_file.is_file() {
+                continue;
+            }
             let vendored_name = vendored_file
                 .file_name()
                 .expect("vendored migration file always has a file name")
