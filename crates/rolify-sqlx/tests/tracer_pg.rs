@@ -37,11 +37,6 @@ use crate::support::{
     setup_fixtures_pg,
 };
 
-// The shared support module ships helpers for several test binaries
-// (Task 2's engine legs and 04-04+ consume the rest); this binary uses
-// the Postgres subset, so the unused arms are allowed to sit idle here
-// (same precedent as tests/migrations.rs).
-#[allow(dead_code)]
 mod support;
 
 async fn count_rows(pool: &sqlx::PgPool, sql_text: &'static str) -> i64 {
@@ -52,6 +47,7 @@ async fn count_rows(pool: &sqlx::PgPool, sql_text: &'static str) -> i64 {
         .get::<i64, _>(0)
 }
 
+#[allow(clippy::too_many_lines)] // linear grant -> check -> revoke lifecycle tracer
 #[tokio::test]
 async fn tracer_grant_check_revoke_lifecycle_on_postgres() {
     // Bootstrap: container (implicit readiness), migrations, fixtures.

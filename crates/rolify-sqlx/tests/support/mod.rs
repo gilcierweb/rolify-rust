@@ -22,6 +22,12 @@
 //! helpers and add the `blocking` feature to the `testcontainers-modules`
 //! dev-dependency if that becomes necessary.
 
+// Shared by every integration test binary under per-feature builds: helpers
+// for the other engines, plus the generic suite plumbing each backend binds
+// around, are dead code in the binaries that do not use them. Same posture
+// as rolify-diesel/tests/support/mod.rs.
+#![allow(dead_code, unused_imports, clippy::doc_markdown)]
+
 use rolify_core::config::RolifyConfig;
 use rolify_core::role::ResourceId;
 use rolify_core::store::{ResourceKey, RoleStore};
@@ -654,6 +660,9 @@ pub async fn reset_roles_sqlite_conn(conn: &mut sqlx::SqliteConnection) {
 // async build() flow, the ten members, and the hook members.
 // reset_query_count delegates to the store's accessor, query_count
 // returns Some(store.query_count()).
+// Trait members intentionally spell `impl Future + Send` so the await-Send
+// bound stays visible at every engine arm (the suite relies on it).
+#[allow(clippy::manual_async_fn)]
 #[cfg(feature = "suite")]
 pub mod sqlx_backend {
     use std::sync::Mutex;
@@ -1282,7 +1291,7 @@ pub mod sqlx_backend {
 
         fn subject(&mut self, login: &str) -> &mut Self::Subject {
             let holder = self.holder_id(login).expect("unknown fixture login");
-            self.subject.login = login.to_owned();
+            login.clone_into(&mut self.subject.login);
             self.subject.holder = holder;
             &mut self.subject
         }

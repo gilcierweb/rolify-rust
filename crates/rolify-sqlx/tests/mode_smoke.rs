@@ -23,10 +23,6 @@
 
 const fn assert_send_sync<T: Send + Sync>() {}
 
-// The shared support module ships helpers for several test binaries;
-// this binary uses the bootstrap arms per engine, so the unused arms are
-// allowed to sit idle here (same precedent as tests/migrations.rs).
-#[allow(dead_code)]
 mod support;
 
 #[cfg(feature = "postgres")]

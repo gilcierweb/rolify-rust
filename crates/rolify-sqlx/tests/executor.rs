@@ -1,5 +1,5 @@
 //! Executor uniformity acceptance tests in async mode (ROADMAP SC-5):
-//! the SQLx store must behave identically across three connection
+//! the `SQLx` store must behave identically across three connection
 //! surfaces, mirroring the diesel executor legs (Phase 3) and the
 //! diesel-async executor legs (04-07):
 //!
@@ -20,7 +20,7 @@
 //! contract, which keeps the legs honest: a wrapper handle cannot leak
 //! into a store call, it would not type-check.
 //!
-//! Runs on Postgres (cfg-gated like the tracer). SQLite is excluded
+//! Runs on Postgres (cfg-gated like the tracer). `SQLite` is excluded
 //! per D-11 (the locked non-gate posture): the single-writer engine
 //! makes locking-sensitive executor acceptance meaningless, exactly as
 //! in the diesel executor tests.
@@ -29,7 +29,6 @@
 
 #![cfg(feature = "postgres")]
 
-#[allow(dead_code)]
 mod support;
 
 use rolify_core::config::RolifyConfig;
@@ -75,6 +74,7 @@ async fn count_holder_links(conn: &mut sqlx::PgConnection, holder: &str) -> i64 
         .get::<i64, _>(0)
 }
 
+#[allow(clippy::too_many_lines)] // linear 4-leg executor matrix
 #[tokio::test]
 async fn executor_uniformity_bare_checkout_tx_commit_rollback() {
     // Bootstrap: shared container (implicit readiness), migrations,
@@ -130,7 +130,7 @@ async fn executor_uniformity_bare_checkout_tx_commit_rollback() {
     let mut checkout = pool.acquire().await.expect("pool checkout");
     let mut store_pooled = SqlxStore::new(&config);
     let user_id_pooled =
-        insert_holder_pg(&mut *checkout, "users", "User", "executor_user_pooled").await;
+        insert_holder_pg(&mut checkout, "users", "User", "executor_user_pooled").await;
 
     // sqlx 0.9 deleted the Executor impls for the wrapper handles
     // (RESEARCH Pitfall 4): the store takes a REBORROW of the inner

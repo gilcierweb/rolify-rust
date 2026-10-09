@@ -1,14 +1,14 @@
 //! Tracer test: end-to-end "grant global then class then instance role,
-//! read it back" on SQLite - one path through every layer.
+//! read it back" on `SQLite` - one path through every layer.
 //!
 //! This is the Phase 4 engine-expansion leg (04-03 Task 2): it mirrors the
 //! Postgres tracer assertions through the PUBLIC [`RolifyUser`] provided
-//! methods on a file-backed SQLite database shared by every connection in
+//! methods on a file-backed `SQLite` database shared by every connection in
 //! the test.
 //!
-//! D-11 non-gate posture: SQLite is local convenience only, never a
+//! D-11 non-gate posture: `SQLite` is local convenience only, never a
 //! parity gate. Locking-sensitive cases (concurrent writers, the 04-08
-//! concurrency legs) are excluded by design: SQLite is single-writer and
+//! concurrency legs) are excluded by design: `SQLite` is single-writer and
 //! `SQLITE_BUSY` makes such cases meaningless here. Everything else -
 //! the ladder, strictness, idempotence, the transactional orphan sweep,
 //! byte-exact names - runs identically to the container legs.
@@ -39,10 +39,6 @@ use crate::support::{
     setup_fixtures_sqlite_conn, sqlite_file_conn,
 };
 
-// The shared support module ships helpers for several test binaries;
-// this binary uses the SQLite subset, so the unused arms are allowed to
-// sit idle here (same precedent as tests/migrations.rs).
-#[allow(dead_code)]
 mod support;
 
 async fn count_rows(conn: &mut sqlx::SqliteConnection, sql_text: &'static str) -> i64 {
@@ -53,6 +49,7 @@ async fn count_rows(conn: &mut sqlx::SqliteConnection, sql_text: &'static str) -
         .get::<i64, _>(0)
 }
 
+#[allow(clippy::too_many_lines)] // linear grant -> check -> revoke lifecycle tracer
 #[tokio::test]
 async fn tracer_grant_check_revoke_lifecycle_on_sqlite() {
     // A fresh shared file per run (process-id namespaced; stale files

@@ -1,4 +1,4 @@
-//! Concurrency race tests, the async SQLx port of the diesel race
+//! Concurrency race tests, the async `SQLx` port of the diesel race
 //! design (TEST-05 + SC-2): two parallel grants of the SAME role
 //! name/triple for the SAME holder must resolve to EXACTLY one role
 //! row and exactly one link row, deterministically.
@@ -14,14 +14,14 @@
 //!   timing assumptions anywhere.
 //! - UNIQUE as arbiter: the roles-triple and join-pair UNIQUE
 //!   constraints decide the winner; the store's portable catch
-//!   (Postgres 23505 / MySQL 23000 with native 1062, plus SQLite 2067
+//!   (Postgres 23505 / `MySQL` 23000 with native 1062, plus `SQLite` 2067
 //!   for completeness) absorbs the loser. The loser's
 //!   `find_or_create_by` violation resolves through the re-SELECT
 //!   path (both tasks observe the SAME record), and the loser's `add`
 //!   pair violation resolves through catch-and-ignore (`Ok(false)`).
-//! - InnoDB deadlock victims are a retryable race outcome, not a
+//! - `InnoDB` deadlock victims are a retryable race outcome, not a
 //!   store bug: when both grants hit the engine in the same instant
-//!   MySQL can pick one task as the victim (error 1213, SQLSTATE
+//!   `MySQL` can pick one task as the victim (error 1213, SQLSTATE
 //!   40001) and documents client-side retry as the contract. The
 //!   racing grant retries the whole pass within a bounded budget; the
 //!   victim re-enters through the SELECT-first leg and the UNIQUE
@@ -36,9 +36,9 @@
 //! every iteration resets the shared role tables, so parallel cases
 //! inside one binary would wipe each other's rows. A single case per
 //! engine eliminates that interference by construction (the async
-//! counterpart of the diesel suite's process-wide SuiteGuard).
+//! counterpart of the diesel suite's process-wide `SuiteGuard`).
 //!
-//! SQLite is excluded per D-11 (the locked non-gate posture): the
+//! `SQLite` is excluded per D-11 (the locked non-gate posture): the
 //! single-writer engine makes a parallel-grant race meaningless, the
 //! same exclusion the diesel race tests carry.
 //!
@@ -48,7 +48,6 @@
 
 #![cfg(any(feature = "postgres", feature = "mysql"))]
 
-#[allow(dead_code)]
 mod support;
 
 use std::sync::Arc;
@@ -270,7 +269,7 @@ mod postgres_race {
                     "{role_name} iteration {iteration}: both tasks resolved the same record (the re-SELECT catch)"
                 );
                 let mut added_results = [first.added, second.added];
-                added_results.sort();
+                added_results.sort_unstable();
                 assert_eq!(
                     added_results,
                     [false, true],
@@ -399,7 +398,7 @@ mod mysql_race {
         Ok(GrantOutcome { record, added })
     }
 
-    /// Match the InnoDB deadlock victim signal: the native error 1213
+    /// Match the `InnoDB` deadlock victim signal: the native error 1213
     /// surfaces as SQLSTATE 40001 through `DatabaseError::code()`.
     fn is_deadlock_victim(error: &rolify_sqlx::Error) -> bool {
         match error {
@@ -440,7 +439,7 @@ mod mysql_race {
         barrier.wait().await;
         let mut retries_left = DEADLOCK_RETRIES;
         loop {
-            match run_grant(&mut *checkout, &mut store, &role_name, &scope, &holder).await {
+            match run_grant(&mut checkout, &mut store, &role_name, &scope, &holder).await {
                 Ok(outcome) => return outcome,
                 Err((_step, error)) if is_deadlock_victim(&error) => {
                     retries_left -= 1;
@@ -456,7 +455,7 @@ mod mysql_race {
         }
     }
 
-    /// The grant race matrix on the MySQL container: every scope kind,
+    /// The grant race matrix on the `MySQL` container: every scope kind,
     /// three iterations, UNIQUE-as-arbiter assertions.
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_grant_race_yields_exactly_one_row_pair_mysql() {
@@ -521,7 +520,7 @@ mod mysql_race {
                     "{role_name} iteration {iteration}: both tasks resolved the same record (the re-SELECT catch)"
                 );
                 let mut added_results = [first.added, second.added];
-                added_results.sort();
+                added_results.sort_unstable();
                 assert_eq!(
                     added_results,
                     [false, true],

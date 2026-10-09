@@ -7,21 +7,17 @@
 //! invokes `run`/`undo` itself, because the crate never auto-migrates
 //! (D-02).
 //!
-//! SQLite is the hermetic leg (in-memory pool, FKs forced on). Postgres
-//! and MySQL run against the pinned testcontainers images (postgres:17 /
+//! `SQLite` is the hermetic leg (in-memory pool, FKs forced on). Postgres
+//! and `MySQL` run against the pinned testcontainers images (postgres:17 /
 //! mysql:8.4, Phase 3 D-14) with the modules' built-in readiness waits:
 //! never sleeps.
 
-// The bootstrap ships helpers for the later sqlx test binaries (04-03+);
-// this binary consumes the pool builders, so the appliers and reset
-// helpers those binaries will use are allowed to sit unused here.
-#[allow(dead_code)]
 mod support;
 
 /// Assert the error is the engine's unique-violation database error with
 /// the expected SQLSTATE-like code, panicking with both values otherwise.
 ///
-/// A1 closure: the SQLite leg asserts the extended result code `2067`
+/// A1 closure: the `SQLite` leg asserts the extended result code `2067`
 /// (`SQLITE_CONSTRAINT_UNIQUE`) here; if the engine reports a different
 /// code, the assertion message surfaces it and the store's catch arm in
 /// 04-03 must match the recorded value.
@@ -45,6 +41,7 @@ mod pg_migrations {
 
     use crate::support::pg_pool;
 
+    #[allow(clippy::too_many_lines)] // linear apply -> probe -> revert -> re-apply lifecycle
     #[tokio::test]
     async fn migrations_apply_and_revert_cleanly_on_postgres() {
         let pool = pg_pool().await;
@@ -249,6 +246,7 @@ mod mysql_migrations {
 
     use crate::support::mysql_pool;
 
+    #[allow(clippy::too_many_lines)] // linear apply -> probe -> revert -> re-apply lifecycle
     #[tokio::test]
     async fn migrations_apply_and_revert_cleanly_on_mysql() {
         let pool = mysql_pool().await;
@@ -462,6 +460,7 @@ mod sqlite_migrations {
 
     use crate::support::sqlite_memory_pool;
 
+    #[allow(clippy::too_many_lines)] // linear apply -> probe -> revert -> re-apply lifecycle
     #[tokio::test]
     async fn migrations_apply_and_revert_cleanly_on_sqlite() {
         let pool = sqlite_memory_pool().await;

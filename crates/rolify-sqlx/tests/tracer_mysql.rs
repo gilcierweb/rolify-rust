@@ -1,5 +1,5 @@
 //! Tracer test: end-to-end "grant global then class then instance role,
-//! read it back" on real MySQL - one path through every layer.
+//! read it back" on real `MySQL` - one path through every layer.
 //!
 //! This is the Phase 4 engine-expansion leg (04-03 Task 2): it mirrors the
 //! Postgres tracer assertions on a real mysql:8.4 container (pinned,
@@ -27,10 +27,6 @@ use crate::support::{
     reset_roles_mysql, setup_fixtures_mysql,
 };
 
-// The shared support module ships helpers for several test binaries;
-// this binary uses the MySQL subset, so the unused arms are allowed to
-// sit idle here (same precedent as tests/migrations.rs).
-#[allow(dead_code)]
 mod support;
 
 async fn count_rows(pool: &sqlx::MySqlPool, sql_text: &'static str) -> i64 {
@@ -41,6 +37,7 @@ async fn count_rows(pool: &sqlx::MySqlPool, sql_text: &'static str) -> i64 {
         .get::<i64, _>(0)
 }
 
+#[allow(clippy::too_many_lines)] // linear grant -> check -> revoke lifecycle tracer
 #[tokio::test]
 async fn tracer_grant_check_revoke_lifecycle_on_mysql() {
     // Bootstrap: container (implicit readiness), migrations, fixtures.

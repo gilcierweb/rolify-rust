@@ -42,10 +42,6 @@
 
 #![cfg(feature = "postgres")]
 
-// The shared support module ships helpers for several test binaries;
-// this binary uses the Postgres resource-side subset (the unused-arm
-// precedent of tests/tracer_pg.rs).
-#[allow(dead_code)]
 mod support;
 
 mod tests {
@@ -108,7 +104,6 @@ mod tests {
     /// read engine over its own direct connection (migrations + the
     /// D-06 fixture DDL arrays, then both resets). The suite lock is
     /// acquired FIRST and returned so the case body stays serialized.
-    #[expect(clippy::type_complexity)]
     async fn boot() -> (
         tokio::sync::MutexGuard<'static, ()>,
         sqlx::PgPool,
@@ -529,9 +524,9 @@ mod tests {
     /// fixture holder table against the text link column; without the
     /// `cast_to_text` on the join and the filter, Postgres rejects the
     /// comparison (`integer = text`). The public statics never route
-    /// through the holder branch (the find_roles user leg reads
+    /// through the holder branch (the `find_roles` user leg reads
     /// `roles_of` instead), so the pin calls the store directly, like
-    /// the diesel reference's holder cell (resource_spi_pg.rs there).
+    /// the diesel reference's holder cell (`resource_spi_pg.rs` there).
     #[tokio::test]
     async fn roles_matching_holder_join_casts_integer_holder_ids() {
         let (_serial, _pool, mut engine) = boot().await;
