@@ -5,3 +5,4 @@ lcov.info/
 *.log
 *.orig
 .DS_Store
+*.db
