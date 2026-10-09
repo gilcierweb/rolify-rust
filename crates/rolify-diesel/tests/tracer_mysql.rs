@@ -21,6 +21,8 @@ use crate::support::{mysql_conn, mysql_container, reset_roles, setup_fixtures};
 
 #[test]
 fn tracer_grant_check_revoke_lifecycle() {
+    // Serialized with the other tests sharing this database.
+    let _serial = crate::support::SuiteGuard::acquire();
     let _container = mysql_container();
     let mut conn = mysql_conn();
 
@@ -389,6 +391,8 @@ fn tracer_concurrent_find_or_create_by_race() {
     use std::sync::Arc;
     use std::thread;
 
+    // Serialized with the other tests sharing this database.
+    let _serial = crate::support::SuiteGuard::acquire();
     let _container = mysql_container();
     let config = RolifyConfig::builder().build().unwrap();
 
