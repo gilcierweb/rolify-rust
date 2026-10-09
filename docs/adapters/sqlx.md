@@ -1,6 +1,6 @@
 # SQLx Adapter Guide
 
-The `rolify-sqlx` crate provides an async-only SQLx 0.9+ adapter for rolify-rust. SQLx is not an ORM — the adapter hand-writes role/join SQL queries.
+The `rolify-sqlx` crate provides an async-only SQLx 0.9+ adapter for rolify-rust. SQLx is not an ORM - the adapter hand-writes role/join SQL queries.
 
 ## Installation
 
@@ -23,7 +23,7 @@ tokio = { version = "1.53", features = ["full"] }
 | `tls-rustls-ring` / `tls-native-tls` / `tls-openssl` | TLS backend |
 | `chrono` / `time` / `uuid` / `json` | Type support |
 
-**No sync variant** — sync SQL users are served by `rolify-diesel`.
+**No sync variant** - sync SQL users are served by `rolify-diesel`.
 
 ## Database Setup
 
@@ -359,4 +359,4 @@ Ensure migrations run in order. The adapter expects the exact schema from the pr
 | `config.join_table_name` | `join_table("users_roles")` |
 | `ActiveRecord::Base.transaction` | `pool.begin().await?` + `tx.commit().await?` |
 
-**Key difference:** SQLx is not an ORM — you write the queries (or use the adapter's provided methods). The adapter provides the rolify-specific queries; you handle connections/transactions.
+**Key difference:** SQLx is not an ORM - you write the queries (or use the adapter's provided methods). The adapter provides the rolify-specific queries; you handle connections/transactions.

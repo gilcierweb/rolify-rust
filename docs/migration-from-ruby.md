@@ -1,4 +1,4 @@
-# Migration Guide: Ruby rolify → rolify-rust
+# Migration Guide: Ruby rolify -> rolify-rust
 
 This guide helps you port applications from the Ruby [rolify](https://github.com/RolifyCommunity/rolify) gem to rolify-rust.
 
@@ -8,7 +8,7 @@ This guide helps you port applications from the Ruby [rolify](https://github.com
 |--------|-------------|-------------|
 | **Philosophy** | Role management only (no enforcement) | Same |
 | **Scopes** | Global, Class, Instance | Same (three levels) |
-| **Match ladder** | Global → Class → Instance | Same (non-strict) |
+| **Match ladder** | Global -> Class -> Instance | Same (non-strict) |
 | **Strict mode** | `config.strict_rolify` | `RolifyConfig::builder().strict(true)` |
 | **Callbacks** | `before_add`, `after_add`, `before_remove`, `after_remove` | Same, with veto via `Result` |
 | **Dynamic shortcuts** | `user.is_admin?` | **Not ported** (use `has_role`) |
@@ -418,7 +418,7 @@ impl Resource for Car {
 }
 ```
 
-**Important:** `descendant_types` feeds ONLY resource-side finders — never the user-side match ladder (Pitfall 1 guard).
+**Important:** `descendant_types` feeds ONLY resource-side finders - never the user-side match ladder (Pitfall 1 guard).
 
 ## Database Schema
 
@@ -509,19 +509,19 @@ fn test_user_has_global_admin() {
 
 **Ruby:** `resource_id` can be integer or string (ActiveRecord handles both).
 
-**Rust:** Use `ResourceId::from(42_i64)` or `ResourceId::from("uuid-string")` — both work.
+**Rust:** Use `ResourceId::from(42_i64)` or `ResourceId::from("uuid-string")` - both work.
 
 ### 2. Case Sensitivity
 
 **Ruby:** Role names are case-sensitive (`'Admin' != 'admin'`).
 
-**Rust:** Same — `RoleName` uses exact byte equality.
+**Rust:** Same - `RoleName` uses exact byte equality.
 
 ### 3. Global Role Override
 
 **Ruby:** Global roles satisfy class/instance queries in non-strict mode.
 
-**Rust:** Same behavior — this is the core match ladder.
+**Rust:** Same behavior - this is the core match ladder.
 
 ### 4. Strict Mode Scope
 
@@ -533,13 +533,13 @@ fn test_user_has_global_admin() {
 
 **Ruby:** `user.is_admin?` works via `method_missing`.
 
-**Rust:** Not supported — use explicit `has_role` calls.
+**Rust:** Not supported - use explicit `has_role` calls.
 
 ### 6. Configuration Scope
 
 **Ruby:** Global config via `Rolify.configure`.
 
-**Rust:** Explicit `RolifyConfig` passed to each engine/user — no global state.
+**Rust:** Explicit `RolifyConfig` passed to each engine/user - no global state.
 
 ## Checklist for Migration
 

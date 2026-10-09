@@ -48,7 +48,7 @@ When `strict = true`:
 - `ResourceFilter::Any` still matches by name only (no strict gate)
 
 When `strict = false` (default):
-- The full override ladder applies (Global → Class → Instance)
+- The full override ladder applies (Global -> Class -> Instance)
 - Global roles satisfy Class and Instance queries
 - Class roles satisfy Instance queries of the same type
 
@@ -150,7 +150,7 @@ let config = RolifyConfig::builder()
     .build()?;
 ```
 
-**Notification contract:** Returns `()` — cannot veto. Runs only after successful store mutation.
+**Notification contract:** Returns `()` - cannot veto. Runs only after successful store mutation.
 
 ## Using Configuration
 
@@ -181,7 +181,7 @@ impl RolifyUser for MyUser {
 }
 ```
 
-**Cheap cloning:** `RolifyConfig` holds `Arc` hooks — cloning is just an `Arc` increment.
+**Cheap cloning:** `RolifyConfig` holds `Arc` hooks - cloning is just an `Arc` increment.
 
 ### Checking Strict Engagement
 
@@ -287,7 +287,7 @@ mod tests {
 | `config.after_remove` | `after_remove(Arc::new(...))` |
 
 **Key differences:**
-- No global mutable state — config is explicit and passed around
+- No global mutable state - config is explicit and passed around
 - Callbacks use `Arc<dyn Fn>` for thread-safety
 - Veto is explicit `Result` return, not exception-based
 - Table names validated at build time

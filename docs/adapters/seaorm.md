@@ -19,7 +19,7 @@ tokio = { version = "1.53", features = ["full"] }
 |---------|---------|
 | `postgres` | PostgreSQL (via sqlx-postgres) |
 | `mysql` | MySQL (via sqlx-mysql) |
-| `sqlite` | SQLite (experimental, sync via rusqlite — out of scope) |
+| `sqlite` | SQLite (experimental, sync via rusqlite - out of scope) |
 
 **SeaORM 2.0** requires SeaQuery 1.0 + SQLx 0.9 (verified).
 
@@ -265,7 +265,7 @@ let db = Database::connect(opt).await?;
 
 ## SeaORM's Built-in RBAC (Important)
 
-SeaORM 2.0 ships its own `rbac` feature — **do not confuse it with rolify-rust**:
+SeaORM 2.0 ships its own `rbac` feature - **do not confuse it with rolify-rust**:
 
 | Aspect | SeaORM RBAC | rolify-rust |
 |--------|-------------|-------------|
@@ -275,7 +275,7 @@ SeaORM 2.0 ships its own `rbac` feature — **do not confuse it with rolify-rust
 | Authorization | Query-time auditing | **None** (you enforce) |
 | Use case | Full RBAC system | Complement SeaORM RBAC |
 
-**rolify-rust positions itself as complementary to SeaORM's RBAC** — use rolify for flexible role assignment, SeaORM RBAC for permission enforcement, or both.
+**rolify-rust positions itself as complementary to SeaORM's RBAC** - use rolify for flexible role assignment, SeaORM RBAC for permission enforcement, or both.
 
 ## Performance Tips
 

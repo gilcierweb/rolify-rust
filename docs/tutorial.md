@@ -574,10 +574,10 @@ pub async fn run_with_diesel(pool: &DbPool) -> Result<(), Box<dyn std::error::Er
 
 Key takeaways:
 
-1. **Three scopes**: Global, Class, Instance — with a predictable override ladder
+1. **Three scopes**: Global, Class, Instance - with a predictable override ladder
 2. **Two modes**: Non-strict (default, ladder) vs Strict (exact match)
 3. **Zero-I/O caching**: `RoleSet` for borrowed-row checks
 4. **Dual API**: User-side (`RolifyUser`) + Resource-side (`Resource`) finders
 5. **Callbacks**: `before_add`/`after_add`/`before_remove`/`after_remove` with veto semantics
-6. **Adapters**: Swap `InMemoryStore` for `DieselRoleStore`, `SqlxRoleStore`, etc. — same API
+6. **Adapters**: Swap `InMemoryStore` for `DieselRoleStore`, `SqlxRoleStore`, etc. - same API
 7. **No authorization enforcement**: rolify-rust only manages roles; you decide what roles mean

@@ -4,7 +4,7 @@ This document explains the fundamental types and concepts in rolify-rust.
 
 ## RoleName
 
-`RoleName` is a newtype wrapper around `String` with **exact byte equality** — no case-folding, no trimming.
+`RoleName` is a newtype wrapper around `String` with **exact byte equality** - no case-folding, no trimming.
 
 ```rust
 use rolify_core::role::RoleName;
@@ -17,7 +17,7 @@ let admin2 = RoleName::new("admin");
 assert_eq!(admin, admin2);
 ```
 
-**Why byte-exact?** The Ruby gem compares with `role.name == args[:name].to_s` — normalization would be a cross-adapter drift and potential spoofing vector.
+**Why byte-exact?** The Ruby gem compares with `role.name == args[:name].to_s` - normalization would be a cross-adapter drift and potential spoofing vector.
 
 ## ResourceId
 
@@ -67,7 +67,7 @@ Adapters translate `None` to the sentinel empty string `''` for both columns so 
 
 ## ResourceRef (Write Scope)
 
-Used when **granting/removing** roles — the write-side scope enum:
+Used when **granting/removing** roles - the write-side scope enum:
 
 ```rust
 use rolify_core::resource::ResourceRef;
@@ -78,11 +78,11 @@ let class = ResourceRef::Class("Forum");
 let instance = ResourceRef::Instance("Forum", &ResourceId::from(7_i64));
 ```
 
-**No `Any` variant** — a role cannot be granted "at whatever scope." `Any` is query-only.
+**No `Any` variant** - a role cannot be granted "at whatever scope." `Any` is query-only.
 
 ## ResourceFilter (Read Scope)
 
-Used when **querying** roles — the read-side scope enum:
+Used when **querying** roles - the read-side scope enum:
 
 ```rust
 use rolify_core::query::ResourceFilter;
@@ -96,7 +96,7 @@ let any = ResourceFilter::Any;  // Query-only: name match across ALL scopes
 
 ## RoleQuery
 
-A borrowed role name plus a scope filter — the port of the gem's `{name:, resource:}` query hash:
+A borrowed role name plus a scope filter - the port of the gem's `{name:, resource:}` query hash:
 
 ```rust
 use rolify_core::query::{ResourceFilter, RoleQuery};
@@ -112,7 +112,7 @@ assert!(matches!(query.filter, ResourceFilter::Global));
 let query = RoleQuery::with_role_and_filter(&name, ResourceFilter::Any);
 ```
 
-**Borrow-first design** — the query never allocates; `name` is `&RoleName`. Store implementations decide whether to clone.
+**Borrow-first design** - the query never allocates; `name` is `&RoleName`. Store implementations decide whether to clone.
 
 ## The Match Ladder (Kernel)
 
@@ -176,7 +176,7 @@ assert!(!where_strict(&rows, &RoleQuery::with_role_and_filter(&admin, ResourceFi
 
 ## RoleSet (Zero-I/O Cached Snapshot)
 
-`RoleSet` borrows pre-fetched role rows and answers membership questions purely via the kernel — **zero I/O by signature** (no store handle in the API):
+`RoleSet` borrows pre-fetched role rows and answers membership questions purely via the kernel - **zero I/O by signature** (no store handle in the API):
 
 ```rust
 use rolify_core::query::{ResourceFilter, RoleQuery};
@@ -267,7 +267,7 @@ impl Resource for Car {
 // Car::descendant_types() returns ["Car"] (default)
 ```
 
-**Important:** `descendant_types` feeds ONLY resource-side finders — never the user-side match ladder (Pitfall 1 guard).
+**Important:** `descendant_types` feeds ONLY resource-side finders - never the user-side match ladder (Pitfall 1 guard).
 
 ## RolifyUser Trait (User-Side Operations)
 
@@ -340,7 +340,7 @@ let config = engine.config();  // The ONE config source
 let (store, conn) = engine.store_with_conn();
 ```
 
-Consumers implementing `RolifyUser::rolify_config` point at a clone of this same instance (cheap — hooks are `Arc`).
+Consumers implementing `RolifyUser::rolify_config` point at a clone of this same instance (cheap - hooks are `Arc`).
 
 ## RemovalTarget
 
@@ -371,7 +371,7 @@ RolifyError::ResourceNotFound { type, id }  // Resource not found
 
 ## Dual Mode (Sync/Async)
 
-All traits use `#[maybe_async::maybe_async(AFIT)]` — one source of truth for both modes:
+All traits use `#[maybe_async::maybe_async(AFIT)]` - one source of truth for both modes:
 
 | Mode | Feature | Return Type |
 |------|---------|-------------|

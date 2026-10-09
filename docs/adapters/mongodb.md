@@ -400,6 +400,6 @@ Enable `serde` feature on `mongodb` crate and ensure your types implement `Seria
 
 **Key differences:**
 - Mongoid is an ODM; the adapter uses the raw driver
-- No `method_missing` shortcuts (`is_admin?`) — use explicit `has_role`
+- No `method_missing` shortcuts (`is_admin?`) - use explicit `has_role`
 - Explicit async/await (or sync blocking calls)
 - Collection names configurable via `RolifyConfig`

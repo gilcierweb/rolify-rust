@@ -1,10 +1,10 @@
 # Getting Started with rolify-rust
 
-rolify-rust is a Rust port of the [rolify](https://github.com/RolifyCommunity/rolify) Ruby gem — a minimalistic role management library (RBAC) **without authorization enforcement**. It provides scoped roles at three levels:
+rolify-rust is a Rust port of the [rolify](https://github.com/RolifyCommunity/rolify) Ruby gem - a minimalistic role management library (RBAC) **without authorization enforcement**. It provides scoped roles at three levels:
 
-- **Global** — role applies everywhere
-- **Class/Resource Type** — role applies to all instances of a type (e.g., all Forums)
-- **Instance** — role applies to a specific instance (e.g., Forum #42)
+- **Global** - role applies everywhere
+- **Class/Resource Type** - role applies to all instances of a type (e.g., all Forums)
+- **Instance** - role applies to a specific instance (e.g., Forum #42)
 
 ## Installation
 
@@ -199,8 +199,8 @@ When `strict = true` in `RolifyConfig`, the ladder collapses to **exact scope ma
 
 ## Next Steps
 
-- [Core Concepts](core-concepts.md) — Deep dive into roles, resources, queries, and the kernel
-- [Configuration Guide](configuration.md) — Strict mode, callbacks, table names
-- [Adapter Guides](adapters/) — Diesel, SQLx, SeaORM, MongoDB setup
-- [Tutorial](tutorial.md) — Complete walkthrough building a forum app
-- [Migration from Ruby rolify](migration-from-ruby.md) — Porting guide
+- [Core Concepts](core-concepts.md) - Deep dive into roles, resources, queries, and the kernel
+- [Configuration Guide](configuration.md) - Strict mode, callbacks, table names
+- [Adapter Guides](adapters/) - Diesel, SQLx, SeaORM, MongoDB setup
+- [Tutorial](tutorial.md) - Complete walkthrough building a forum app
+- [Migration from Ruby rolify](migration-from-ruby.md) - Porting guide
