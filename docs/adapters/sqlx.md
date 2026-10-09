@@ -50,29 +50,28 @@ static MIGRATOR: Migrator = sqlx::migrate!();  // reads from ./migrations at com
 ### Schema
 
 ```sql
--- migrations/20240101000000_create_rolify_tables.sql
+-- crates/rolify-sqlx/migrations/postgres/0000000001_rolify_create_tables.sql (physical schema shared with diesel)
 CREATE TABLE roles (
-    id BIGSERIAL PRIMARY KEY,
-    name VARCHAR NOT NULL,
-    resource_type VARCHAR,
-    resource_id VARCHAR,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (name, resource_type, resource_id)
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name          VARCHAR(255) NOT NULL,
+    resource_type VARCHAR(191) NOT NULL DEFAULT '',
+    resource_id   VARCHAR(191) NOT NULL DEFAULT '',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT roles_triple_unique UNIQUE (name, resource_type, resource_id)
 );
+CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
+CREATE INDEX idx_roles_name ON roles (name);
 
 -- Default join table: users_roles (configurable via RolifyConfig)
 CREATE TABLE users_roles (
-    user_id VARCHAR NOT NULL,
-    user_type VARCHAR NOT NULL,
+    user_id VARCHAR(191) NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, user_type, role_id)
+    CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
-
--- Indexes
-CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
-CREATE INDEX idx_users_roles_user ON users_roles (user_id, user_type);
 ```
+
+**Holder id typing:** `user_id` stores the holder primary key in canonical string form (`"42"` or a UUID string), so integer, UUID, and string holder PKs share one schema. `role_id` is the library-owned integer FK to `roles.id`.
 
 **Sentinel note:** Like Diesel, the adapter uses `''` (empty string) for `NULL` in `resource_type`/`resource_id` to make `UNIQUE` work identically across backends.
 
@@ -313,7 +312,7 @@ The adapter handles backend differences in SQL dialect.
 
 3. **Batch queries**: Use `has_any_roles` / `with_any_roles` for single OR-folded round-trips.
 
-4. **Indexes**: Ensure indexes on `roles(resource_type, resource_id)` and `users_roles(user_id, user_type)`.
+4. **Indexes**: The shipped migrations already carry `idx_roles_resource`, `idx_roles_name`, and `UNIQUE(user_id, role_id)` on the join table; add more only if your query patterns need them.
 
 5. **Avoid N+1**: Use finder methods (`with_role`, `with_any_roles`) instead of looping.
 

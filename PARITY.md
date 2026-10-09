@@ -553,6 +553,37 @@ Status vocabulary: `deliberate divergence`, `corner choice`,
 - **Review flag** (open review flag, Phase 06): CLI output-shape lock; re-check emitter
   snapshots plus the container end-to-end gate before any publish tag).
 
+## Entry 28 - holder ids stored in canonical string form on the join side
+
+- **Topic**: physical type of `users_roles.user_id` (SQL) and the elements
+  of `user_ids` (MongoDB).
+- **Gem behavior**: the ActiveRecord generator emits `t.references :user`,
+  a bigint FK column typed after the holder table's PK
+  (`lib/generators/active_record/templates/migration.rb:11`), while the
+  Mongoid template links string `ObjectId`s via HABTM
+  (`lib/generators/rolify/templates/role-mongoid.rb:5`). The gem's own
+  specs exercise a non-bigint holder PK: the `Team` fixture declares
+  `self.primary_key = "team_code"`
+  (`rolify/spec/support/adapters/active_record.rb:81`) and is seeded with
+  string ids (`rolify/spec/support/data.rb:24-25`).
+- **rolify-rust behavior**: one canonical schema for every backend. SQL
+  stores the holder PK in canonical string form in
+  `user_id VARCHAR(191)`; MongoDB embeds the same strings in the role
+  document's `user_ids` array (`crates/rolify-mongodb/src/document.rs`,
+  D-08). Holder identity is string-native in core (`ResourceId`, CORE-01),
+  so integer, UUID, and string holder PKs share one schema with no
+  per-holder-type migration variants. `role_id` remains a proper integer
+  FK to `roles(id)`; the join table carries no surrogate key and no
+  `user_type` column.
+- **Status**: deliberate divergence (physical format only; integer ids are
+  stored as their decimal string form, preserving gem value-level
+  behavior).
+- **Pinned by**: `crates/rolify-diesel/migrations/*/0000000001_rolify_create_tables/up.sql`
+  (`user_id VARCHAR(191)`) byte-locked against the CLI emitters by the
+  drift-guard dev-test (`crates/rolify-cli/tests/drift.rs`), the SeaORM
+  join entity (`crates/rolify-seaorm/src/entity/join.rs`), and the
+  string-id inserts (`'u1'`) in `crates/rolify-diesel/tests/migrations.rs`.
+
 ---
 
 ## Positioning: complementary, never competing

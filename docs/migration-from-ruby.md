@@ -434,37 +434,37 @@ create_table :users_roles, id: false do |t|
   t.references :role
 end
 
-add_index :roles, [:name, :resource_type, :resource_id], unique: true
-add_index :roles, [:resource_type, :resource_id]
-add_index :users_roles, [:user_id, :user_type]
+add_index :roles, [:name, :resource_type, :resource_id]
+add_index :users_roles, [:user_id, :role_id]
 ```
 
 ### Rust (Diesel Migration)
 
 ```sql
--- migrations/20240101000000_create_rolify_tables/up.sql
+-- crates/rolify-diesel/migrations/postgres/0000000001_rolify_create_tables/up.sql
 CREATE TABLE roles (
-    id BIGSERIAL PRIMARY KEY,
-    name VARCHAR NOT NULL,
-    resource_type VARCHAR,
-    resource_id VARCHAR,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (name, resource_type, resource_id)
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name          VARCHAR(255) NOT NULL,
+    resource_type VARCHAR(191) NOT NULL DEFAULT '',
+    resource_id   VARCHAR(191) NOT NULL DEFAULT '',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT roles_triple_unique UNIQUE (name, resource_type, resource_id)
 );
+CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
+CREATE INDEX idx_roles_name ON roles (name);
 
 CREATE TABLE users_roles (
-    user_id VARCHAR NOT NULL,
-    user_type VARCHAR NOT NULL,
+    user_id VARCHAR(191) NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, user_type, role_id)
+    CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
-
-CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
-CREATE INDEX idx_users_roles_user ON users_roles (user_id, user_type);
 ```
 
-**Key difference:** Rust uses `''` (empty string) sentinel instead of `NULL` for `resource_type`/`resource_id` to make `UNIQUE` constraints work identically across Postgres, MySQL, SQLite.
+**Key differences:**
+- Rust uses `''` (empty string) sentinel instead of `NULL` for `resource_type`/`resource_id` to make `UNIQUE` constraints work identically across Postgres, MySQL, SQLite.
+- Rust makes the triple index a real `UNIQUE` constraint (the gem emits a non-unique index) and adds `UNIQUE(user_id, role_id)` plus `ON DELETE CASCADE` on the join table (the gem emits no FKs). See PARITY.md entries 6-8 for the full rationale.
+- `user_id` is `VARCHAR(191)`, not bigint: the holder table belongs to your app, so the holder primary key is stored in canonical string form (`"42"` or a UUID string). This matches the gem's own string-PK precedent (`Team` uses `self.primary_key = "team_code"` in `rolify/spec/support/adapters/active_record.rb`). `role_id` stays a proper integer FK to `roles.id`.
 
 ## Testing
 

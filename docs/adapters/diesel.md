@@ -64,29 +64,28 @@ conn.run_pending_migrations(MIGRATIONS)?;
 The migrations create:
 
 ```sql
--- roles table
+-- roles table (Postgres dialect; MySQL uses AUTO_INCREMENT + utf8mb4_bin, SQLite uses INTEGER/TEXT)
 CREATE TABLE roles (
-    id BIGSERIAL PRIMARY KEY,
-    name VARCHAR NOT NULL,
-    resource_type VARCHAR,
-    resource_id VARCHAR,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (name, resource_type, resource_id)
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name          VARCHAR(255) NOT NULL,
+    resource_type VARCHAR(191) NOT NULL DEFAULT '',
+    resource_id   VARCHAR(191) NOT NULL DEFAULT '',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT roles_triple_unique UNIQUE (name, resource_type, resource_id)
 );
+CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
+CREATE INDEX idx_roles_name ON roles (name);
 
 -- join table (configurable name, default: users_roles)
 CREATE TABLE users_roles (
-    user_id VARCHAR NOT NULL,
-    user_type VARCHAR NOT NULL,
+    user_id VARCHAR(191) NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, user_type, role_id)
+    CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
-
--- Indexes for query performance
-CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
-CREATE INDEX idx_users_roles_user ON users_roles (user_id, user_type);
 ```
+
+**Holder id typing:** `user_id` is text on purpose. The holder table belongs to your app, so its primary key may be an integer, a UUID, or a string; the holder id is stored in its canonical string form (`"42"`, `"8f14e45f-..."`). `role_id` is the library-owned side and stays a proper integer FK to `roles.id`. There is no `user_type` column: the join table links one role to one holder id, like the gem's HABTM table.
 
 **Note:** The adapter uses `''` (empty string) as sentinel for `NULL` in `resource_type`/`resource_id` to make `UNIQUE` constraints work identically across Postgres, MySQL, and SQLite. This diverges from the gem (which uses `NULL`); see parity matrix.
 
@@ -318,7 +317,7 @@ impl Resource for Car {
 
 ## Performance Tips
 
-1. **Indexes**: The migrations create indexes on `(resource_type, resource_id)` and `(user_id, user_type)`. Add more if needed.
+1. **Indexes**: The migrations create indexes on `roles(resource_type, resource_id)` and `roles(name)`, plus the `UNIQUE(user_id, role_id)` constraint on the join table (which doubles as the lookup index). Add more if needed.
 
 2. **Connection reuse**: Check out connection per request/task, not per operation.
 

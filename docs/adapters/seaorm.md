@@ -41,11 +41,9 @@ async fn run_migrations(db: &sea_orm::DatabaseConnection) -> Result<(), sea_orm:
 SeaORM uses entities. The adapter provides entities for `roles` and the join table:
 
 ```rust
-// rolify_seaorm::entities::roles
-use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
+// rolify_seaorm::entity::role (simplified from crates/rolify-seaorm/src/entity/role.rs)
+#[sea_orm::model]
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "roles")]  // Configurable via RolifyConfig
 pub struct Model {
     #[sea_orm(primary_key)]
@@ -53,28 +51,25 @@ pub struct Model {
     pub name: String,
     pub resource_type: Option<String>,
     pub resource_id: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    // created_at/updated_at exist physically (DEFAULT CURRENT_TIMESTAMP) but the
+    // adapter never reads or writes them, so the entity intentionally omits them.
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(has_many = "super::users_roles::Entity")]
-    UsersRoles,
-}
-
-// Join table entity
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
+// Join table entity (crates/rolify-seaorm/src/entity/join.rs)
+#[sea_orm::model]
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "users_roles")]  // Configurable via RolifyConfig
 pub struct Model {
-    #[sea_orm(primary_key)]
+    /// Stringified holder primary key (`VARCHAR(191) NOT NULL`)
+    #[sea_orm(primary_key, auto_increment = false)]
     pub user_id: String,
-    #[sea_orm(primary_key)]
-    pub user_type: String,
-    #[sea_orm(primary_key)]
+    /// Role row id; `BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE`
+    #[sea_orm(primary_key, auto_increment = false)]
     pub role_id: i64,
 }
 ```
+
+**Holder id typing:** `user_id` is the holder's primary key in canonical string form (integer or UUID), matching the gem's string-PK precedent (`rolify/spec/support/adapters/active_record.rb` sets `self.primary_key = "team_code"` on the `Team` fixture). The pair `(user_id, role_id)` is the composite primary key, mirroring the physical `UNIQUE(user_id, role_id)` constraint.
 
 **Sentinel note:** The adapter uses `''` (empty string) for `NULL` in `resource_type`/`resource_id` to make `UNIQUE` work identically across backends.
 

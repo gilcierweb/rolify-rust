@@ -32,49 +32,41 @@ tokio = { version = "1.53", features = ["full"] }
 
 ### Collections
 
-The adapter uses two collections (names configurable via `RolifyConfig`):
+One store manages the role collection plus your holder/resource collections (two-sided embedded links; names configurable via `RolifyConfig`). There is no separate join collection: a role document embeds its holder ids, and a holder document embeds its role ids.
 
 ```javascript
-// roles collection
+// role collection - one document per role
 {
   _id: ObjectId,
   name: "admin",
-  resource_type: null,      // or "" (sentinel)
-  resource_id: null,        // or "" (sentinel)
-  created_at: ISODate,
-  updated_at: ISODate
+  resource_type: null,                        // explicit BSON null at global scope
+  resource_id: null,                          // explicit BSON null at global/class scope
+  user_ids: ["1", "8f14e45f-ea1b-4c6f-b0d0-e59b80d12611"]  // stringified holder PKs
 }
 
-// users_roles collection (join table)
-{
-  _id: ObjectId,
-  user_id: "1",
-  user_type: "Player",
-  role_id: ObjectId,
-  created_at: ISODate
-}
+// your holder documents (e.g. users) carry the back-link
+{ _id: ObjectId, /* your fields... */, role_ids: [ObjectId] }
 ```
+
+**Holder id typing:** holder ids are stored in canonical string form (integer `"1"` or a UUID string), mirroring the SQL adapters' `VARCHAR(191) user_id`; integer, UUID, and string holder PKs all fit the same document shape.
 
 ### Indexes
 
 ```javascript
-// Run once during setup
+// Created idempotently by store.ensure_indexes() (call it during setup)
 db.roles.createIndex({ name: 1, resource_type: 1, resource_id: 1 }, { unique: true });
-db.roles.createIndex({ resource_type: 1, resource_id: 1 });
-db.users_roles.createIndex({ user_id: 1, user_type: 1 });
-db.users_roles.createIndex({ role_id: 1 });
 ```
 
 ### Sentinel Values
 
-Like other adapters, MongoDB uses `""` (empty string) for `NULL` in `resource_type`/`resource_id` to make unique indexes work consistently:
+Unlike the SQL adapters (which store `''`), MongoDB stores explicit BSON `null` at global/class scope; the unique compound index admits exactly one `(name, null, null)` document:
 
 ```javascript
 // Global role
-{ name: "admin", resource_type: "", resource_id: "" }
+{ name: "admin", resource_type: null, resource_id: null }
 
 // Class-scoped
-{ name: "moderator", resource_type: "Forum", resource_id: "" }
+{ name: "moderator", resource_type: "Forum", resource_id: null }
 
 // Instance-scoped
 { name: "owner", resource_type: "Forum", resource_id: "7" }
