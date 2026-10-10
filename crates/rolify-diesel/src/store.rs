@@ -2791,49 +2791,41 @@ mod mysql_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
-            // D-08-05: parse the holder id at the SPI boundary; invalid input
-            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
-            let holder_canonical =
-                match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
-                    Ok(canonical) => canonical,
-                    Err(e) => return async move { Err(Error::Core(e)) },
-                };
-            let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>(type_name)
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(&holder_canonical)
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>(resource_id.as_str())
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            // D-08-05: parse the holder id at the SPI boundary; invalid
+            // input raises InvalidHolderId BEFORE any SQL runs, and the
+            // parsed value binds with the kind's physical column type
+            // (typed bind lane: BIGINT for Integer, native UUID for Uuid).
+            let holder_bind = match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                Ok(parsed) => parsed,
+                Err(e) => return async move { Err(Error::Core(e)) },
             };
+            let rest: Vec<String> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    vec![name.to_owned(), String::new(), String::new()]
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    vec![
+                        name.to_owned(),
+                        String::new(),
+                        String::new(),
+                        type_name.to_string(),
+                        String::new(),
+                    ]
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    vec![
+                        name.to_owned(),
+                        String::new(),
+                        String::new(),
+                        type_name.to_string(),
+                        String::new(),
+                        type_name.to_string(),
+                        resource_id.as_str().to_owned(),
+                    ]
+                }
+                rolify_core::query::ResourceFilter::Any => vec![name.to_owned()],
+            };
+            let rows: Vec<RoleRow> = load_typed_rows::<RoleRow>(conn, &sql, &holder_bind, &rest)?;
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -2857,43 +2849,30 @@ mod mysql_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
-            // D-08-05: parse the holder id at the SPI boundary; invalid input
-            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
-            let holder_canonical =
-                match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
-                    Ok(canonical) => canonical,
-                    Err(e) => return async move { Err(Error::Core(e)) },
-                };
-            let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>(type_name)
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(&holder_canonical)
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>(resource_id.as_str())
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            // D-08-05: parse the holder id at the SPI boundary; invalid
+            // input raises InvalidHolderId BEFORE any SQL runs, and the
+            // parsed value binds with the kind's physical column type.
+            let holder_bind = match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                Ok(parsed) => parsed,
+                Err(e) => return async move { Err(Error::Core(e)) },
             };
+            let rest: Vec<String> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    vec![name.to_owned(), String::new(), String::new()]
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    vec![name.to_owned(), type_name.to_string(), String::new()]
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    vec![
+                        name.to_owned(),
+                        type_name.to_string(),
+                        resource_id.as_str().to_owned(),
+                    ]
+                }
+                rolify_core::query::ResourceFilter::Any => vec![name.to_owned()],
+            };
+            let rows: Vec<RoleRow> = load_typed_rows::<RoleRow>(conn, &sql, &holder_bind, &rest)?;
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -3830,49 +3809,41 @@ mod sqlite_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
-            // D-08-05: parse the holder id at the SPI boundary; invalid input
-            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
-            let holder_canonical =
-                match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
-                    Ok(canonical) => canonical,
-                    Err(e) => return async move { Err(Error::Core(e)) },
-                };
-            let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>(type_name)
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(&holder_canonical)
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>("")
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>(resource_id.as_str())
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            // D-08-05: parse the holder id at the SPI boundary; invalid
+            // input raises InvalidHolderId BEFORE any SQL runs, and the
+            // parsed value binds with the kind's physical column type
+            // (typed bind lane: BIGINT for Integer, native UUID for Uuid).
+            let holder_bind = match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                Ok(parsed) => parsed,
+                Err(e) => return async move { Err(Error::Core(e)) },
             };
+            let rest: Vec<String> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    vec![name.to_owned(), String::new(), String::new()]
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    vec![
+                        name.to_owned(),
+                        String::new(),
+                        String::new(),
+                        type_name.to_string(),
+                        String::new(),
+                    ]
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    vec![
+                        name.to_owned(),
+                        String::new(),
+                        String::new(),
+                        type_name.to_string(),
+                        String::new(),
+                        type_name.to_string(),
+                        resource_id.as_str().to_owned(),
+                    ]
+                }
+                rolify_core::query::ResourceFilter::Any => vec![name.to_owned()],
+            };
+            let rows: Vec<RoleRow> = load_typed_rows::<RoleRow>(conn, &sql, &holder_bind, &rest)?;
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
@@ -3896,43 +3867,30 @@ mod sqlite_impl {
                 &placeholder(1),
             );
             let name = query.name.as_str();
-            // D-08-05: parse the holder id at the SPI boundary; invalid input
-            // raises InvalidHolderId BEFORE any SQL runs (canonical TEXT bind).
-            let holder_canonical =
-                match crate::holder::parse_canonical_holder(self.holder_id_kind(), holder) {
-                    Ok(canonical) => canonical,
-                    Err(e) => return async move { Err(Error::Core(e)) },
-                };
-            let rows: Vec<RoleRow> = match &query.filter {
-                rolify_core::query::ResourceFilter::Global => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>("")
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Class(type_name) => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .bind::<Text, _>(type_name)
-                    .bind::<Text, _>("")
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
-                    diesel::sql_query(sql)
-                        .bind::<Text, _>(&holder_canonical)
-                        .bind::<Text, _>(name)
-                        .bind::<Text, _>(type_name)
-                        .bind::<Text, _>(resource_id.as_str())
-                        .load(conn)
-                        .map_err(Error::Diesel)?
-                }
-                rolify_core::query::ResourceFilter::Any => diesel::sql_query(sql)
-                    .bind::<Text, _>(&holder_canonical)
-                    .bind::<Text, _>(name)
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
+            // D-08-05: parse the holder id at the SPI boundary; invalid
+            // input raises InvalidHolderId BEFORE any SQL runs, and the
+            // parsed value binds with the kind's physical column type.
+            let holder_bind = match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                Ok(parsed) => parsed,
+                Err(e) => return async move { Err(Error::Core(e)) },
             };
+            let rest: Vec<String> = match &query.filter {
+                rolify_core::query::ResourceFilter::Global => {
+                    vec![name.to_owned(), String::new(), String::new()]
+                }
+                rolify_core::query::ResourceFilter::Class(type_name) => {
+                    vec![name.to_owned(), type_name.to_string(), String::new()]
+                }
+                rolify_core::query::ResourceFilter::Instance(type_name, resource_id) => {
+                    vec![
+                        name.to_owned(),
+                        type_name.to_string(),
+                        resource_id.as_str().to_owned(),
+                    ]
+                }
+                rolify_core::query::ResourceFilter::Any => vec![name.to_owned()],
+            };
+            let rows: Vec<RoleRow> = load_typed_rows::<RoleRow>(conn, &sql, &holder_bind, &rest)?;
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
 
