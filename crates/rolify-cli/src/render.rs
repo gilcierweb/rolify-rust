@@ -3,7 +3,7 @@
 //! No filesystem I/O, no runtime DB access - just path computation and
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
-use crate::args::{Backend, CliHolderIdKind};
+use crate::args::Backend;
 use rolify_core::HolderIdKind;
 use crate::emitters::{mongo::render_mongo, seaorm::render_seaorm, sql::render_sql};
 use crate::error::CliError;
@@ -23,7 +23,8 @@ pub struct RenderPlan {
 }
 
 impl RenderPlan {
-    /// Creates a RenderPlan from CLI args.
+    /// Creates a `RenderPlan` from CLI args.
+    #[must_use]
     pub fn from_args(args: crate::args::GenerateArgs) -> Self {
         let join_table = args.join_table.clone().unwrap_or_else(|| {
             let holder_plural = if args.holder_name.ends_with('s') {

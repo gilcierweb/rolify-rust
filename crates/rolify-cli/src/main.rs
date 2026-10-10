@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use rolify_cli::args::{Cli, Command, GenerateArgs};
+use rolify_cli::args::{Cli, Command};
 use rolify_cli::render::{RenderPlan, render_all};
 use rolify_cli::writer::{WriteOptions, write_plan};
 use std::path::PathBuf;

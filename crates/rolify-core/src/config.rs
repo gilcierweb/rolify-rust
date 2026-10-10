@@ -15,7 +15,14 @@ use crate::role::RoleRecord;
 /// Holder id kind - selects the physical column type for `users_roles.user_id`
 /// (and the corresponding bind/parse behavior).
 ///
-/// Default is `Integer` (matches ActiveRecord `t.references` -> BIGINT).
+/// Default is `Integer` (matches `ActiveRecord` `t.references` -> `BIGINT`).
+///
+/// # Default
+///
+/// The default variant is `Integer`, matching the gem's `t.references` behavior.
+///
+/// The gem's generator emits a bigint FK column via `t.references :user`
+/// (`lib/generators/active_record/templates/migration.rb:11`).
 ///
 /// ```
 /// use rolify_core::config::HolderIdKind;
@@ -29,10 +36,10 @@ use crate::role::RoleRecord;
     serde(rename_all = "lowercase")
 )]
 pub enum HolderIdKind {
-    /// 64-bit integer column: BIGINT (Postgres/MySQL), INTEGER (SQLite)
+    /// 64-bit integer column: `BIGINT` (`Postgres`/`MySQL`), `INTEGER` (`SQLite`)
     #[default]
     Integer,
-    /// Native UUID column: UUID (Postgres), BINARY(16) (MySQL), TEXT (SQLite)
+    /// Native UUID column: `UUID` (`Postgres`), `BINARY(16)` (`MySQL`), `TEXT` (`SQLite`)
     Uuid,
     /// Canonical string column: VARCHAR(191) (all engines)
     String,

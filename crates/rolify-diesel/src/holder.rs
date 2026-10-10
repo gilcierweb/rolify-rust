@@ -53,20 +53,20 @@ pub fn parsed_for_store(
     Ok(match (kind, parsed) {
         (HolderIdKind::Integer, ParsedHolderId::Integer(value)) => DieselHolderBind::BigInt(value),
         (HolderIdKind::Uuid, ParsedHolderId::Uuid(uuid)) => uuid_bind(uuid),
-        (HolderIdKind::String, _) => DieselHolderBind::Text(holder.as_str().to_owned()),
+        (HolderIdKind::String, ParsedHolderId::Text(s)) => DieselHolderBind::Text(s),
         // Mismatch should be impossible: parse_holder_id guarantees the arm.
         _ => DieselHolderBind::Text(holder.as_str().to_owned()),
     })
 }
 
 /// Per-engine UUID bind: native `UUID` on Postgres, `BINARY(16)` bytes on
-/// MySQL, hyphenated `TEXT` on SQLite (and as the inert default).
+/// `MySQL`, hyphenated `TEXT` on `SQLite` (and as the inert default).
 #[cfg(any(feature = "postgres", feature = "mysql"))]
 #[must_use]
 fn uuid_bind(uuid: uuid::Uuid) -> DieselHolderBind {
     #[cfg(feature = "postgres")]
     {
-        return DieselHolderBind::Uuid(uuid);
+        DieselHolderBind::Uuid(uuid)
     }
     #[cfg(all(feature = "mysql", not(feature = "postgres")))]
     {
@@ -84,7 +84,7 @@ fn uuid_bind(uuid: uuid::Uuid) -> DieselHolderBind {
 /// Kind-aware select-list projection for the holder id column in the finder
 /// queries (RESEARCH Pattern 3).
 ///
-/// | Kind     | Postgres                     | MySQL                      | SQLite       |
+/// | Kind     | Postgres                     | `MySQL`                      | `SQLite`       |
 /// |----------|------------------------------|----------------------------|--------------|
 /// | Integer  | `holder.id` (typed `BigInt`) | `holder.id` (typed `BigInt`) | `holder.id`  |
 /// | Uuid     | `CAST(holder.id AS TEXT)`    | `holder.id` (binary bytes) | `holder.id`  |

@@ -92,7 +92,7 @@ fn parse_integer(input: &str) -> Result<ParsedHolderId, RolifyError> {
         });
     }
     // Check for whitespace
-    if input.chars().any(|c| c.is_whitespace()) {
+    if input.chars().any(char::is_whitespace) {
         return Err(RolifyError::InvalidHolderId {
             expected: "integer",
             got: input.to_owned(),
@@ -208,7 +208,7 @@ mod tests {
         );
 
         // URN form
-        let urn = format!("urn:uuid:{}", uuid_str);
+        let urn = format!("urn:uuid:{uuid_str}");
         let parsed = parse_holder_id(HolderIdKind::Uuid, &urn).unwrap();
         assert_eq!(
             parsed,
@@ -216,7 +216,7 @@ mod tests {
         );
 
         // Braced form
-        let braced = format!("{{{}}}", uuid_str);
+        let braced = format!("{{{uuid_str}}}");
         let parsed = parse_holder_id(HolderIdKind::Uuid, &braced).unwrap();
         assert_eq!(
             parsed,
@@ -248,7 +248,7 @@ mod tests {
         );
         assert_eq!(
             parse_holder_id(HolderIdKind::String, ""),
-            Ok(ParsedHolderId::Text("".to_owned()))
+            Ok(ParsedHolderId::Text(String::new()))
         );
         assert_eq!(
             parse_holder_id(HolderIdKind::String, "007"),
@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(holder_id_to_string(&parsed), uuid_str);
 
         // URN form -> canonical hyphenated
-        let urn = format!("urn:uuid:{}", uuid_str);
+        let urn = format!("urn:uuid:{uuid_str}");
         let parsed = parse_holder_id(HolderIdKind::Uuid, &urn).unwrap();
         assert_eq!(holder_id_to_string(&parsed), uuid_str);
 

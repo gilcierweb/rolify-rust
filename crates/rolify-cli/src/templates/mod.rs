@@ -50,10 +50,9 @@ pub mod scaffolding {
         holder_id_kind: &str,
     ) -> String {
         let holder_id_type = match holder_id_kind {
-            "Integer" => "i64",
             "Uuid" => "uuid::Uuid",
             "String" => "String",
-            _ => "i64",
+            _ => "i64", // Integer is the default
         };
         HOLDER_STUB
             .replace("{holder_name}", holder_name)

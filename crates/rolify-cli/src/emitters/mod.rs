@@ -97,17 +97,20 @@ pub(crate) fn substitute_table_names(template: &str, plan: &RenderPlan, engine: 
 }
 
 /// Returns the SQL column type for the given holder id kind and engine.
+#[allow(clippy::match_same_arms)]
 pub(crate) fn holder_id_type_sql(kind: HolderIdKind, engine: &str) -> &'static str {
     match (kind, engine) {
+        // postgres
         (HolderIdKind::Integer, "postgres") => "BIGINT",
         (HolderIdKind::Uuid, "postgres") => "UUID",
         (HolderIdKind::String, "postgres") => "VARCHAR(191)",
+        // mysql
         (HolderIdKind::Integer, "mysql") => "BIGINT",
         (HolderIdKind::Uuid, "mysql") => "BINARY(16)",
         (HolderIdKind::String, "mysql") => "VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin",
+        // sqlite (uuid and string share TEXT)
         (HolderIdKind::Integer, "sqlite") => "INTEGER",
-        (HolderIdKind::Uuid, "sqlite") => "TEXT",
-        (HolderIdKind::String, "sqlite") => "TEXT",
+        (HolderIdKind::Uuid | HolderIdKind::String, "sqlite") => "TEXT",
         _ => "VARCHAR(191)", // fallback
     }
 }
@@ -130,9 +133,9 @@ mod tests {
         }
     }
 
-    /// Default names with String holder_id_kind: the rendered bytes equal the
-    /// template bytes with {{holder_id_type}} replaced by the engine-specific
-    /// type for String kind (VARCHAR(191) for PG, full charset for MySQL, TEXT for SQLite).
+    /// Default names with `String` `holder_id_kind`: the rendered bytes equal the
+    /// template bytes with `{{holder_id_type}}` replaced by the engine-specific
+    /// type for String kind (`VARCHAR(191)` for `Postgres`, full charset for `MySQL`, `TEXT` for `SQLite`).
     #[test]
     fn substitute_table_names_default_identity() {
         let default_plan = plan("roles", "users_roles", rolify_core::config::HolderIdKind::String);

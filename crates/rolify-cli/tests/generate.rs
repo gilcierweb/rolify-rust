@@ -977,7 +977,7 @@ fn explicit_join_table_with_roles_substring_survives() {
     );
 }
 
-/// Tests that MySQL template substitutes holder_id_type correctly for uuid kind.
+/// Tests that `MySQL` template substitutes `holder_id_type` correctly for uuid kind.
 #[test]
 fn generate_mysql_uuid_kind() {
     let dir = test_temp_dir();
@@ -1012,7 +1012,7 @@ fn generate_mysql_uuid_kind() {
     );
 }
 
-/// Tests that SQLite template substitutes holder_id_type correctly for integer kind.
+/// Tests that `SQLite` template substitutes `holder_id_type` correctly for integer kind.
 #[test]
 fn generate_sqlite_integer_kind() {
     let dir = test_temp_dir();
@@ -1040,7 +1040,7 @@ fn generate_sqlite_integer_kind() {
     );
 }
 
-/// Tests that MySQL template substitutes holder_id_type correctly for string kind.
+/// Tests that `MySQL` template substitutes `holder_id_type` correctly for string kind.
 #[test]
 fn mysql_string_kind() {
     let dir = test_temp_dir();
