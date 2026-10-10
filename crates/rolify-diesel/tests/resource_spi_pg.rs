@@ -679,7 +679,7 @@ mod tests {
         .unwrap();
         diesel::sql_query(
             "CREATE TABLE custom_role_links (
-                user_id VARCHAR(191) NOT NULL,
+                user_id BIGINT NOT NULL,
                 role_id BIGINT NOT NULL REFERENCES custom_roles(id) ON DELETE CASCADE,
                 CONSTRAINT custom_role_links_pair_unique UNIQUE (user_id, role_id)
             )",

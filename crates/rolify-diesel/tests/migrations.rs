@@ -123,12 +123,12 @@ mod pg_migrations {
         let admin_id = role_ids[0].id;
         let user_id = role_ids[1].id;
 
-        diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', $1)")
+        diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES (101, $1)")
             .bind::<diesel::sql_types::BigInt, _>(admin_id)
             .execute(&mut conn)
             .expect("first link insert on Postgres");
         let dup_link =
-            diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', $1)")
+            diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES (101, $1)")
                 .bind::<diesel::sql_types::BigInt, _>(admin_id)
                 .execute(&mut conn);
         assert!(
@@ -340,12 +340,12 @@ mod mysql_migrations {
         let admin_id = role_ids[0].id;
         let user_id = role_ids[1].id;
 
-        diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+        diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES (101, ?)")
             .bind::<diesel::sql_types::BigInt, _>(admin_id)
             .execute(&mut conn)
             .expect("first link insert on MySQL");
         let dup_link =
-            diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+            diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES (101, ?)")
                 .bind::<diesel::sql_types::BigInt, _>(admin_id)
                 .execute(&mut conn);
         assert!(
@@ -525,12 +525,12 @@ mod sqlite_migrations {
         let admin_id = role_ids[0].id;
         let user_id = role_ids[1].id;
 
-        diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+        diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES (101, ?)")
             .bind::<diesel::sql_types::BigInt, _>(admin_id)
             .execute(&mut conn)
             .expect("first link insert on SQLite");
         let dup_link =
-            diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES ('u1', ?)")
+            diesel::sql_query("INSERT INTO users_roles (user_id, role_id) VALUES (101, ?)")
                 .bind::<diesel::sql_types::BigInt, _>(admin_id)
                 .execute(&mut conn);
         assert!(

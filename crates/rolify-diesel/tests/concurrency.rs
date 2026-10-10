@@ -269,7 +269,12 @@ mod pg_concurrency {
             let link_count_row: CountRow = diesel::sql_query(
                 "SELECT COUNT(*) AS count FROM users_roles WHERE user_id = $1 AND role_id = $2",
             )
-            .bind::<diesel::sql_types::Text, _>(holder_id.as_str())
+            .bind::<diesel::sql_types::BigInt, _>(
+                holder_id
+                    .as_str()
+                    .parse::<i64>()
+                    .expect("integer-kind holder id"),
+            )
             .bind::<diesel::sql_types::BigInt, _>(role_id)
             .get_result(&mut verify_conn)
             .expect("count join rows");
@@ -537,7 +542,12 @@ mod mysql_concurrency {
             let link_count_row: CountRow = diesel::sql_query(
                 "SELECT COUNT(*) AS count FROM users_roles WHERE user_id = ? AND role_id = ?",
             )
-            .bind::<diesel::sql_types::Text, _>(holder_id.as_str())
+            .bind::<diesel::sql_types::BigInt, _>(
+                holder_id
+                    .as_str()
+                    .parse::<i64>()
+                    .expect("integer-kind holder id"),
+            )
             .bind::<diesel::sql_types::BigInt, _>(role_id)
             .get_result(&mut verify_conn)
             .expect("count join rows");

@@ -308,7 +308,12 @@ mod pg_executor {
 
         let link_count_row: CountRow =
             diesel::sql_query("SELECT COUNT(*) AS count FROM users_roles WHERE user_id = $1")
-                .bind::<diesel::sql_types::Text, _>(user_id_rb.as_str())
+                .bind::<diesel::sql_types::BigInt, _>(
+                    user_id_rb
+                        .as_str()
+                        .parse::<i64>()
+                        .expect("integer-kind holder id"),
+                )
                 .get_result(&mut verify_conn)
                 .expect("rb: count links");
         assert_eq!(
@@ -604,7 +609,12 @@ mod mysql_executor {
 
         let link_count_row: CountRow =
             diesel::sql_query("SELECT COUNT(*) AS count FROM users_roles WHERE user_id = ?")
-                .bind::<diesel::sql_types::Text, _>(user_id_rb.as_str())
+                .bind::<diesel::sql_types::BigInt, _>(
+                    user_id_rb
+                        .as_str()
+                        .parse::<i64>()
+                        .expect("integer-kind holder id"),
+                )
                 .get_result(&mut verify_conn)
                 .expect("rb: count links");
         assert_eq!(

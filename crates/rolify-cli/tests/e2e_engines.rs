@@ -190,17 +190,16 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', $1)")
+    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES (1, $1)")
         .bind(role_id)
         .execute(&pool)
         .await
         .expect("first join insert should succeed");
 
-    let duplicate_join =
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', $1)")
-            .bind(role_id)
-            .execute(&pool)
-            .await;
+    let duplicate_join = sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES (1, $1)")
+        .bind(role_id)
+        .execute(&pool)
+        .await;
     assert!(
         duplicate_join.is_err(),
         "duplicate join should fail on users_roles_pair_unique"
@@ -264,7 +263,9 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
         .build()
         .expect("default config builds");
     let mut store = DieselStore::new(&config);
-    let holder_id = ResourceId::from("user1");
+    // D-08-02: the generated schema is the default integer kind, so
+    // the store smoke uses an integer-canonical holder id.
+    let holder_id = ResourceId::from("1");
 
     // add_role :admin (gem parity: user.add_role "admin", global scope)
     let admin_role = store
@@ -276,7 +277,7 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
         .expect("find_or_create_by admin global on generated schema");
     let added = store
         .add(&mut diesel_conn, &holder_id, &admin_role)
-        .expect("add admin to user1 on generated schema");
+        .expect("add admin to holder 1 on generated schema");
     assert!(added, "first add creates the link");
 
     // has_role? :admin => true (gem parity: where_ ladder, Global filter)
@@ -293,7 +294,7 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
     assert_eq!(
         roles.len(),
         1,
-        "user1 should hold exactly the admin role on the generated schema"
+        "holder 1 should hold exactly the admin role on the generated schema"
     );
 
     // remove_role :admin (gem parity: NameOnly sweep, remove_role_if_empty true)
@@ -320,7 +321,7 @@ async fn generated_postgres_schema_applies_and_holds_store_smoke() {
         .expect("where_ after removal on generated schema");
     assert!(
         roles_after.is_empty(),
-        "user1 should hold no roles after removal on the generated schema"
+        "holder 1 should hold no roles after removal on the generated schema"
     );
 
     println!("Postgres e2e test passed: generated schema applies and holds store smoke");
@@ -455,17 +456,16 @@ async fn generated_mysql_schema_roundtrip() {
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', ?)")
+    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES (1, ?)")
         .bind(role_id)
         .execute(&pool)
         .await
         .expect("first join insert should succeed");
 
-    let duplicate_join =
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', ?)")
-            .bind(role_id)
-            .execute(&pool)
-            .await;
+    let duplicate_join = sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES (1, ?)")
+        .bind(role_id)
+        .execute(&pool)
+        .await;
     assert!(
         duplicate_join.is_err(),
         "duplicate join should fail on users_roles_pair_unique"
@@ -665,17 +665,16 @@ async fn generated_sqlite_schema_roundtrip() {
         .await
         .unwrap();
 
-    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', ?)")
+    sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES (1, ?)")
         .bind(role_id)
         .execute(&pool)
         .await
         .expect("first join insert should succeed");
 
-    let duplicate_join =
-        sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES ('user1', ?)")
-            .bind(role_id)
-            .execute(&pool)
-            .await;
+    let duplicate_join = sqlx::query("INSERT INTO users_roles (user_id, role_id) VALUES (1, ?)")
+        .bind(role_id)
+        .execute(&pool)
+        .await;
     assert!(
         duplicate_join.is_err(),
         "duplicate join should fail on users_roles_pair_unique"

@@ -368,7 +368,12 @@ async fn tracer_grant_check_revoke_lifecycle() {
     assert!(!added_third);
 
     let link_count_row: CountRow = diesel::sql_query("SELECT COUNT(*) AS count FROM users_roles WHERE user_id = $1 AND role_id = (SELECT id FROM roles WHERE name = 'admin' AND resource_type = '' AND resource_id = '')")
-        .bind::<diesel::sql_types::Text, _>(user_id.as_str())
+        .bind::<diesel::sql_types::BigInt, _>(
+        user_id
+            .as_str()
+            .parse::<i64>()
+            .expect("integer-kind holder id"),
+    )
         .get_result(&mut conn)
         .await
         .expect("count links");
