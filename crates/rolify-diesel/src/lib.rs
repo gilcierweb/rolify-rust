@@ -131,15 +131,17 @@ compile_error!("feature `sqlite` requires one of the mode features `sync` or `as
 
 // Re-export the migrations constant for the enabled backend.
 // Path is relative to the crate root (where Cargo.toml lives).
+// The integer kind tree is the default embedded migration (D-08-02);
+// the other kind trees exist for the CLI drift guard (Plan 05).
 #[cfg(feature = "postgres")]
 pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
-    diesel_migrations::embed_migrations!("migrations/postgres");
+    diesel_migrations::embed_migrations!("migrations/postgres/integer");
 #[cfg(feature = "mysql")]
 pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
-    diesel_migrations::embed_migrations!("migrations/mysql");
+    diesel_migrations::embed_migrations!("migrations/mysql/integer");
 #[cfg(feature = "sqlite")]
 pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
-    diesel_migrations::embed_migrations!("migrations/sqlite");
+    diesel_migrations::embed_migrations!("migrations/sqlite/integer");
 
 pub mod dialect;
 pub mod error;
