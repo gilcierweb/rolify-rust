@@ -59,7 +59,7 @@ pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
     for (engine, array_stem) in ENGINES.iter().zip(ARRAY_NAME_STEMS) {
         // Up: substitute the validated names first, then split into
         // statements (the template placeholders name the const arrays).
-        let up_sql = substitute_table_names(templates::up(engine), plan);
+        let up_sql = substitute_table_names(templates::up(engine), plan, engine);
         let up_statements = split_statements(&up_sql)?;
         rendered = rendered.replace(
             &format!("{{{{{array_stem}_UP_STATEMENTS}}}}"),
@@ -68,7 +68,7 @@ pub fn render_seaorm(plan: &RenderPlan) -> Result<String, CliError> {
 
         // Down: whole-statement extraction on the original canonical text,
         // substitution applied per extracted statement.
-        let down_statements = extract_down_statements(templates::down(engine), plan)?;
+        let down_statements = extract_down_statements(templates::down(engine), plan, engine)?;
         rendered = rendered.replace(
             &format!("{{{{{array_stem}_DOWN_STATEMENTS}}}}"),
             &render_array_body(&down_statements),
@@ -167,6 +167,7 @@ fn split_statements(sql: &str) -> Result<Vec<String>, CliError> {
 fn extract_down_statements(
     original_down_sql: &str,
     plan: &RenderPlan,
+    engine: &str,
 ) -> Result<Vec<String>, CliError> {
     let statements = split_statements(original_down_sql)?;
 
@@ -216,7 +217,7 @@ fn extract_down_statements(
                         ),
                     });
                 }
-                join_drop = Some(substitute_table_names(statement, plan));
+                join_drop = Some(substitute_table_names(statement, plan, engine));
             }
             (false, true) => {
                 if roles_drop.is_some() {
@@ -226,7 +227,7 @@ fn extract_down_statements(
                         ),
                     });
                 }
-                roles_drop = Some(substitute_table_names(statement, plan));
+                roles_drop = Some(substitute_table_names(statement, plan, engine));
             }
             (false, false) => {
                 // A DROP for an unrelated table: not ours to extract.
@@ -473,7 +474,7 @@ mod tests {
         let default_plan = plan("roles", "users_roles");
 
         let down_statements =
-            extract_down_statements(templates::down("postgres"), &default_plan).unwrap();
+            extract_down_statements(templates::down("postgres"), &default_plan, "postgres").unwrap();
 
         assert_eq!(down_statements.len(), 2, "exactly two down statements");
         assert!(
@@ -496,7 +497,7 @@ mod tests {
         let script = "DROP TABLE IF EXISTS users_roles DROP TABLE IF EXISTS roles;";
         let default_plan = plan("roles", "users_roles");
 
-        let error = extract_down_statements(script, &default_plan).unwrap_err();
+        let error = extract_down_statements(script, &default_plan, "postgres").unwrap_err();
 
         let message = error.to_string();
         assert!(
@@ -510,7 +511,7 @@ mod tests {
         let script = "DROP TABLE IF EXISTS users_roles, roles;";
         let default_plan = plan("roles", "users_roles");
 
-        let error = extract_down_statements(script, &default_plan).unwrap_err();
+        let error = extract_down_statements(script, &default_plan, "postgres").unwrap_err();
 
         let message = error.to_string();
         assert!(
@@ -524,7 +525,7 @@ mod tests {
         let script = "DROP TABLE IF EXISTS roles;";
         let default_plan = plan("roles", "users_roles");
 
-        let error = extract_down_statements(script, &default_plan).unwrap_err();
+        let error = extract_down_statements(script, &default_plan, "postgres").unwrap_err();
 
         let message = error.to_string();
         assert!(
@@ -538,7 +539,7 @@ mod tests {
         let script = "DROP TABLE IF EXISTS users_roles;";
         let default_plan = plan("roles", "users_roles");
 
-        let error = extract_down_statements(script, &default_plan).unwrap_err();
+        let error = extract_down_statements(script, &default_plan, "postgres").unwrap_err();
 
         let message = error.to_string();
         assert!(
@@ -552,7 +553,7 @@ mod tests {
         let script = "DROP TABLE IF EXISTS users_roles;\nDROP TABLE IF EXISTS users_roles_backup;";
         let default_plan = plan("roles", "users_roles");
 
-        let error = extract_down_statements(script, &default_plan).unwrap_err();
+        let error = extract_down_statements(script, &default_plan, "postgres").unwrap_err();
 
         let message = error.to_string();
         assert!(
@@ -568,7 +569,7 @@ mod tests {
         let script = "-- drop join table first, then roles.\n\nDROP TABLE IF EXISTS users_roles;\nDROP TABLE IF EXISTS roles;";
         let custom_plan = plan("privileges", "customers_privileges");
 
-        let down_statements = extract_down_statements(script, &custom_plan).unwrap();
+        let down_statements = extract_down_statements(script, &custom_plan, "postgres").unwrap();
 
         assert_eq!(down_statements.len(), 2);
         assert!(

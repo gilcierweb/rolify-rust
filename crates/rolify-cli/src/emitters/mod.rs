@@ -35,8 +35,8 @@ pub(crate) const HOLDER_ID_TYPE_SENTINEL: &str = "{{holder_id_type}}";
 /// substitution, so no pass can touch it. For every name pair the previous
 /// longest-first chain handled correctly, the output is byte-identical
 /// (the equivalence unit test pins that).
-pub(crate) fn substitute_table_names(template: &str, plan: &RenderPlan) -> String {
-    let holder_id_type = holder_id_type_sql(plan.holder_id_kind, "postgres"); // default to postgres for substitution
+pub(crate) fn substitute_table_names(template: &str, plan: &RenderPlan, engine: &str) -> String {
+    let holder_id_type = holder_id_type_sql(plan.holder_id_kind, engine);
     template
         .replace(HOLDER_ID_TYPE_SENTINEL, holder_id_type)
         .split(JOIN_TABLE_SENTINEL)
@@ -80,25 +80,22 @@ mod tests {
     }
 
     /// Default names with String holder_id_kind: the rendered bytes equal the
-    /// template bytes with {{holder_id_type}} replaced by VARCHAR(191).
+    /// template bytes with {{holder_id_type}} replaced by the engine-specific
+    /// type for String kind (VARCHAR(191) for PG, full charset for MySQL, TEXT for SQLite).
     #[test]
     fn substitute_table_names_default_identity() {
         let default_plan = plan("roles", "users_roles", rolify_core::config::HolderIdKind::String);
 
-        for template in [
-            templates::up("postgres"),
-            templates::down("postgres"),
-            templates::up("mysql"),
-            templates::down("mysql"),
-            templates::up("sqlite"),
-            templates::down("sqlite"),
-        ] {
-            let expected = template.replace("{{holder_id_type}}", "VARCHAR(191)");
-            assert_eq!(
-                substitute_table_names(template, &default_plan),
-                expected,
-                "default-name substitution with String kind must produce VARCHAR(191)"
-            );
+        for engine in ["postgres", "mysql", "sqlite"] {
+            for template in [templates::up(engine), templates::down(engine)] {
+                let expected_type = holder_id_type_sql(rolify_core::config::HolderIdKind::String, engine);
+                let expected = template.replace("{{holder_id_type}}", expected_type);
+                assert_eq!(
+                    substitute_table_names(template, &default_plan, engine),
+                    expected,
+                    "default-name substitution with String kind must produce correct type for engine {engine}"
+                );
+            }
         }
     }
 
@@ -107,7 +104,7 @@ mod tests {
     #[test]
     fn substitute_table_names_derived_join() {
         let derived_plan = plan("privileges", "users_privileges", rolify_core::config::HolderIdKind::Integer);
-        let rendered = substitute_table_names(templates::up("postgres"), &derived_plan);
+        let rendered = substitute_table_names(templates::up("postgres"), &derived_plan, "postgres");
 
         assert!(
             rendered.contains("CREATE TABLE users_privileges"),
@@ -128,7 +125,7 @@ mod tests {
     #[test]
     fn substitute_table_names_explicit_join_embeds_roles_stem() {
         let explicit_plan = plan("privileges", "member_roles_archive", rolify_core::config::HolderIdKind::Integer);
-        let rendered = substitute_table_names(templates::up("postgres"), &explicit_plan);
+        let rendered = substitute_table_names(templates::up("postgres"), &explicit_plan, "postgres");
 
         assert!(
             rendered.contains("CREATE TABLE member_roles_archive"),
@@ -146,23 +143,19 @@ mod tests {
     fn substitute_table_names_custom_pair_matches_longest_first_output() {
         let custom_plan = plan("privileges", "customers_privileges", rolify_core::config::HolderIdKind::Integer);
 
-        for template in [
-            templates::up("postgres"),
-            templates::down("postgres"),
-            templates::up("mysql"),
-            templates::down("mysql"),
-            templates::up("sqlite"),
-            templates::down("sqlite"),
-        ] {
-            let longest_first = template
-                .replace("{{holder_id_type}}", "BIGINT")
-                .replace("users_roles", &custom_plan.join_table)
-                .replace("roles", &custom_plan.roles_table);
-            assert_eq!(
-                substitute_table_names(template, &custom_plan),
-                longest_first,
-                "helper output diverged from the longest-first bytes"
-            );
+        for engine in ["postgres", "mysql", "sqlite"] {
+            for template in [templates::up(engine), templates::down(engine)] {
+                let expected_type = holder_id_type_sql(rolify_core::config::HolderIdKind::Integer, engine);
+                let longest_first = template
+                    .replace("{{holder_id_type}}", expected_type)
+                    .replace("users_roles", &custom_plan.join_table)
+                    .replace("roles", &custom_plan.roles_table);
+                assert_eq!(
+                    substitute_table_names(template, &custom_plan, engine),
+                    longest_first,
+                    "helper output diverged from the longest-first bytes for engine {engine}"
+                );
+            }
         }
     }
 }

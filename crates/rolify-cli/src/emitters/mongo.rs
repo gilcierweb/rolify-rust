@@ -27,7 +27,8 @@ pub fn render_mongo(plan: &RenderPlan) -> Result<(String, String), CliError> {
 
     // Substitute the table name references in comments through the shared
     // re-scan-free helper, so an explicit join name survives verbatim.
-    let substituted = substitute_table_names(template, plan);
+    // MongoDB doesn't use holder_id_type, so we pass a dummy engine.
+    let substituted = substitute_table_names(template, plan, "postgres");
 
     // Split the template into role_doc (complete Rust source) and
     // index_notes (pure Markdown)

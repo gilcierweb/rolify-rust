@@ -33,7 +33,7 @@ CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
 CREATE INDEX idx_roles_name ON roles (name);
 
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    user_id {{holder_id_type}} NOT NULL,
     role_id BIGINT NOT NULL,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id),
     CONSTRAINT users_roles_role_id_fk FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE

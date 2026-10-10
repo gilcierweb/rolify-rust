@@ -976,3 +976,94 @@ fn explicit_join_table_with_roles_substring_survives() {
         "config_example must carry the requested join name"
     );
 }
+
+/// Tests that MySQL template substitutes holder_id_type correctly for uuid kind.
+#[test]
+fn mysql_uuid_kind() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--holder-id-type",
+            "uuid",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    let up_sql = fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql")).unwrap();
+    assert!(
+        up_sql.contains("user_id BINARY(16) NOT NULL"),
+        "MySQL uuid up.sql must contain 'user_id BINARY(16) NOT NULL', got:\n{up_sql}"
+    );
+    // Check that the user_id column specifically doesn't have CHARACTER SET
+    // (the roles table columns and comments may contain it, but user_id should not)
+    let users_roles_section = up_sql.split("CREATE TABLE users_roles").nth(1).unwrap_or("");
+    assert!(
+        !users_roles_section.contains("CHARACTER SET"),
+        "MySQL uuid user_id column must not have CHARACTER SET clause, got:\n{users_roles_section}"
+    );
+}
+
+/// Tests that SQLite template substitutes holder_id_type correctly for integer kind.
+#[test]
+fn sqlite_integer_kind() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--holder-id-type",
+            "integer",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    let up_sql = fs::read_to_string(dir.join("migrations/sqlite/0000000001_rolify_create_tables/up.sql")).unwrap();
+    assert!(
+        up_sql.contains("user_id INTEGER NOT NULL"),
+        "SQLite integer up.sql must contain 'user_id INTEGER NOT NULL', got:\n{up_sql}"
+    );
+}
+
+/// Tests that MySQL template substitutes holder_id_type correctly for string kind.
+#[test]
+fn mysql_string_kind() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--holder-id-type",
+            "string",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    let up_sql = fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql")).unwrap();
+    assert!(
+        up_sql.contains("VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"),
+        "MySQL string up.sql must contain full charset clause, got:\n{up_sql}"
+    );
+}

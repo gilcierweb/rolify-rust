@@ -5,7 +5,7 @@
 //! mangle an explicit join table embedding the roles stem. Names are already
 //! validated by `validate_identifier`.
 
-use crate::emitters::{holder_id_type_sql, substitute_table_names};
+use crate::emitters::substitute_table_names;
 use crate::error::CliError;
 use crate::render::RenderPlan;
 use crate::templates::{down, up};
@@ -34,8 +34,8 @@ pub fn render_sql(plan: &RenderPlan, engine: &str) -> Result<(String, String), C
         }
     };
 
-    let up_sql = substitute_table_names(up(template_engine), plan);
-    let down_sql = substitute_table_names(down(template_engine), plan);
+    let up_sql = substitute_table_names(up(template_engine), plan, engine);
+    let down_sql = substitute_table_names(down(template_engine), plan, engine);
 
     Ok((up_sql, down_sql))
 }
