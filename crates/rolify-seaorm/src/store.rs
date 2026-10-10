@@ -30,8 +30,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use maybe_async::maybe_async;
 use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
-use rolify_core::config::{RolifyConfig, RolifyConfigBuilder};
+use rolify_core::config::{HolderIdKind, RolifyConfig, RolifyConfigBuilder};
 use rolify_core::error::RolifyError;
+use rolify_core::holder::{parse_holder_id, ParsedHolderId};
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
@@ -44,7 +45,8 @@ use sea_orm::{
     SqlErr, Statement, Value,
 };
 
-use crate::entity::{join, role};
+
+use crate::entity::role;
 use crate::error::Error;
 use crate::ladder::{build_any_where, build_ladder_where, build_strict_where, placeholder};
 
@@ -66,6 +68,7 @@ pub struct SeaormStore<C: ConnectionTrait> {
     holder_table: Option<String>,
     resource_tables: Vec<(String, String, String)>, // (type_name, table_name, pk_column)
     query_counter: Arc<AtomicUsize>,
+    holder_id_kind: HolderIdKind,
     _executor: PhantomData<fn() -> C>,
 }
 
@@ -77,6 +80,7 @@ impl<C: ConnectionTrait + Send + 'static> Clone for SeaormStore<C> {
             holder_table: self.holder_table.clone(),
             resource_tables: self.resource_tables.clone(),
             query_counter: Arc::clone(&self.query_counter),
+            holder_id_kind: self.holder_id_kind,
             _executor: PhantomData,
         }
     }
@@ -92,6 +96,7 @@ impl<C: ConnectionTrait> SeaormStore<C> {
             holder_table: None,
             resource_tables: Vec::new(),
             query_counter: Arc::new(AtomicUsize::new(0)),
+            holder_id_kind: config.holder_id_kind(),
             _executor: PhantomData,
         }
     }
@@ -199,6 +204,36 @@ fn cast_to_text(backend: DbBackend, expr: &str) -> String {
 
 fn backend_of<C: ConnectionTrait>(conn: &C) -> DbBackend {
     conn.get_database_backend()
+}
+
+/// Construct a runtime-typed `sea_orm::Value` for a holder id according to the configured kind.
+/// Parses and validates the holder id before any SQL executes (D-08-05).
+fn holder_value(
+    kind: HolderIdKind,
+    holder: &ResourceId,
+) -> Result<Value, Error> {
+    let parsed = parse_holder_id(kind, holder.as_str()).map_err(Error::Core)?;
+    Ok(match parsed {
+        ParsedHolderId::Integer(n) => Value::BigInt(Some(n)),
+        ParsedHolderId::Uuid(u) => {
+            // Value::Uuid requires sea-orm/with-uuid feature (enabled in Cargo.toml)
+            Value::Uuid(Some(u))
+        }
+        ParsedHolderId::Text(s) => Value::String(Some(s)),
+    })
+}
+
+/// Decode a holder id from a query result row according to the configured kind.
+/// The projection should be cast to text for integer/uuid kinds (see `cast_to_text`),
+/// so String decode works uniformly and we canonicalize via `holder_id_to_string`.
+fn decode_holder_id(kind: HolderIdKind, row_user_id: &str) -> ResourceId {
+    match kind {
+        HolderIdKind::Integer | HolderIdKind::Uuid => {
+            // Projection was CAST(... AS TEXT/CHAR), so decode as string and canonicalize
+            ResourceId::new(row_user_id)
+        }
+        HolderIdKind::String => ResourceId::new(row_user_id),
+    }
 }
 
 /// Compose the `roles_of`/`where_*` SELECT: role rows for one holder
@@ -310,7 +345,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let (where_clause, _) = build_ladder_where(backend, query, 2);
         let sql =
             select_roles_for_holder(backend, &self.role_table, &self.join_table, &where_clause);
-        let mut values = vec![Value::from(holder.as_str().to_owned())];
+        let mut values = vec![holder_value(self.holder_id_kind, holder)?];
         push_ladder_binds(&mut values, query);
         let stmt = Statement::from_sql_and_values(backend, sql, values);
         self.bump(1);
@@ -329,7 +364,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let (where_clause, _) = build_strict_where(backend, query, 2);
         let sql =
             select_roles_for_holder(backend, &self.role_table, &self.join_table, &where_clause);
-        let mut values = vec![Value::from(holder.as_str().to_owned())];
+        let mut values = vec![holder_value(self.holder_id_kind, holder)?];
         push_strict_binds(&mut values, query);
         let stmt = Statement::from_sql_and_values(backend, sql, values);
         self.bump(1);
@@ -349,7 +384,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let (where_clause, _) = build_any_where(backend, queries, 2);
         let sql =
             select_roles_for_holder(backend, &self.role_table, &self.join_table, &where_clause);
-        let mut values = vec![Value::from(holder.as_str().to_owned())];
+        let mut values = vec![holder_value(self.holder_id_kind, holder)?];
         for query in queries {
             push_ladder_binds(&mut values, query);
         }
@@ -429,12 +464,18 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                     name: role.name.as_str().to_owned(),
                 })
             })?;
-        let link = join::ActiveModel {
-            user_id: Set(holder.as_str().to_owned()),
-            role_id: Set(model.id),
-        };
+        let backend = backend_of(conn);
+        let sql = format!(
+            "INSERT INTO {} (user_id, role_id) VALUES ({}, {})",
+            quote_identifier(backend, &self.join_table),
+            placeholder(backend, 1),
+            placeholder(backend, 2),
+        );
+        let holder_val = holder_value(self.holder_id_kind, holder)?;
+        let values = vec![holder_val, Value::BigInt(Some(model.id))];
+        let stmt = Statement::from_sql_and_values(backend, sql, values);
         self.bump(1);
-        match join::Entity::insert(link).exec(&*conn).await {
+        match conn.execute_raw(stmt).await {
             Ok(_) => Ok(true),
             Err(db_err) if is_unique_violation(&db_err) => Ok(false),
             Err(other) => Err(Error::Db(other)),
@@ -462,7 +503,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
 
         // Scope filter per RemovalTarget (kernel::removal_match).
         let mut values = vec![
-            Value::from(holder.as_str().to_owned()),
+            holder_value(self.holder_id_kind, holder)?,
             Value::from(name.as_str().to_owned()),
         ];
         let scope_filter = match target {
@@ -528,7 +569,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             "DELETE FROM {join_table} WHERE user_id = {} AND role_id IN ({id_list})",
             placeholder(backend, 1)
         );
-        let mut link_values = vec![Value::from(holder.as_str().to_owned())];
+        let mut link_values = vec![holder_value(self.holder_id_kind, holder)?];
         for id in &affected_ids {
             link_values.push(Value::from(*id));
         }
@@ -601,7 +642,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             .query_one_raw(Statement::from_sql_and_values(
                 backend,
                 sql,
-                vec![Value::from(holder.as_str().to_owned())],
+                vec![holder_value(self.holder_id_kind, holder)?],
             ))
             .await
             .map_err(Error::Db)?
@@ -632,7 +673,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             .query_all_raw(Statement::from_sql_and_values(
                 backend,
                 sql,
-                vec![Value::from(holder.as_str().to_owned())],
+                vec![holder_value(self.holder_id_kind, holder)?],
             ))
             .await
             .map_err(Error::Db)?;
@@ -700,7 +741,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let mut ids = Vec::with_capacity(rows.len());
         for row in &rows {
             let id: String = row.try_get("", "user_id").map_err(Error::Db)?;
-            ids.push(ResourceId::new(id));
+            ids.push(decode_holder_id(self.holder_id_kind, &id));
         }
         Ok(ids)
     }
@@ -742,7 +783,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let mut ids = Vec::with_capacity(rows.len());
         for row in &rows {
             let id: String = row.try_get("", "user_id").map_err(Error::Db)?;
-            ids.push(ResourceId::new(id));
+            ids.push(decode_holder_id(self.holder_id_kind, &id));
         }
         Ok(ids)
     }
@@ -842,7 +883,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                 cast_to_text(backend, "holder.id"),
                 placeholder(backend, index)
             );
-            values.push(Value::from(holder_id.as_str().to_owned()));
+            values.push(holder_value(self.holder_id_kind, holder_id)?);
         }
 
         self.bump(1);
@@ -1020,7 +1061,7 @@ impl<C: ConnectionTrait + Send + 'static> ResourceStore for SeaormStore<C> {
              WHERE link.user_id = {} AND role_row.name IN ({name_placeholders})",
             placeholder(backend, 1),
         );
-        let mut values = vec![Value::from(holder.as_str().to_owned())];
+        let mut values = vec![holder_value(self.holder_id_kind, holder)?];
         for name in names {
             values.push(Value::from(name.as_str().to_owned()));
         }
