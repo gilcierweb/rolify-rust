@@ -38,7 +38,7 @@ pub enum ParsedHolderId {
 ///
 /// ```
 /// use rolify_core::config::HolderIdKind;
-/// use rolify_core::holder::parse_holder_id;
+/// use rolify_core::holder::{ParsedHolderId, parse_holder_id};
 ///
 /// let parsed = parse_holder_id(HolderIdKind::Integer, "42").unwrap();
 /// assert_eq!(parsed, ParsedHolderId::Integer(42));
@@ -105,10 +105,12 @@ fn parse_integer(input: &str) -> Result<ParsedHolderId, RolifyError> {
             got: input.to_owned(),
         });
     }
-    let value = input.parse::<i64>().map_err(|_| RolifyError::InvalidHolderId {
-        expected: "integer",
-        got: input.to_owned(),
-    })?;
+    let value = input
+        .parse::<i64>()
+        .map_err(|_| RolifyError::InvalidHolderId {
+            expected: "integer",
+            got: input.to_owned(),
+        })?;
     Ok(ParsedHolderId::Integer(value))
 }
 
@@ -164,7 +166,10 @@ mod tests {
         // Empty
         assert!(matches!(
             parse_holder_id(HolderIdKind::Integer, ""),
-            Err(RolifyError::InvalidHolderId { expected: "integer", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "integer",
+                ..
+            })
         ));
         // Leading zeros - now re-canonicalized (e.g., "007" -> 7)
         assert_eq!(
@@ -174,27 +179,42 @@ mod tests {
         // Plus sign
         assert!(matches!(
             parse_holder_id(HolderIdKind::Integer, "+7"),
-            Err(RolifyError::InvalidHolderId { expected: "integer", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "integer",
+                ..
+            })
         ));
         // Whitespace
         assert!(matches!(
             parse_holder_id(HolderIdKind::Integer, " 7 "),
-            Err(RolifyError::InvalidHolderId { expected: "integer", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "integer",
+                ..
+            })
         ));
         // Overflow (i64::MAX + 1)
         assert!(matches!(
             parse_holder_id(HolderIdKind::Integer, "9223372036854775808"),
-            Err(RolifyError::InvalidHolderId { expected: "integer", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "integer",
+                ..
+            })
         ));
         // -0
         assert!(matches!(
             parse_holder_id(HolderIdKind::Integer, "-0"),
-            Err(RolifyError::InvalidHolderId { expected: "integer", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "integer",
+                ..
+            })
         ));
         // Non-numeric
         assert!(matches!(
             parse_holder_id(HolderIdKind::Integer, "abc"),
-            Err(RolifyError::InvalidHolderId { expected: "integer", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "integer",
+                ..
+            })
         ));
     }
 
@@ -228,15 +248,24 @@ mod tests {
     fn parse_uuid_rejects_invalid() {
         assert!(matches!(
             parse_holder_id(HolderIdKind::Uuid, "not-a-uuid"),
-            Err(RolifyError::InvalidHolderId { expected: "uuid", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "uuid",
+                ..
+            })
         ));
         assert!(matches!(
             parse_holder_id(HolderIdKind::Uuid, ""),
-            Err(RolifyError::InvalidHolderId { expected: "uuid", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "uuid",
+                ..
+            })
         ));
         assert!(matches!(
             parse_holder_id(HolderIdKind::Uuid, "123"),
-            Err(RolifyError::InvalidHolderId { expected: "uuid", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "uuid",
+                ..
+            })
         ));
     }
 
