@@ -29,7 +29,7 @@ CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
 CREATE INDEX idx_roles_name ON roles (name);
 
 CREATE TABLE users_roles (
-    user_id {{holder_id_type}} NOT NULL,
+    user_id {{holder_id_type}} NOT NULL{{holder_fk}},
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );

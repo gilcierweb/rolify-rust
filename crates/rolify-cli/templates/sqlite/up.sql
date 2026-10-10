@@ -31,5 +31,5 @@ CREATE TABLE users_roles (
     user_id {{holder_id_type}} NOT NULL,
     role_id INTEGER NOT NULL,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id),
-    CONSTRAINT users_roles_role_id_fk FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+    CONSTRAINT users_roles_role_id_fk FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE{{holder_fk}}
 );

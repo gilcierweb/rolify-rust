@@ -979,7 +979,7 @@ fn explicit_join_table_with_roles_substring_survives() {
 
 /// Tests that MySQL template substitutes holder_id_type correctly for uuid kind.
 #[test]
-fn mysql_uuid_kind() {
+fn generate_mysql_uuid_kind() {
     let dir = test_temp_dir();
     let out_dir = dir.to_str().unwrap();
 
@@ -1014,7 +1014,7 @@ fn mysql_uuid_kind() {
 
 /// Tests that SQLite template substitutes holder_id_type correctly for integer kind.
 #[test]
-fn sqlite_integer_kind() {
+fn generate_sqlite_integer_kind() {
     let dir = test_temp_dir();
     let out_dir = dir.to_str().unwrap();
 
@@ -1066,4 +1066,178 @@ fn mysql_string_kind() {
         up_sql.contains("VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"),
         "MySQL string up.sql must contain full charset clause, got:\n{up_sql}"
     );
+}
+
+/// Tests that the postgres template substitutes `holder_id_type` correctly for
+/// uuid kind (native UUID column).
+#[test]
+fn generate_postgres_uuid_kind() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--holder-id-type",
+            "uuid",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    let up_sql = fs::read_to_string(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql")).unwrap();
+    assert!(
+        up_sql.contains("user_id UUID NOT NULL"),
+        "postgres uuid up.sql must contain 'user_id UUID NOT NULL', got:\n{up_sql}"
+    );
+}
+
+/// Tests that `--with-holder-fk` adds the holder foreign key on every engine
+/// for a non-string kind: Postgres inline on the `user_id` column and
+/// MySQL/SQLite as a table-level constraint (D-08-07).
+#[test]
+fn generate_with_holder_fk() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--with-holder-fk",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    let postgres_up = fs::read_to_string(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql")).unwrap();
+    assert!(
+        postgres_up.contains("user_id BIGINT NOT NULL REFERENCES users(id),"),
+        "postgres postgres-holder FK must be inline, got:\n{postgres_up}"
+    );
+
+    for engine in ["mysql", "sqlite"] {
+        let up_sql = fs::read_to_string(dir.join(format!(
+            "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
+        )))
+        .unwrap();
+        assert!(
+            up_sql.contains(
+                "CONSTRAINT users_roles_user_id_fk FOREIGN KEY (user_id) REFERENCES users(id)"
+            ),
+            "{engine} holder FK must be a table-level constraint, got:\n{up_sql}"
+        );
+    }
+}
+
+/// Tests that `--with-holder-fk` is a no-op for the string kind: the gem-era
+/// canonical string holder id never gets a foreign key (D-08-07).
+#[test]
+fn generate_with_holder_fk_string_noop() {
+    let dir = test_temp_dir();
+    let out_dir = dir.to_str().unwrap();
+
+    rolify_cli()
+        .args([
+            "generate",
+            "--backend",
+            "diesel",
+            "Role",
+            "User",
+            "--holder-id-type",
+            "string",
+            "--with-holder-fk",
+            "--out-dir",
+            out_dir,
+        ])
+        .assert()
+        .success();
+
+    for engine in ["postgres", "mysql", "sqlite"] {
+        let up_sql = fs::read_to_string(dir.join(format!(
+            "migrations/{engine}/0000000001_rolify_create_tables/up.sql"
+        )))
+        .unwrap();
+        assert!(
+            !up_sql.contains("REFERENCES users(id)"),
+            "{engine} string kind must not emit a holder FK, got:\n{up_sql}"
+        );
+        assert!(
+            !up_sql.contains("_user_id_fk"),
+            "{engine} string kind must not emit a holder FK constraint, got:\n{up_sql}"
+        );
+    }
+}
+
+/// Tests that the scaffolded `config_example.rs` pins the selected holder id
+/// kind explicitly as a `HolderIdKind` variant (D-08-03).
+#[test]
+fn generate_config_example_pins_kind() {
+    for (kind, variant) in [("integer", "Integer"), ("uuid", "Uuid"), ("string", "String")] {
+        let dir = test_temp_dir();
+        let out_dir = dir.to_str().unwrap();
+
+        rolify_cli()
+            .args([
+                "generate",
+                "--backend",
+                "diesel",
+                "Role",
+                "User",
+                "--holder-id-type",
+                kind,
+                "--out-dir",
+                out_dir,
+            ])
+            .assert()
+            .success();
+
+        let config = fs::read_to_string(dir.join("postgres/config_example.rs")).unwrap();
+        let pinned = format!(".holder_id_kind(HolderIdKind::{variant})");
+        assert!(
+            config.contains(&pinned),
+            "config_example.rs must pin {pinned}, got:\n{config}"
+        );
+    }
+}
+
+/// Tests that the scaffolded `holder_stub.rs` renders the kind-appropriate id
+/// field type: `i64` (integer), `uuid::Uuid` (uuid), `String` (string).
+#[test]
+fn generate_holder_stub_id_type() {
+    for (kind, id_type) in [("integer", "i64"), ("uuid", "uuid::Uuid"), ("string", "String")] {
+        let dir = test_temp_dir();
+        let out_dir = dir.to_str().unwrap();
+
+        rolify_cli()
+            .args([
+                "generate",
+                "--backend",
+                "diesel",
+                "Role",
+                "User",
+                "--holder-id-type",
+                kind,
+                "--out-dir",
+                out_dir,
+            ])
+            .assert()
+            .success();
+
+        let holder_stub = fs::read_to_string(dir.join("postgres/holder_stub.rs")).unwrap();
+        let field = format!("pub id: {id_type},");
+        assert!(
+            holder_stub.contains(&field),
+            "holder_stub.rs for {kind} must declare '{field}', got:\n{holder_stub}"
+        );
+    }
 }

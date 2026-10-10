@@ -37,6 +37,7 @@ const POSTGRES_UP_STATEMENTS: &[&str] = &[
 -- D-03: VARCHAR sizes: name(255), resource_type(191), resource_id(191).
 -- D-12: roles.id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY.
 -- D-13: timestamps NOT NULL DEFAULT CURRENT_TIMESTAMP (updated_at static; roles never UPDATE).
+-- D-08: holder_id_type substitution: BIGINT expands to BIGINT (integer), UUID (uuid), or VARCHAR(191) (string).
 
 CREATE TABLE roles (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -50,7 +51,7 @@ CREATE TABLE roles (
     r"CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);",
     r"CREATE INDEX idx_roles_name ON roles (name);",
     r"CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL,
+    user_id BIGINT NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );",
@@ -92,7 +93,7 @@ CREATE TABLE roles (
     r"CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);",
     r"CREATE INDEX idx_roles_name ON roles (name);",
     r"CREATE TABLE users_roles (
-    user_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    user_id BIGINT NOT NULL,
     role_id BIGINT NOT NULL,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id),
     CONSTRAINT users_roles_role_id_fk FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
@@ -130,7 +131,7 @@ CREATE TABLE roles (
     r"CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);",
     r"CREATE INDEX idx_roles_name ON roles (name);",
     r"CREATE TABLE users_roles (
-    user_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
     role_id INTEGER NOT NULL,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id),
     CONSTRAINT users_roles_role_id_fk FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE

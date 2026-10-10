@@ -21,6 +21,51 @@ pub(crate) const ROLES_TABLE_SENTINEL: &str = "roles";
 /// Canonical holder-id-type sentinel in the vendored templates.
 pub(crate) const HOLDER_ID_TYPE_SENTINEL: &str = "{{holder_id_type}}";
 
+/// Canonical optional-holder-foreign-key sentinel in the vendored up templates
+/// (D-08-07).
+pub(crate) const HOLDER_FK_SENTINEL: &str = "{{holder_fk}}";
+
+/// Derives the holder table name from the holder name: the lowercase form,
+/// pluralized by appending `s` unless it already ends in one. This mirrors the
+/// join-table derivation in [`RenderPlan::from_args`] (`User` -> `users`,
+/// `Customer` -> `customers`), so the optional holder foreign key points at
+/// the consumer's conventional holder table.
+///
+/// [`RenderPlan::from_args`]: crate::render::RenderPlan::from_args
+pub(crate) fn holder_table_name(holder_name: &str) -> String {
+    let lowercase = holder_name.to_lowercase();
+    if lowercase.ends_with('s') {
+        lowercase
+    } else {
+        format!("{lowercase}s")
+    }
+}
+
+/// Builds the optional holder-foreign-key clause for the given plan and engine
+/// (D-08-07).
+///
+/// Disabled by default and a byte-identical no-op then (the canonical trees
+/// carry no holder foreign key, matching the gem, which emits no foreign keys
+/// at all). When `with_holder_fk` is set AND the holder id kind is non-string,
+/// Postgres carries the FK inline on the `user_id` column and MySQL/SQLite
+/// carry it as a table-level constraint after the existing `role_id` FK,
+/// matching each engine's DDL style. String kind is deliberately a no-op: the
+/// flag must never widen a schema whose holder id is the gem-era canonical
+/// string column.
+pub(crate) fn holder_fk_clause(plan: &RenderPlan, engine: &str) -> String {
+    if !plan.with_holder_fk || plan.holder_id_kind == HolderIdKind::String {
+        return String::new();
+    }
+    let holder_table = holder_table_name(&plan.holder_name);
+    match engine {
+        "postgres" => format!(" REFERENCES {holder_table}(id)"),
+        "mysql" | "sqlite" => format!(
+            ",\n    CONSTRAINT {JOIN_TABLE_SENTINEL}_user_id_fk FOREIGN KEY (user_id) REFERENCES {holder_table}(id)"
+        ),
+        _ => String::new(),
+    }
+}
+
 /// Re-scan-free table-name substitution (D-14).
 ///
 /// The naive two-pass chain
@@ -35,10 +80,16 @@ pub(crate) const HOLDER_ID_TYPE_SENTINEL: &str = "{{holder_id_type}}";
 /// substitution, so no pass can touch it. For every name pair the previous
 /// longest-first chain handled correctly, the output is byte-identical
 /// (the equivalence unit test pins that).
+///
+/// The optional holder-foreign-key substitution (D-08-07) runs BEFORE the
+/// join split so the clause's own derived constraint name rides the same
+/// re-scan-free split/join: the `join_table` therefore names the FK
+/// constraint even under custom names.
 pub(crate) fn substitute_table_names(template: &str, plan: &RenderPlan, engine: &str) -> String {
     let holder_id_type = holder_id_type_sql(plan.holder_id_kind, engine);
     template
         .replace(HOLDER_ID_TYPE_SENTINEL, holder_id_type)
+        .replace(HOLDER_FK_SENTINEL, &holder_fk_clause(plan, engine))
         .split(JOIN_TABLE_SENTINEL)
         .map(|segment| segment.replace(ROLES_TABLE_SENTINEL, &plan.roles_table))
         .collect::<Vec<_>>()
@@ -89,7 +140,9 @@ mod tests {
         for engine in ["postgres", "mysql", "sqlite"] {
             for template in [templates::up(engine), templates::down(engine)] {
                 let expected_type = holder_id_type_sql(rolify_core::config::HolderIdKind::String, engine);
-                let expected = template.replace("{{holder_id_type}}", expected_type);
+                let expected = template
+                    .replace("{{holder_id_type}}", expected_type)
+                    .replace(HOLDER_FK_SENTINEL, "");
                 assert_eq!(
                     substitute_table_names(template, &default_plan, engine),
                     expected,
@@ -148,6 +201,7 @@ mod tests {
                 let expected_type = holder_id_type_sql(rolify_core::config::HolderIdKind::Integer, engine);
                 let longest_first = template
                     .replace("{{holder_id_type}}", expected_type)
+                    .replace(HOLDER_FK_SENTINEL, "")
                     .replace("users_roles", &custom_plan.join_table)
                     .replace("roles", &custom_plan.roles_table);
                 assert_eq!(
@@ -157,5 +211,97 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Without the flag the holder-FK sentinel is a byte-identical no-op on
+    /// every engine: the canonical trees carry no holder foreign key, so the
+    /// drift guard stays green (D-08-07).
+    #[test]
+    fn holder_fk_clause_disabled_by_default() {
+        for engine in ["postgres", "mysql", "sqlite"] {
+            let default_plan = plan("roles", "users_roles", rolify_core::config::HolderIdKind::Integer);
+            let rendered = substitute_table_names(templates::up(engine), &default_plan, engine);
+            assert!(
+                !rendered.contains("{{holder_fk}}") && !rendered.contains("_user_id_fk"),
+                "flag-off render for {engine} must not carry a holder FK"
+            );
+        }
+    }
+
+    /// With the flag on and a non-string kind, Postgres carries the FK inline
+    /// on the `user_id` column and MySQL/SQLite carry it as a table-level
+    /// constraint, matching each engine's DDL style (D-08-07).
+    #[test]
+    fn holder_fk_clause_emits_per_engine() {
+        for (engine, expected) in [
+            (
+                "postgres",
+                "    user_id BIGINT NOT NULL REFERENCES users(id),",
+            ),
+            (
+                "mysql",
+                "CONSTRAINT users_roles_user_id_fk FOREIGN KEY (user_id) REFERENCES users(id)",
+            ),
+            (
+                "sqlite",
+                "CONSTRAINT users_roles_user_id_fk FOREIGN KEY (user_id) REFERENCES users(id)",
+            ),
+        ] {
+            let fk_plan = RenderPlan {
+                with_holder_fk: true,
+                ..plan("roles", "users_roles", rolify_core::config::HolderIdKind::Integer)
+            };
+            let rendered = substitute_table_names(templates::up(engine), &fk_plan, engine);
+            assert!(
+                rendered.contains(expected),
+                "flag-on render for {engine} missing expected FK clause: {expected}"
+            );
+        }
+    }
+
+    /// String kind suppresses the FK even when the flag is set: the gem-era
+    /// canonical string holder id never gets a foreign key (D-08-07).
+    #[test]
+    fn holder_fk_clause_string_kind_is_noop() {
+        let fk_plan = RenderPlan {
+            with_holder_fk: true,
+            ..plan("roles", "users_roles", rolify_core::config::HolderIdKind::String)
+        };
+        let rendered = substitute_table_names(templates::up("postgres"), &fk_plan, "postgres");
+        assert!(
+            !rendered.contains("REFERENCES users(id)"),
+            "string kind must never emit a holder FK: {rendered}"
+        );
+    }
+
+    /// The FK constraint name rides the same re-scan-free split/join, so a
+    /// custom join table names the constraint (D-08-07, D-14).
+    #[test]
+    fn holder_fk_clause_honors_custom_join_table() {
+        let fk_plan = RenderPlan {
+            with_holder_fk: true,
+            ..plan("privileges", "customers_privileges", rolify_core::config::HolderIdKind::Integer)
+        };
+        let rendered = substitute_table_names(templates::up("mysql"), &fk_plan, "mysql");
+        assert!(
+            rendered.contains(
+                "CONSTRAINT customers_privileges_user_id_fk FOREIGN KEY (user_id) REFERENCES users(id)"
+            ),
+            "custom join table must name the FK constraint: {rendered}"
+        );
+        assert!(
+            !rendered.contains("users_roles_user_id_fk"),
+            "default join sentinel must not survive in the FK constraint name"
+        );
+    }
+
+    /// The holder table name derives from the holder name exactly like the
+    /// join-table derivation (pluralize unless the lowercase form ends in `s`).
+    #[test]
+    fn holder_table_name_pluralizes() {
+        assert_eq!(holder_table_name("User"), "users");
+        assert_eq!(holder_table_name("Customer"), "customers");
+        assert_eq!(holder_table_name("Business"), "business");
+        assert_eq!(holder_table_name("people"), "peoples");
     }
 }

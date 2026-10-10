@@ -1,15 +1,41 @@
 use rolify_cli::args::Backend;
 use rolify_cli::emitters::{mongo::render_mongo, seaorm::render_seaorm};
 use rolify_cli::render::{RenderPlan, render_all};
+use rolify_core::config::HolderIdKind;
 use std::fs;
 
-/// Reads the canonical diesel migration file for the given engine and file.
-fn read_canonical(engine: &str, file: &str) -> String {
+/// The three holder id kinds and their canonical subtree names, ordered as the
+/// kind-decided trees land on disk (`integer`, `uuid`, `string`).
+const KINDS: [(HolderIdKind, &str); 3] = [
+    (HolderIdKind::Integer, "integer"),
+    (HolderIdKind::Uuid, "uuid"),
+    (HolderIdKind::String, "string"),
+];
+
+/// Reads the canonical diesel migration file for the given engine, kind, and
+/// file. The kind-decided trees live one level deeper than the legacy
+/// kind-less trees (`{engine}/{kind}/0000000001_rolify_create_tables/{file}`).
+fn read_canonical(engine: &str, kind: &str, file: &str) -> String {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let path = format!(
-        "{manifest_dir}/../rolify-diesel/migrations/{engine}/0000000001_rolify_create_tables/{file}"
+        "{manifest_dir}/../rolify-diesel/migrations/{engine}/{kind}/0000000001_rolify_create_tables/{file}"
     );
     fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read canonical file: {path}"))
+}
+
+/// Reads the canonical sqlx migration file for the given engine, kind, and
+/// file. The sqlx tree is flat: the up script is
+/// `{engine}/{kind}/0000000001_rolify_create_tables.sql` and the down script
+/// carries a `.down.sql` suffix.
+fn read_sqlx_canonical(engine: &str, kind: &str, file: &str) -> String {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let suffix = if file == "up.sql" {
+        "0000000001_rolify_create_tables.sql"
+    } else {
+        "0000000001_rolify_create_tables.down.sql"
+    };
+    let path = format!("{manifest_dir}/../rolify-sqlx/migrations/{engine}/{kind}/{suffix}");
+    fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read sqlx canonical file: {path}"))
 }
 
 /// Reads the expected snapshot file for `SeaORM` or Mongo.
@@ -19,7 +45,24 @@ fn read_expected_snapshot(name: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read expected snapshot: {path}"))
 }
 
-/// Tests that the renderer output matches the canonical diesel files byte-for-byte.
+/// Asserts `actual` equals the checked-in snapshot `name`, OR rewrites the
+/// snapshot when `ROLIFY_UPDATE_SNAPSHOTS=1` is set (T-08-17). Regeneration
+/// therefore always flows through the library render that produced `actual`;
+/// the snapshot is never hand-edited.
+fn assert_snapshot(name: &str, actual: &str) {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let path = format!("{manifest_dir}/tests/expected/{name}");
+    if std::env::var("ROLIFY_UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+        fs::write(&path, actual)
+            .unwrap_or_else(|_| panic!("failed to rewrite snapshot via library render: {path}"));
+        return;
+    }
+    let expected = read_expected_snapshot(name);
+    assert_eq!(actual, expected, "snapshot mismatch: {name}");
+}
+
+/// Tests that the default renderer output (no flags -> integer kind) matches
+/// the canonical diesel integer tree byte-for-byte.
 #[test]
 fn renderer_matches_canonical_default_names() {
     let engines = ["postgres", "mysql", "sqlite"];
@@ -35,7 +78,7 @@ fn renderer_matches_canonical_default_names() {
             holder_name: "User".to_string(),
             roles_table: "roles".to_string(),
             join_table: "users_roles".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+            holder_id_kind: HolderIdKind::Integer,
             with_holder_fk: false,
         };
 
@@ -55,8 +98,8 @@ fn renderer_matches_canonical_default_names() {
             .find(|file| file.path.ends_with("down.sql"))
             .unwrap();
 
-        let expected_up = read_canonical(engine, "up.sql");
-        let expected_down = read_canonical(engine, "down.sql");
+        let expected_up = read_canonical(engine, "integer", "up.sql");
+        let expected_down = read_canonical(engine, "integer", "down.sql");
 
         assert_eq!(
             up_file.content, expected_up,
@@ -66,6 +109,67 @@ fn renderer_matches_canonical_default_names() {
             down_file.content, expected_down,
             "down.sql mismatch for engine: {engine}"
         );
+    }
+}
+
+/// Tests that the renderer output matches the canonical per-kind diesel tree
+/// byte-for-byte for all three holder id kinds across all three engines, and
+/// that the sqlx parallel trees carry the identical bytes (D-11 identity,
+/// held in the drift guard as well as by construction).
+#[test]
+fn renderer_matches_canonical_all_kinds() {
+    for engine in ["postgres", "mysql", "sqlite"] {
+        for (kind, kind_name) in KINDS {
+            let plan = RenderPlan {
+                backend: Backend::Diesel,
+                role_name: "Role".to_string(),
+                holder_name: "User".to_string(),
+                roles_table: "roles".to_string(),
+                join_table: "users_roles".to_string(),
+                holder_id_kind: kind,
+                with_holder_fk: false,
+            };
+
+            let rendered = render_all(&plan)
+                .unwrap_or_else(|error| panic!("render failed for {engine}/{kind_name}: {error:?}"));
+            let files = rendered
+                .get(engine)
+                .unwrap_or_else(|| panic!("no files for engine: {engine}"));
+
+            let up_file = files
+                .iter()
+                .find(|file| file.path.ends_with("up.sql"))
+                .unwrap();
+            let down_file = files
+                .iter()
+                .find(|file| file.path.ends_with("down.sql"))
+                .unwrap();
+
+            let expected_up = read_canonical(engine, kind_name, "up.sql");
+            let expected_down = read_canonical(engine, kind_name, "down.sql");
+
+            assert_eq!(
+                up_file.content, expected_up,
+                "up.sql mismatch for engine {engine}, kind {kind_name}"
+            );
+            assert_eq!(
+                down_file.content, expected_down,
+                "down.sql mismatch for engine {engine}, kind {kind_name}"
+            );
+
+            // D-11 identity is re-asserted in the drift guard: the sqlx
+            // parallel tree must carry the same bytes for this kind.
+            assert_eq!(
+                read_sqlx_canonical(engine, kind_name, "up.sql"),
+                expected_up,
+                "sqlx up.sql diverged from the diesel canonical tree for engine {engine}, kind {kind_name}"
+            );
+            assert_eq!(
+                read_sqlx_canonical(engine, kind_name, "down.sql"),
+                expected_down,
+                "sqlx down.sql diverged from the diesel canonical tree for engine {engine}, kind {kind_name}"
+            );
+        }
     }
 }
 
@@ -134,9 +238,7 @@ fn seaorm_renderer_matches_snapshot() {
     };
 
     let rendered = render_seaorm(&plan).unwrap();
-    let expected = read_expected_snapshot("seaorm_migration.rs");
-
-    assert_eq!(rendered, expected, "SeaORM migration snapshot mismatch");
+    assert_snapshot("seaorm_migration.rs", &rendered);
 }
 
 /// Tests `SeaORM` custom names substitution (longest-first rule).
@@ -386,8 +488,8 @@ fn seaorm_dialect_arrays_match_canonical_per_engine() {
         ("mysql", "MYSQL"),
         ("sqlite", "SQLITE"),
     ] {
-        let canonical_up = read_canonical(engine, "up.sql");
-        let canonical_down = read_canonical(engine, "down.sql");
+        let canonical_up = read_canonical(engine, "integer", "up.sql");
+        let canonical_down = read_canonical(engine, "integer", "down.sql");
 
         // Up: substitution first, then the split (the emitter's documented
         // pipeline order, mirrored locally).
@@ -691,18 +793,10 @@ fn custom_names_postgres_matches_snapshots() {
         .find(|file| file.path.ends_with("down.sql"))
         .unwrap();
 
-    let expected_up = read_expected_snapshot("custom_privileges_postgres_up.sql");
-    let expected_down = read_expected_snapshot("custom_privileges_postgres_down.sql");
-
-    // Full-file equality, not just contains (Pitfall 2)
-    assert_eq!(
-        up_file.content, expected_up,
-        "custom up.sql snapshot mismatch (longest-first rule violated)"
-    );
-    assert_eq!(
-        down_file.content, expected_down,
-        "custom down.sql snapshot mismatch"
-    );
+    // Full-file equality, not just contains (Pitfall 2). Regeneration flows
+    // through the library render under ROLIFY_UPDATE_SNAPSHOTS=1 (T-08-17).
+    assert_snapshot("custom_privileges_postgres_up.sql", &up_file.content);
+    assert_snapshot("custom_privileges_postgres_down.sql", &down_file.content);
 
     // Explicit renamed-identifier assertions (T-06-06)
     let content = &up_file.content;
