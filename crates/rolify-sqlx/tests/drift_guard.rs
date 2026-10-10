@@ -29,6 +29,13 @@ use std::path::{Path, PathBuf};
 /// engines, so the intersection is the full set. Nothing else is vendored.
 const ENGINES: [&str; 3] = ["postgres", "mysql", "sqlite"];
 
+/// Per-kind migration subtrees on the canonical diesel side (Phase 08
+/// D-08-04): `migrations/<engine>/<kind>/<VERSION>_<DESCRIPTION>/`. They are
+/// directories, not flat version-prefixed migrations, so both drift-guard
+/// directions skip them. Their byte-identity against the CLI render per kind
+/// is the CLI drift sweep's job (Plan 08-05).
+const PER_KIND_SUBTREES: [&str; 3] = ["integer", "uuid", "string"];
+
 #[test]
 fn vendored_migrations_are_byte_identical_to_canonical() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -54,6 +61,21 @@ fn vendored_migrations_are_byte_identical_to_canonical() {
         // vendored on the flat layout, byte-identically, both directions of
         // the file pair.
         for canonical_migration_dir in sorted_entries(&canonical_engine_dir) {
+            // Per-kind subtrees (`integer/`, `uuid/`, `string/`, Phase 08
+            // D-08-04) are directories, not flat migrations: skip them here
+            // (mirrors the direction-2 skip). Their byte-identity per kind is
+            // the CLI drift sweep's job (Plan 08-05).
+            if canonical_migration_dir.is_dir()
+                && PER_KIND_SUBTREES.contains(
+                    &canonical_migration_dir
+                        .file_name()
+                        .expect("canonical migration directory always has a file name")
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+            {
+                continue;
+            }
             assert!(
                 canonical_migration_dir.is_dir(),
                 "canonical migration entry `{}` must be a directory (diesel layout \
