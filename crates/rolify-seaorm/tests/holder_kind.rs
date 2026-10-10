@@ -16,7 +16,7 @@
 mod support;
 
 use rolify_core::config::{HolderIdKind, RolifyConfig};
-use rolify_seaorm::migration::m20261003_000001_create_roles::{get_statements, MigrationDirection};
+use rolify_seaorm::migration::m20261003_000001_create_roles::{MigrationDirection, get_statements};
 use sea_orm::{ConnectionTrait, DbBackend};
 
 /// Canonical holder id string per kind (matches `data.rs` shapes).
@@ -67,8 +67,8 @@ async fn apply_migration(
     backend: DbBackend,
     kind: HolderIdKind,
 ) {
-    let stmts = get_statements(backend, kind, MigrationDirection::Up)
-        .expect("get migration statements");
+    let stmts =
+        get_statements(backend, kind, MigrationDirection::Up).expect("get migration statements");
     for stmt in stmts {
         conn.execute_unprepared(stmt)
             .await
@@ -77,18 +77,21 @@ async fn apply_migration(
 }
 
 /// Drop all tables for the given backend.
-async fn drop_tables(
-    conn: &sea_orm::DatabaseConnection,
-    backend: DbBackend,
-) {
+async fn drop_tables(conn: &sea_orm::DatabaseConnection, backend: DbBackend) {
     let stmts = get_statements(backend, HolderIdKind::Integer, MigrationDirection::Down)
         .expect("get down migration statements");
     for stmt in stmts {
-        let _ = conn.execute_raw(sea_orm::Statement::from_sql_and_values(backend, *stmt, vec![])).await; // ignore errors
+        let _ = conn
+            .execute_raw(sea_orm::Statement::from_sql_and_values(
+                backend,
+                *stmt,
+                vec![],
+            ))
+            .await; // ignore errors
     }
 }
 
-/// Postgres leg: testcontainers (runs where Docker is available).
+/// `Postgres` leg: testcontainers (runs where Docker is available).
 #[cfg(feature = "postgres")]
 mod postgres {
     use rolify_core::config::HolderIdKind;
@@ -98,13 +101,14 @@ mod postgres {
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName};
     use rolify_core::store::RoleStore;
-    use rolify_seaorm::{SeaormStore, Error};
+    use rolify_seaorm::{Error, SeaormStore};
     use sea_orm::DatabaseConnection;
 
     use crate::support::pg::connect as pg_conn;
-    #[cfg(feature = "mysql")]
-    use crate::support::mysql::connect as mysql_conn;
-    use crate::{all_kinds, holder_id_for, invalid_holder_id_for, rejecting_kinds, config_for, apply_migration, drop_tables};
+    use crate::{
+        all_kinds, apply_migration, config_for, drop_tables, holder_id_for, invalid_holder_id_for,
+        rejecting_kinds,
+    };
 
     fn store_for(kind: HolderIdKind) -> SeaormStore<DatabaseConnection> {
         SeaormStore::new(&config_for(kind))
@@ -119,6 +123,11 @@ mod postgres {
 
     #[tokio::test]
     async fn lifecycle_all_kinds() {
+        // The fresh_conn drop+apply sequence races against the sibling test
+        // on this engine when both target the SHARED container database;
+        // the suite guard serializes the two for the whole test body
+        // (diesel holder_kind.rs precedent, commit 52be22e).
+        let _suite_guard = crate::support::SuiteGuard::acquire();
         for kind in all_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
@@ -135,7 +144,10 @@ mod postgres {
 
             // add
             assert!(
-                store.add(&mut conn, &holder, &admin).await.expect("add admin"),
+                store
+                    .add(&mut conn, &holder, &admin)
+                    .await
+                    .expect("add admin"),
                 "first add inserts a link for {kind:?}"
             );
             // idempotent add
@@ -192,6 +204,8 @@ mod postgres {
 
     #[tokio::test]
     async fn invalid_holder_id_rejected_all_kinds() {
+        // Same shared-container serialization as the lifecycle leg.
+        let _suite_guard = crate::support::SuiteGuard::acquire();
         for kind in rejecting_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
@@ -206,17 +220,14 @@ mod postgres {
                 .await
                 .expect_err("invalid holder id must be rejected pre-SQL");
             assert!(
-                matches!(
-                    error,
-                    Error::Core(RolifyError::InvalidHolderId { .. })
-                ),
+                matches!(error, Error::Core(RolifyError::InvalidHolderId { .. })),
                 "expected InvalidHolderId for {kind:?}, got {error:?}"
             );
         }
     }
 }
 
-/// MySQL leg: testcontainers (CI-only where libmysqlclient is installed).
+/// `MySQL` leg: testcontainers (CI-only where libmysqlclient is installed).
 #[cfg(feature = "mysql")]
 mod mysql {
     use rolify_core::config::HolderIdKind;
@@ -226,18 +237,21 @@ mod mysql {
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName};
     use rolify_core::store::RoleStore;
-    use rolify_seaorm::{SeaormStore, Error};
+    use rolify_seaorm::{Error, SeaormStore};
     use sea_orm::DatabaseConnection;
 
-    use crate::support::mysql_conn;
-    use crate::{all_kinds, holder_id_for, invalid_holder_id_for, rejecting_kinds, config_for, apply_migration, drop_tables};
+    use crate::support::mysql::connect as mysql_conn;
+    use crate::{
+        all_kinds, apply_migration, config_for, drop_tables, holder_id_for, invalid_holder_id_for,
+        rejecting_kinds,
+    };
 
     fn store_for(kind: HolderIdKind) -> SeaormStore<DatabaseConnection> {
         SeaormStore::new(&config_for(kind))
     }
 
     async fn fresh_conn(kind: HolderIdKind) -> DatabaseConnection {
-        let mut conn = mysql_conn().await;
+        let conn = mysql_conn().await;
         drop_tables(&conn, sea_orm::DbBackend::MySql).await;
         apply_migration(&conn, sea_orm::DbBackend::MySql, kind).await;
         conn
@@ -245,6 +259,11 @@ mod mysql {
 
     #[tokio::test]
     async fn lifecycle_all_kinds() {
+        // The fresh_conn drop+apply sequence races against the sibling test
+        // on this engine when both target the SHARED container database;
+        // the suite guard serializes the two for the whole test body
+        // (diesel holder_kind.rs precedent, commit 52be22e).
+        let _suite_guard = crate::support::SuiteGuard::acquire();
         for kind in all_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
@@ -260,7 +279,10 @@ mod mysql {
             };
 
             assert!(
-                store.add(&mut conn, &holder, &admin).await.expect("add admin"),
+                store
+                    .add(&mut conn, &holder, &admin)
+                    .await
+                    .expect("add admin"),
                 "first add inserts a link for {kind:?}"
             );
             assert_eq!(
@@ -297,6 +319,8 @@ mod mysql {
 
     #[tokio::test]
     async fn invalid_holder_id_rejected_all_kinds() {
+        // Same shared-container serialization as the lifecycle leg.
+        let _suite_guard = crate::support::SuiteGuard::acquire();
         for kind in rejecting_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);

@@ -74,7 +74,7 @@ pub mod pg {
 
 #[cfg(feature = "mysql")]
 #[allow(dead_code)] // dual-feature builds route `connect()` to Postgres
-mod mysql {
+pub mod mysql {
     use super::*;
     use testcontainers_modules::mysql;
 

@@ -16,6 +16,9 @@ mod support;
 
 use rolify_core::config::{HolderIdKind, RolifyConfig};
 
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// Canonical holder id string per kind (matches `data.rs` shapes).
 fn holder_id_for(kind: HolderIdKind) -> &'static str {
     match kind {
@@ -58,7 +61,72 @@ fn config_for(kind: HolderIdKind) -> RolifyConfig {
         .expect("default config")
 }
 
-/// SQLite leg: no container, runs locally for all three kinds.
+/// Split a multi-statement SQL file into individual statements, skipping
+/// comment lines (`cli/tests/e2e_engines.rs` precedent): Postgres and
+/// `MySQL` reject multiple commands inside one prepared statement
+/// (SQLSTATE 42601 on Postgres), so the canonical per-kind migration file
+/// is applied one statement at a time. `SQLite` takes the same split
+/// path identically.
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+
+    for line in sql.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("--") {
+            continue;
+        }
+
+        current.push_str(line);
+        current.push('\n');
+
+        if trimmed.ends_with(';') {
+            statements.push(current.trim().to_string());
+            current.clear();
+        }
+    }
+
+    statements
+}
+
+/// Process-wide serializer for the shared-database legs: the pg and mysql
+/// tests each drop and re-create the roles tables on the SHARED container
+/// database, so without the guard they race and wipe each other's schema
+/// mid-test (diesel `holder_kind.rs` `SuiteGuard` precedent, commit 52be22e).
+/// `SQLite` legs use fresh per-connection in-memory databases and need no
+/// guard.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+static SUITE_SERIAL: AtomicBool = AtomicBool::new(false);
+
+/// Held for one shared-database test's whole body; releases on drop.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+struct SuiteGuard {
+    flag: &'static AtomicBool,
+}
+
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+impl SuiteGuard {
+    /// Acquire the process-wide lock (spins on `yield_now`:
+    /// timing-free, liveness-only).
+    fn acquire() -> Self {
+        while SUITE_SERIAL.swap(true, Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        Self {
+            flag: &SUITE_SERIAL,
+        }
+    }
+}
+
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+impl Drop for SuiteGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+/// `SQLite` leg: no container, runs locally for all three kinds.
 #[cfg(feature = "sqlite")]
 mod sqlite {
     use rolify_core::config::HolderIdKind;
@@ -68,24 +136,40 @@ mod sqlite {
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName};
     use rolify_core::store::RoleStore;
-    use rolify_sqlx::{SqlxStore, Error};
-    use sqlx::SqliteConnection;
+    use rolify_sqlx::{Error, SqlxStore};
 
     use crate::support::sqlite_conn;
-    use crate::{all_kinds, holder_id_for, invalid_holder_id_for, rejecting_kinds, config_for};
+    use crate::{
+        all_kinds, config_for, holder_id_for, invalid_holder_id_for, rejecting_kinds,
+        split_sql_statements,
+    };
 
-    /// Canonical SQLite DDL for the kind's join column type (D-08-04).
+    /// Canonical `SQLite` DDL for the kind's join column type (D-08-04).
     fn schema_ddl(kind: HolderIdKind) -> &'static str {
         match kind {
-            HolderIdKind::Integer => include_str!(
-                "../migrations/sqlite/integer/0000000001_rolify_create_tables.sql"
-            ),
-            HolderIdKind::Uuid => include_str!(
-                "../migrations/sqlite/uuid/0000000001_rolify_create_tables.sql"
-            ),
-            HolderIdKind::String => include_str!(
-                "../migrations/sqlite/string/0000000001_rolify_create_tables.sql"
-            ),
+            HolderIdKind::Integer => {
+                include_str!("../migrations/sqlite/integer/0000000001_rolify_create_tables.sql")
+            }
+            HolderIdKind::Uuid => {
+                include_str!("../migrations/sqlite/uuid/0000000001_rolify_create_tables.sql")
+            }
+            HolderIdKind::String => {
+                include_str!("../migrations/sqlite/string/0000000001_rolify_create_tables.sql")
+            }
+        }
+    }
+
+    /// Apply the kind's canonical schema one statement at a time:
+    /// Postgres and `MySQL` reject multiple commands inside one prepared
+    /// statement (SQLSTATE 42601 on Postgres), so the canonical migration
+    /// file is split before execution; `SQLite` takes the split path
+    /// identically (`cli/tests/e2e_engines.rs` precedent).
+    async fn apply_schema(conn: &mut sqlx::SqliteConnection, sql: &'static str) {
+        for statement in split_sql_statements(sql) {
+            sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                .execute(&mut *conn)
+                .await
+                .expect("apply kind-specific DDL statement");
         }
     }
 
@@ -97,10 +181,7 @@ mod sqlite {
     async fn lifecycle_all_kinds() {
         for kind in all_kinds() {
             let mut conn = sqlite_conn().await;
-            sqlx::query(schema_ddl(kind))
-                .execute(&mut conn)
-                .await
-                .expect("apply kind-specific DDL");
+            apply_schema(&mut conn, schema_ddl(kind)).await;
 
             let mut store = store_for(kind);
             let holder = ResourceId::from(holder_id_for(kind));
@@ -116,7 +197,10 @@ mod sqlite {
 
             // add
             assert!(
-                store.add(&mut conn, &holder, &admin).await.expect("add admin"),
+                store
+                    .add(&mut conn, &holder, &admin)
+                    .await
+                    .expect("add admin"),
                 "first add inserts a link for {kind:?}"
             );
             // idempotent add
@@ -175,10 +259,7 @@ mod sqlite {
     async fn invalid_holder_id_rejected_all_kinds() {
         for kind in rejecting_kinds() {
             let mut conn = sqlite_conn().await;
-            sqlx::query(schema_ddl(kind))
-                .execute(&mut conn)
-                .await
-                .expect("apply kind-specific DDL");
+            apply_schema(&mut conn, schema_ddl(kind)).await;
 
             let mut store = store_for(kind);
             let admin = store
@@ -192,17 +273,14 @@ mod sqlite {
                 .await
                 .expect_err("invalid holder id must be rejected pre-SQL");
             assert!(
-                matches!(
-                    error,
-                    Error::Core(RolifyError::InvalidHolderId { .. })
-                ),
+                matches!(error, Error::Core(RolifyError::InvalidHolderId { .. })),
                 "expected InvalidHolderId for {kind:?}, got {error:?}"
             );
         }
     }
 }
 
-/// Postgres leg: testcontainers (runs where Docker is available).
+/// `Postgres` leg: testcontainers (runs where Docker is available).
 #[cfg(feature = "postgres")]
 mod postgres {
     use rolify_core::config::HolderIdKind;
@@ -212,23 +290,38 @@ mod postgres {
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName};
     use rolify_core::store::RoleStore;
-    use rolify_sqlx::{SqlxStore, Error};
+    use rolify_sqlx::{Error, SqlxStore};
     use sqlx::PgConnection;
 
     use crate::support::pg_conn;
-    use crate::{all_kinds, holder_id_for, invalid_holder_id_for, rejecting_kinds, config_for};
+    use crate::{
+        SuiteGuard, all_kinds, config_for, holder_id_for, invalid_holder_id_for, rejecting_kinds,
+        split_sql_statements,
+    };
 
     fn schema_ddl(kind: HolderIdKind) -> &'static str {
         match kind {
-            HolderIdKind::Integer => include_str!(
-                "../migrations/postgres/integer/0000000001_rolify_create_tables.sql"
-            ),
-            HolderIdKind::Uuid => include_str!(
-                "../migrations/postgres/uuid/0000000001_rolify_create_tables.sql"
-            ),
-            HolderIdKind::String => include_str!(
-                "../migrations/postgres/string/0000000001_rolify_create_tables.sql"
-            ),
+            HolderIdKind::Integer => {
+                include_str!("../migrations/postgres/integer/0000000001_rolify_create_tables.sql")
+            }
+            HolderIdKind::Uuid => {
+                include_str!("../migrations/postgres/uuid/0000000001_rolify_create_tables.sql")
+            }
+            HolderIdKind::String => {
+                include_str!("../migrations/postgres/string/0000000001_rolify_create_tables.sql")
+            }
+        }
+    }
+
+    /// Apply the kind's canonical schema one statement at a time
+    /// (see the `SQLite` module's `apply_schema` note: Postgres rejects
+    /// multiple commands inside one prepared statement, SQLSTATE 42601).
+    async fn apply_schema(conn: &mut sqlx::PgConnection, sql: &'static str) {
+        for statement in split_sql_statements(sql) {
+            sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                .execute(&mut *conn)
+                .await
+                .expect("apply kind-specific DDL statement");
         }
     }
 
@@ -242,15 +335,16 @@ mod postgres {
             .execute(&mut conn)
             .await
             .expect("drop prior tables");
-        sqlx::query(schema_ddl(kind))
-            .execute(&mut conn)
-            .await
-            .expect("apply kind-specific DDL");
+        apply_schema(&mut conn, schema_ddl(kind)).await;
         conn
     }
 
     #[sqlx::test]
     async fn lifecycle_all_kinds() {
+        // Both tests on this engine drop and re-create the roles tables on
+        // the SHARED container database; the guard serializes them for
+        // the whole test body (diesel holder_kind.rs precedent, 52be22e).
+        let _suite_guard = SuiteGuard::acquire();
         for kind in all_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
@@ -266,7 +360,10 @@ mod postgres {
             };
 
             assert!(
-                store.add(&mut conn, &holder, &admin).await.expect("add admin"),
+                store
+                    .add(&mut conn, &holder, &admin)
+                    .await
+                    .expect("add admin"),
                 "first add inserts a link for {kind:?}"
             );
             assert_eq!(
@@ -303,6 +400,8 @@ mod postgres {
 
     #[sqlx::test]
     async fn invalid_holder_id_rejected_all_kinds() {
+        // Same shared-container serialization as the lifecycle leg.
+        let _suite_guard = SuiteGuard::acquire();
         for kind in rejecting_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
@@ -324,7 +423,7 @@ mod postgres {
     }
 }
 
-/// MySQL leg: testcontainers (CI-only where libmysqlclient is installed).
+/// `MySQL` leg: testcontainers (CI-only where libmysqlclient is installed).
 #[cfg(feature = "mysql")]
 mod mysql {
     use rolify_core::config::HolderIdKind;
@@ -334,23 +433,38 @@ mod mysql {
     use rolify_core::resource::ResourceRef;
     use rolify_core::role::{ResourceId, RoleName};
     use rolify_core::store::RoleStore;
-    use rolify_sqlx::{SqlxStore, Error};
+    use rolify_sqlx::{Error, SqlxStore};
     use sqlx::MySqlConnection;
 
     use crate::support::mysql_conn;
-    use crate::{all_kinds, holder_id_for, invalid_holder_id_for, rejecting_kinds, config_for};
+    use crate::{
+        SuiteGuard, all_kinds, config_for, holder_id_for, invalid_holder_id_for, rejecting_kinds,
+        split_sql_statements,
+    };
 
     fn schema_ddl(kind: HolderIdKind) -> &'static str {
         match kind {
-            HolderIdKind::Integer => include_str!(
-                "../migrations/mysql/integer/0000000001_rolify_create_tables.sql"
-            ),
-            HolderIdKind::Uuid => include_str!(
-                "../migrations/mysql/uuid/0000000001_rolify_create_tables.sql"
-            ),
-            HolderIdKind::String => include_str!(
-                "../migrations/mysql/string/0000000001_rolify_create_tables.sql"
-            ),
+            HolderIdKind::Integer => {
+                include_str!("../migrations/mysql/integer/0000000001_rolify_create_tables.sql")
+            }
+            HolderIdKind::Uuid => {
+                include_str!("../migrations/mysql/uuid/0000000001_rolify_create_tables.sql")
+            }
+            HolderIdKind::String => {
+                include_str!("../migrations/mysql/string/0000000001_rolify_create_tables.sql")
+            }
+        }
+    }
+
+    /// Apply the kind's canonical schema one statement at a time
+    /// (see the `SQLite` module's `apply_schema` note: `MySQL` rejects
+    /// multiple commands inside one prepared statement).
+    async fn apply_schema(conn: &mut sqlx::MySqlConnection, sql: &'static str) {
+        for statement in split_sql_statements(sql) {
+            sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                .execute(&mut *conn)
+                .await
+                .expect("apply kind-specific DDL statement");
         }
     }
 
@@ -368,15 +482,16 @@ mod mysql {
             .execute(&mut conn)
             .await
             .expect("drop roles");
-        sqlx::query(schema_ddl(kind))
-            .execute(&mut conn)
-            .await
-            .expect("apply kind-specific DDL");
+        apply_schema(&mut conn, schema_ddl(kind)).await;
         conn
     }
 
     #[sqlx::test]
     async fn lifecycle_all_kinds() {
+        // Both tests on this engine drop and re-create the roles tables on
+        // the SHARED container database; the guard serializes them for
+        // the whole test body (diesel holder_kind.rs precedent, 52be22e).
+        let _suite_guard = SuiteGuard::acquire();
         for kind in all_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
@@ -392,7 +507,10 @@ mod mysql {
             };
 
             assert!(
-                store.add(&mut conn, &holder, &admin).await.expect("add admin"),
+                store
+                    .add(&mut conn, &holder, &admin)
+                    .await
+                    .expect("add admin"),
                 "first add inserts a link for {kind:?}"
             );
             assert_eq!(
@@ -429,6 +547,8 @@ mod mysql {
 
     #[sqlx::test]
     async fn invalid_holder_id_rejected_all_kinds() {
+        // Same shared-container serialization as the lifecycle leg.
+        let _suite_guard = SuiteGuard::acquire();
         for kind in rejecting_kinds() {
             let mut conn = fresh_conn(kind).await;
             let mut store = store_for(kind);
