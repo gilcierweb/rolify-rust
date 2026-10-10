@@ -566,23 +566,73 @@ Status vocabulary: `deliberate divergence`, `corner choice`,
   `self.primary_key = "team_code"`
   (`rolify/spec/support/adapters/active_record.rb:81`) and is seeded with
   string ids (`rolify/spec/support/data.rb:24-25`).
-- **rolify-rust behavior**: one canonical schema for every backend. SQL
-  stores the holder PK in canonical string form in
-  `user_id VARCHAR(191)`; MongoDB embeds the same strings in the role
-  document's `user_ids` array (`crates/rolify-mongodb/src/document.rs`,
-  D-08). Holder identity is string-native in core (`ResourceId`, CORE-01),
-  so integer, UUID, and string holder PKs share one schema with no
-  per-holder-type migration variants. `role_id` remains a proper integer
-  FK to `roles(id)`; the join table carries no surrogate key and no
-  `user_type` column.
-- **Status**: deliberate divergence (physical format only; integer ids are
-  stored as their decimal string form, preserving gem value-level
-  behavior).
-- **Pinned by**: `crates/rolify-diesel/migrations/*/0000000001_rolify_create_tables/up.sql`
-  (`user_id VARCHAR(191)`) byte-locked against the CLI emitters by the
-  drift-guard dev-test (`crates/rolify-cli/tests/drift.rs`), the SeaORM
-  join entity (`crates/rolify-seaorm/src/entity/join.rs`), and the
-  string-id inserts (`'u1'`) in `crates/rolify-diesel/tests/migrations.rs`.
+- **rolify-rust behavior**: holder identity is string-native in core
+  (`ResourceId`, CORE-01): the trait surface always speaks string ids, so
+  integer, UUID, and string holder PKs are interchangeable at the API
+  boundary. The physical holder column on the SQL join side is chosen by
+  kind as of Phase 08 (integer default; see Entry 29); before Phase 08 it
+  was always `VARCHAR(191)` canonical string form. MongoDB embeds the same
+  canonical strings in the role document's `user_ids` array
+  (`crates/rolify-mongodb/src/document.rs`, D-08) and is unchanged by
+  Phase 08. `role_id` remains a proper integer FK to `roles(id)`; the join
+  table carries no surrogate key and no `user_type` column.
+- **Status**: deliberate divergence (physical format only; holder ids are
+  either a typed column or their decimal string form, preserving gem
+  value-level behavior).
+- **Pinned by**: the per-kind migration trees
+  (`crates/rolify-diesel/migrations/*/{integer,uuid,string}/0000000001_rolify_create_tables/up.sql`)
+  byte-locked against the CLI emitters by the drift-guard dev-test
+  (`crates/rolify-cli/tests/drift.rs`), the SeaORM join entity
+  (`crates/rolify-seaorm/src/entity/join.rs`), and the string-id inserts
+  (`'u1'`) in `crates/rolify-diesel/tests/migrations.rs` (string kind).
+
+## Entry 29 - holder id physical type is a first-class kind (integer, uuid, string)
+
+- **Topic**: the selectable physical type of the holder-id column on the SQL
+  join table, and the matching runtime bind/parse kind.
+- **Gem behavior**: the ActiveRecord generator types the join column after
+  the holder table's primary key: `t.references :<%= user_reference %>`
+  (`lib/generators/active_record/templates/migration.rb:11`) emits a bigint
+  `user_id` when the holder PK is bigint, and the gem's own suite exercises
+  a non-bigint holder PK: the `Team` fixture sets
+  `self.primary_key = "team_code"`
+  (`rolify/spec/support/adapters/active_record.rb:79-84`) and is seeded
+  with string ids (`rolify/spec/support/data.rb:24-25`). Mongoid links
+  string `ObjectId`s via `has_and_belongs_to_many`
+  (`lib/generators/rolify/templates/role-mongoid.rb:4`). The gem therefore
+  already lets the holder PK type vary; the port had collapsed that to one
+  canonical string column.
+- **rolify-rust behavior**: `HolderIdKind` (integer | uuid | string,
+  `crates/rolify-core/src/config.rs`) selects the physical type at scaffold
+  time (CLI `--holder-id-type`) and the runtime bind/parse kind
+  (`RolifyConfig::holder_id_kind`), so generated DDL and adapter binds agree
+  by construction (D-08-01, D-08-03). Per D-08-04 the join column is
+  `BIGINT` (integer, the default and gem-parity match), native `UUID`
+  (Postgres) / `BINARY(16)` (MySQL) / `TEXT` (SQLite) for uuid, or
+  `VARCHAR(191)` (string, the pre-08 form) unchanged. A holder id that does
+  not parse for the configured kind returns a typed `InvalidHolderId` error
+  before any database round-trip (D-08-05). The optional `--with-holder-fk`
+  flag (default off, gem parity) emits `REFERENCES <holder_table>(<pk>)`
+  for non-string kinds (D-08-07); the string kind stays FK-free because its
+  text column cannot reference a typed holder PK. MongoDB is unchanged:
+  holder ids remain canonical strings inside `user_ids`/`role_ids`
+  (D-08-08).
+- **Status**: strengthening (extended surface: three physical types; the
+  integer default restores the gem's `t.references` bigint affinity that
+  the pre-08 port had dropped, so no gem behavior is lost and uuid/string
+  kinds are purely additive).
+- **Pinned by**: the 3 x 3 drift sweep
+  (`crates/rolify-cli/tests/drift.rs::renderer_matches_canonical_all_kinds`)
+  byte-locking every engine x kind render against the canonical migration
+  trees (`crates/rolify-diesel/migrations/{engine}/{kind}/...`), the CLI
+  generate tests (`crates/rolify-cli/tests/generate.rs`), the per-adapter
+  kind-matrix integration tests
+  (`crates/rolify-{diesel,sqlx,seaorm}/tests/holder_kind.rs`), and the
+  `InvalidHolderId` unit tests in `rolify-core`.
+- **Review flag** (open review flag, Phase 08): the per-adapter kind-matrix
+  container legs (`holder_kind.rs`) run in CI, not in the zero-Docker local
+  suite; re-run Phase 08's container suite green to clear. The scaffold-to-
+  DDL lock itself (the drift sweep) is locally runnable.
 
 ---
 
@@ -616,4 +666,6 @@ engine without either crate reimplementing the other.
 *Ledger maintained with the code. Last review pass: Phase 07 (test matchers
 and publish hardening). Entries 1-15 carried from the planning parity
 matrix with wording tightened for a public audience and identical technical
-claims; entries 16-27 mined from phase contexts 01-06 plus shipped code.*
+claims; entries 16-27 mined from phase contexts 01-06 plus shipped code;
+entry 29 mined from phase context 08 (holder id kind selection, which also
+revises entry 28's physical-format claim).*

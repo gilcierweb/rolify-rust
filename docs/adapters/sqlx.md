@@ -50,7 +50,8 @@ static MIGRATOR: Migrator = sqlx::migrate!();  // reads from ./migrations at com
 ### Schema
 
 ```sql
--- crates/rolify-sqlx/migrations/postgres/0000000001_rolify_create_tables.sql (physical schema shared with diesel)
+-- crates/rolify-sqlx/migrations/postgres/integer/0000000001_rolify_create_tables.sql
+-- (physical schema shared with diesel; laid out per engine, then per kind)
 CREATE TABLE roles (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name          VARCHAR(255) NOT NULL,
@@ -65,13 +66,38 @@ CREATE INDEX idx_roles_name ON roles (name);
 
 -- Default join table: users_roles (configurable via RolifyConfig)
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL,
+    user_id BIGINT NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
 ```
 
-**Holder id typing:** `user_id` stores the holder primary key in canonical string form (`"42"` or a UUID string), so integer, UUID, and string holder PKs share one schema. `role_id` is the library-owned integer FK to `roles.id`.
+### Holder id typing
+
+`role_id` is the library-owned side: always a `BIGINT` FK to `roles(id)`.
+`user_id` follows the holder id kind selected at scaffold time by
+`--holder-id-type` (D-08-04):
+
+| Kind | Postgres | MySQL | SQLite |
+|------|----------|-------|--------|
+| `integer` (default) | `BIGINT` | `BIGINT` | `INTEGER` |
+| `uuid` | `UUID` | `BINARY(16)` | `TEXT` |
+| `string` | `VARCHAR(191)` | `VARCHAR(191)` | `VARCHAR(191)` |
+
+Migrations live under `crates/rolify-sqlx/migrations/{engine}/{kind}/` as
+`0000000001_rolify_create_tables.sql` plus a `.down.sql` pair, so a consumer
+selects exactly the tree matching its configuration. The kind baked into the
+DDL must match `RolifyConfig::holder_id_kind`. For the SQLite `uuid` kind the
+column is `TEXT` and UUID binds use the hyphenated string form. `integer`
+(the default) restores the gem's `t.references` bigint affinity; `string`
+keeps the pre-08 `VARCHAR(191)` form.
+
+A holder id that does not parse for the configured kind (for example `"abc"`
+under `integer`) returns `rolify_core::Error::InvalidHolderId { expected, got }`
+before the query reaches the database (D-08-05). The optional
+`--with-holder-fk` flag emits `REFERENCES <holder_table>(<pk>)` for
+non-string kinds (D-08-07); it is off by default, matching the gem, which
+emits no consumer-side FK (Entry 8). See PARITY.md Entry 29.
 
 **Sentinel note:** Like Diesel, the adapter uses `''` (empty string) for `NULL` in `resource_type`/`resource_id` to make `UNIQUE` work identically across backends.
 

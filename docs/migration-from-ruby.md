@@ -441,7 +441,7 @@ add_index :users_roles, [:user_id, :role_id]
 ### Rust (Diesel Migration)
 
 ```sql
--- crates/rolify-diesel/migrations/postgres/0000000001_rolify_create_tables/up.sql
+-- crates/rolify-diesel/migrations/postgres/integer/0000000001_rolify_create_tables/up.sql
 CREATE TABLE roles (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name          VARCHAR(255) NOT NULL,
@@ -455,7 +455,7 @@ CREATE INDEX idx_roles_resource ON roles (resource_type, resource_id);
 CREATE INDEX idx_roles_name ON roles (name);
 
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL,
+    user_id BIGINT NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
@@ -464,7 +464,69 @@ CREATE TABLE users_roles (
 **Key differences:**
 - Rust uses `''` (empty string) sentinel instead of `NULL` for `resource_type`/`resource_id` to make `UNIQUE` constraints work identically across Postgres, MySQL, SQLite.
 - Rust makes the triple index a real `UNIQUE` constraint (the gem emits a non-unique index) and adds `UNIQUE(user_id, role_id)` plus `ON DELETE CASCADE` on the join table (the gem emits no FKs). See PARITY.md entries 6-8 for the full rationale.
-- `user_id` is `VARCHAR(191)`, not bigint: the holder table belongs to your app, so the holder primary key is stored in canonical string form (`"42"` or a UUID string). This matches the gem's own string-PK precedent (`Team` uses `self.primary_key = "team_code"` in `rolify/spec/support/adapters/active_record.rb`). `role_id` stays a proper integer FK to `roles.id`.
+- The `user_id` physical type follows the holder id kind (Phase 08): `integer` (`BIGINT`, the default), `uuid` (native `UUID` / `BINARY(16)` / `TEXT` per engine), or `string` (`VARCHAR(191)`, the pre-08 form). See "Holder id kind" below. `role_id` stays a proper integer FK to `roles.id`.
+
+## Holder id kind (integer default)
+
+The gem types the join column after the holder primary key: `t.references
+:user` emits a bigint `user_id` by default
+(`lib/generators/active_record/templates/migration.rb:11`), while a
+string-PK holder is exercised in the gem's own suite (the `Team` fixture
+sets `self.primary_key = "team_code"`,
+`rolify/spec/support/adapters/active_record.rb:79-84`). As of Phase 08,
+rolify-rust exposes that choice explicitly instead of hardcoding one column
+type.
+
+**The default flipped from string to integer.** Before Phase 08 the join
+column was always `VARCHAR(191)` and holder ids were always stored in
+canonical string form. Now the default kind is `integer` (matching the
+gem's `t.references` bigint), and the generated join column is `BIGINT`.
+The flip is pre-1.0 and one-way (D-08-02): after the first crates.io
+publish the default becomes part of the contract, so pin explicitly if you
+depend on the string form.
+
+**If your Ruby schema used integer ids (the common case):** you get the new
+default for free. Scaffold with no kind flag:
+
+```bash
+rolify-cli generate --backend diesel Role User
+```
+
+This emits the `BIGINT` column, matching the gem's bigint `user_id`.
+
+**If you pinned string ids (a custom string-PK holder, or data already
+stored as strings):** keep the pre-08 schema by pinning the kind explicitly
+at the CLI:
+
+```bash
+rolify-cli generate --backend diesel Role User --holder-id-type string
+```
+
+and at runtime, so binds and parses agree with the string column:
+
+```rust
+use rolify_core::config::{HolderIdKind, RolifyConfig};
+
+let config = RolifyConfig::default().holder_id_kind(HolderIdKind::String);
+```
+
+**If your holder PK is a UUID:** select the uuid kind, which emits a native
+`UUID` (Postgres) / `BINARY(16)` (MySQL) / `TEXT` (SQLite) column:
+
+```bash
+rolify-cli generate --backend diesel Role User --holder-id-type uuid
+```
+
+```rust
+let config = RolifyConfig::default().holder_id_kind(HolderIdKind::Uuid);
+```
+
+The kind baked into the generated DDL must match
+`RolifyConfig::holder_id_kind`: a holder id that does not parse for the
+configured kind (for example `"abc"` under `integer`) returns
+`InvalidHolderId { expected, got }` before any database round-trip. To also
+emit a consumer-side FK to the holder table, add `--with-holder-fk` (default
+off, matching the gem, which emits no such FK). See PARITY.md Entry 29.
 
 ## Testing
 
@@ -507,7 +569,12 @@ fn test_user_has_global_admin() {
 
 **Ruby:** `resource_id` can be integer or string (ActiveRecord handles both).
 
-**Rust:** Use `ResourceId::from(42_i64)` or `ResourceId::from("uuid-string")` - both work.
+**Rust:** The API always speaks string ids (`ResourceId::from(42_i64)` or
+`ResourceId::from("uuid-string")` both work), but the physical holder column
+type follows the holder id kind. Make sure `RolifyConfig::holder_id_kind`
+matches the column your migration created (`integer` default, or `uuid` /
+`string`), or a valid-looking id fails with `InvalidHolderId`. See "Holder
+id kind" above and PARITY.md Entry 29.
 
 ### 2. Case Sensitivity
 
@@ -543,6 +610,7 @@ fn test_user_has_global_admin() {
 
 - [ ] Choose adapter (Diesel, SQLx, SeaORM, MongoDB)
 - [ ] Set up database schema with migrations
+- [ ] Choose the holder id kind (integer default; pin `string` for legacy string columns or `uuid` for UUID PKs)
 - [ ] Implement `RolifyUser` on user type
 - [ ] Implement `Resource` on resource types
 - [ ] Configure `RolifyConfig` (strict, callbacks, table names)

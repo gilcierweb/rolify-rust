@@ -79,13 +79,41 @@ CREATE INDEX idx_roles_name ON roles (name);
 
 -- join table (configurable name, default: users_roles)
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL,
+    user_id BIGINT NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
 ```
 
-**Holder id typing:** `user_id` is text on purpose. The holder table belongs to your app, so its primary key may be an integer, a UUID, or a string; the holder id is stored in its canonical string form (`"42"`, `"8f14e45f-..."`). `role_id` is the library-owned side and stays a proper integer FK to `roles.id`. There is no `user_type` column: the join table links one role to one holder id, like the gem's HABTM table.
+### Holder id typing
+
+`role_id` is the library-owned side: always a `BIGINT` FK to `roles(id)`.
+`user_id` is the holder side, and its physical type follows the holder id
+kind selected at scaffold time by `--holder-id-type` (D-08-04):
+
+| Kind | Postgres | MySQL | SQLite |
+|------|----------|-------|--------|
+| `integer` (default) | `BIGINT` | `BIGINT` | `INTEGER` |
+| `uuid` | `UUID` | `BINARY(16)` | `TEXT` |
+| `string` | `VARCHAR(191)` | `VARCHAR(191)` | `VARCHAR(191)` |
+
+The migrations shipped in `rolify-diesel/migrations/` are laid out per
+engine, then per kind
+(`{engine}/{kind}/0000000001_rolify_create_tables/`), so a consumer applies
+exactly the tree matching its configuration. The kind baked into the
+scaffolded DDL must match `RolifyConfig::holder_id_kind` at runtime.
+`integer` (the default) restores the gem's `t.references` bigint affinity;
+`string` keeps the pre-08 `VARCHAR(191)` form. There is no `user_type`
+column: the join table links one role to one holder id, like the gem's
+HABTM table.
+
+A holder id that does not parse for the configured kind (for example
+`"abc"` under `integer`) returns
+`rolify_core::Error::InvalidHolderId { expected, got }` before the query
+reaches the database (D-08-05). The optional `--with-holder-fk` flag emits
+`REFERENCES <holder_table>(<pk>)` for non-string kinds (D-08-07); it is off
+by default, matching the gem, which emits no consumer-side FK (Entry 8).
+See PARITY.md Entry 29.
 
 **Note:** The adapter uses `''` (empty string) as sentinel for `NULL` in `resource_type`/`resource_id` to make `UNIQUE` constraints work identically across Postgres, MySQL, and SQLite. This diverges from the gem (which uses `NULL`); see parity matrix.
 

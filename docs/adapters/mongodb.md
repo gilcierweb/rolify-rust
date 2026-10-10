@@ -48,7 +48,16 @@ One store manages the role collection plus your holder/resource collections (two
 { _id: ObjectId, /* your fields... */, role_ids: [ObjectId] }
 ```
 
-**Holder id typing:** holder ids are stored in canonical string form (integer `"1"` or a UUID string), mirroring the SQL adapters' `VARCHAR(191) user_id`; integer, UUID, and string holder PKs all fit the same document shape.
+### Holder id typing
+
+MongoDB storage is deliberately unchanged by the holder id kind (D-08-08):
+holder ids stay canonical strings (an integer such as `"1"`, or a UUID
+string) inside the role document's `user_ids` array and the holder
+document's `role_ids`. Text already covers integer and UUID holders, so
+there is no kind knob here and `--holder-id-type` has no effect on MongoDB
+output; the SQL adapters' `BIGINT` / `UUID` / `VARCHAR(191)` matrix does not
+apply. This keeps one document shape regardless of the SQL kind. See
+PARITY.md Entries 24 and 29.
 
 ### Indexes
 

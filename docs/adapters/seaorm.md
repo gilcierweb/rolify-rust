@@ -55,12 +55,14 @@ pub struct Model {
     // adapter never reads or writes them, so the entity intentionally omits them.
 }
 
-// Join table entity (crates/rolify-seaorm/src/entity/join.rs)
+// Join table entity (crates/rolify-seaorm/src/entity/join.rs) - the string-kind
+// convenience model; the adapter writes link rows via raw Statement with a
+// runtime-typed Value per configured kind (D-08-06), not through this model.
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "users_roles")]  // Configurable via RolifyConfig
 pub struct Model {
-    /// Stringified holder primary key (`VARCHAR(191) NOT NULL`)
+    /// Stringified holder primary key (string kind; `VARCHAR(191) NOT NULL`)
     #[sea_orm(primary_key, auto_increment = false)]
     pub user_id: String,
     /// Role row id; `BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE`
@@ -69,7 +71,32 @@ pub struct Model {
 }
 ```
 
-**Holder id typing:** `user_id` is the holder's primary key in canonical string form (integer or UUID), matching the gem's string-PK precedent (`rolify/spec/support/adapters/active_record.rb` sets `self.primary_key = "team_code"` on the `Team` fixture). The pair `(user_id, role_id)` is the composite primary key, mirroring the physical `UNIQUE(user_id, role_id)` constraint.
+### Holder id typing
+
+The join table's holder column `user_id` follows the holder id kind selected
+at scaffold time by `--holder-id-type` (D-08-04); `role_id` is always the
+library-owned `BIGINT` FK to `roles(id)`:
+
+| Kind | Postgres | MySQL | SQLite |
+|------|----------|-------|--------|
+| `integer` (default) | `BIGINT` | `BIGINT` | `INTEGER` |
+| `uuid` | `UUID` | `BINARY(16)` | `TEXT` |
+| `string` | `VARCHAR(191)` | `VARCHAR(191)` | `VARCHAR(191)` |
+
+This adapter's native migrator (`rolify_seaorm::Migrator`) targets Postgres
+and MySQL; SQLite migrations are out of scope here. Unlike the other
+adapters, `rolify-seaorm` does not write link rows through the typed
+`join::Model`: it issues raw `Statement`s with a runtime-typed
+`sea_orm::Value` (`Uuid` / `BigInt` / `String` per config, D-08-06), so one
+binary serves any kind. The `join::Model` above remains as a string-kind
+convenience entity for read-side queries. The configured kind must match
+`RolifyConfig::holder_id_kind` and the applied migration. `integer` (the
+default) restores the gem's `t.references` bigint affinity; `string` keeps
+the pre-08 `VARCHAR(191)` form.
+
+A holder id that does not parse for the configured kind (for example `"abc"`
+under `integer`) returns `rolify_core::Error::InvalidHolderId { expected, got }`
+before the database is touched (D-08-05). See PARITY.md Entry 29.
 
 **Sentinel note:** The adapter uses `''` (empty string) for `NULL` in `resource_type`/`resource_id` to make `UNIQUE` work identically across backends.
 
