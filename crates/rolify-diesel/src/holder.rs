@@ -81,46 +81,41 @@ fn uuid_bind(uuid: uuid::Uuid) -> DieselHolderBind {
     DieselHolderBind::Text(uuid.hyphenated().to_string())
 }
 
-/// Kind-aware select-list projection for the holder id column in the finder
-/// queries (RESEARCH Pattern 3).
+/// The holder primary-key expression for a COMPARISON against the
+/// join's `user_id` column or a typed holder bind (the sqlx analog's
+/// `holder_compare_expr`, RESEARCH Pattern 3): typed kinds compare
+/// natively (`BIGINT`, `UUID`/`BINARY(16)`, or `TEXT` on both sides),
+/// so the column stands bare; the string kind keeps the historical
+/// text cast because the fixture holder keys are integers while the
+/// string link column stores text (Postgres rejects
+/// `integer = text`).
 ///
-/// | Kind     | Postgres                     | `MySQL`                      | `SQLite`       |
-/// |----------|------------------------------|----------------------------|--------------|
-/// | Integer  | `holder.id` (typed `BigInt`) | `holder.id` (typed `BigInt`) | `holder.id`  |
-/// | Uuid     | `CAST(holder.id AS TEXT)`    | `holder.id` (binary bytes) | `holder.id`  |
-/// | String   | `CAST(holder.id AS TEXT)`    | `CAST(holder.id AS CHAR)`  | `holder.id`  |
-///
-/// String keeps today's `cast_to_text` (gem parity); Integer removes the cast
-/// so the typed column compares directly against `link.user_id BIGINT`.
+/// The SELECT-list projection keeps `dialect::cast_to_text`
+/// unconditionally instead: `HolderIdRow` decodes `Text`, and every
+/// engine casts the holder key for that read (gate-fix note).
 #[must_use]
 pub fn holder_id_projection(kind: HolderIdKind, holder_pk_column: &str) -> String {
     match kind {
-        HolderIdKind::Integer => holder_pk_column.to_owned(),
-        HolderIdKind::Uuid => {
-            #[cfg(feature = "postgres")]
-            {
-                crate::dialect::cast_to_text(holder_pk_column)
-            }
-            #[cfg(any(feature = "mysql", feature = "sqlite", not(feature = "postgres")))]
-            {
-                holder_pk_column.to_owned()
-            }
-        }
+        HolderIdKind::Integer | HolderIdKind::Uuid => holder_pk_column.to_owned(),
         HolderIdKind::String => crate::dialect::cast_to_text(holder_pk_column),
     }
 }
 
-/// Kind-aware join-condition predicate comparing the holder id column against
-/// the join's `user_id` (both typed for integer). Only the integer kind
-/// changes the comparison; uuid/string keep today's string-equality path.
+/// Kind-aware join-condition predicate comparing the holder id column
+/// against the join's `user_id`: typed kinds compare natively through
+/// [`holder_id_projection`]; the string kind keeps today's text-cast
+/// repair.
 #[must_use]
-pub fn holder_join_condition(kind: HolderIdKind, holder_pk_column: &str, user_id_column: &str) -> String {
-    match kind {
-        HolderIdKind::Integer => format!("{holder_pk_column} = {user_id_column}"),
-        HolderIdKind::Uuid | HolderIdKind::String => {
-            format!("{} = {}", crate::dialect::cast_to_text(holder_pk_column), user_id_column)
-        }
-    }
+pub fn holder_join_condition(
+    kind: HolderIdKind,
+    holder_pk_column: &str,
+    user_id_column: &str,
+) -> String {
+    format!(
+        "{} = {}",
+        holder_id_projection(kind, holder_pk_column),
+        user_id_column
+    )
 }
 
 /// Parse a holder id against the configured kind and return its canonical
@@ -132,7 +127,10 @@ pub fn holder_join_condition(kind: HolderIdKind, holder_pk_column: &str, user_id
 ///
 /// Returns [`RolifyError::InvalidHolderId`] when the input does not match
 /// the kind's grammar (e.g., "abc" for `Integer`, "not-a-uuid" for `Uuid`).
-pub fn parse_canonical_holder(kind: HolderIdKind, holder: &ResourceId) -> Result<String, RolifyError> {
+pub fn parse_canonical_holder(
+    kind: HolderIdKind,
+    holder: &ResourceId,
+) -> Result<String, RolifyError> {
     let parsed = parse_holder_id(kind, holder.as_str())?;
     Ok(holder_id_to_string(&parsed))
 }
@@ -203,7 +201,10 @@ mod tests {
         let result = parsed_for_store(HolderIdKind::Uuid, &holder);
         assert!(matches!(
             result,
-            Err(RolifyError::InvalidHolderId { expected: "uuid", .. })
+            Err(RolifyError::InvalidHolderId {
+                expected: "uuid",
+                ..
+            })
         ));
     }
 
@@ -213,6 +214,33 @@ mod tests {
             "holder.id" => {}
             other => panic!("integer kind should not cast, got {other}"),
         }
+    }
+
+    #[test]
+    fn uuid_compare_stays_native_on_every_engine() {
+        // Gate-fix semantics (sqlx analog `holder_compare_expr`): the
+        // uuid kind joins against the native UUID/BINARY(16) column, so
+        // a text cast would make Postgres reject `text = uuid`.
+        assert_eq!(
+            holder_id_projection(HolderIdKind::Uuid, "holder.id"),
+            "holder.id"
+        );
+        assert_eq!(
+            holder_join_condition(HolderIdKind::Uuid, "holder.id", "link.user_id"),
+            "holder.id = link.user_id"
+        );
+    }
+
+    #[test]
+    fn join_condition_is_kind_aware() {
+        assert_eq!(
+            holder_join_condition(HolderIdKind::Integer, "holder.id", "link.user_id"),
+            "holder.id = link.user_id"
+        );
+        assert!(
+            holder_join_condition(HolderIdKind::String, "holder.id", "link.user_id")
+                .starts_with("CAST(holder.id")
+        );
     }
 
     #[test]

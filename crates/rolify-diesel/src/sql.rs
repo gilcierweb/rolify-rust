@@ -21,8 +21,9 @@
 #[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 mod backend_sql {
     use crate::dialect::{cast_to_text, placeholder};
+    use rolify_core::config::HolderIdKind;
     use rolify_core::query::{ResourceFilter, RoleQuery};
-    use rolify_core::role::{ResourceId, RoleName};
+    use rolify_core::role::RoleName;
 
     /// Build the non-strict ladder WHERE clause for a single `RoleQuery`.
     ///
@@ -533,23 +534,25 @@ mod backend_sql {
     /// - `holder`: when Some, only rows linked to that holder
     ///
     /// The holder table and join are only included when `holder` is Some.
+    /// The join comparison follows the configured kind (D-08-04): typed
+    /// kinds compare the primary key natively (`BIGINT = BIGINT`,
+    /// `UUID = UUID`); the string kind keeps the `cast_to_text` repair.
     #[must_use]
     pub fn select_roles_matching(
+        kind: HolderIdKind,
         role_table: &str,
         join_table: &str,
         holder_table: Option<&str>,
         has_holder: bool,
     ) -> String {
         let holder_join = if has_holder {
-            // The join key is stringified in the link table while the
-            // holder primary key is an integer: cast for the comparison
-            // (and the `Text` decode) on every backend.
             format!(
                 "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
-             INNER JOIN {holder_table} AS holder ON {holder_id} = link.user_id",
+             INNER JOIN {holder_table} AS holder ON {holder_join_key}",
                 join_table = join_table,
                 holder_table = holder_table.unwrap_or(""),
-                holder_id = cast_to_text("holder.id"),
+                holder_join_key =
+                    crate::holder::holder_join_condition(kind, "holder.id", "link.user_id"),
             )
         } else {
             String::new()
@@ -624,14 +627,23 @@ mod backend_sql {
     }
 
     /// Build the holder filter fragment for `roles_matching` (when holder is Some).
+    ///
+    /// The comparison follows the configured kind (D-08-04): typed kinds
+    /// bind the parsed holder id against the bare primary-key column
+    /// (the typed bind lane); the string kind keeps the text cast
+    /// because the bind is text while the fixture holder key is an
+    /// integer (same rationale as the holder join in
+    /// [`select_roles_matching`]).
     #[must_use]
-    pub fn roles_matching_holder_filter(_holder_id: &ResourceId, index: usize) -> (String, usize) {
-        let ph = placeholder(index);
-        // Holder primary keys are integers; the bind carries the
-        // stringified id (see `cast_to_text`).
+    pub fn roles_matching_holder_filter(kind: HolderIdKind, start_index: usize) -> (String, usize) {
+        let ph = placeholder(start_index);
         (
-            format!("AND {} = {}", cast_to_text("holder.id"), ph),
-            index + 1,
+            format!(
+                "AND {} = {}",
+                crate::holder::holder_id_projection(kind, "holder.id"),
+                ph
+            ),
+            start_index + 1,
         )
     }
 

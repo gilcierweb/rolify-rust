@@ -685,10 +685,6 @@ macro_rules! sync_bind_ladders {
         ///
         /// Panics past 7 leading binds: the catalog read caps the bind
         /// count at 8 including the holder, so the arm is unreachable.
-        // Dead until the kind-aware roles_matching lane wires it (the
-        // gate-fix task 2 commit); kept next to its siblings so the
-        // bind-lane surface stays whole.
-        #[allow(dead_code)]
         #[allow(clippy::too_many_lines)] // typed bind ladder enumerates chains by arity
         fn load_text_then_holder<HolderSqlType, Holder, Row>(
             conn: &mut $conn,
@@ -763,6 +759,88 @@ macro_rules! sync_bind_ladders {
                     .bind::<Text, _>(&prefix[5])
                     .bind::<Text, _>(&prefix[6])
                     .bind::<HolderSqlType, _>(holder)
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                _ => panic!("typed bind ladder exceeded the 8-bind catalog cap"),
+            };
+            Ok(rows)
+        }
+
+        /// Load rows binding `binds` as an all-text chain (the
+        /// `roles_matching` catalog read without a holder filter).
+        ///
+        /// # Panics
+        ///
+        /// Panics outside the 1..=8 catalog window: types are non-empty
+        /// and the read caps at 8 total binds.
+        #[allow(clippy::too_many_lines)] // typed bind ladder enumerates chains by arity
+        fn load_text_only<Row>(
+            conn: &mut $conn,
+            sql: &str,
+            binds: &[String],
+        ) -> Result<Vec<Row>, Error>
+        where
+            Row: diesel::deserialize::QueryableByName<$backend> + Send + 'static,
+        {
+            let rows = match binds.len() {
+                1 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                2 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                3 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                4 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                5 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                6 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .bind::<Text, _>(&binds[5])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                7 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .bind::<Text, _>(&binds[5])
+                    .bind::<Text, _>(&binds[6])
+                    .load::<Row>(conn)
+                    .map_err(Error::Diesel)?,
+                8 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .bind::<Text, _>(&binds[5])
+                    .bind::<Text, _>(&binds[6])
+                    .bind::<Text, _>(&binds[7])
                     .load::<Row>(conn)
                     .map_err(Error::Diesel)?,
                 _ => panic!("typed bind ladder exceeded the 8-bind catalog cap"),
@@ -1237,10 +1315,6 @@ macro_rules! async_bind_ladders {
         ///
         /// Panics past 7 leading binds: the catalog read caps the bind
         /// count at 8 including the holder, so the arm is unreachable.
-        // Dead until the kind-aware roles_matching lane wires it (the
-        // gate-fix task 2 commit); kept next to its siblings so the
-        // bind-lane surface stays whole.
-        #[allow(dead_code)]
         #[allow(clippy::too_many_lines)] // typed bind ladder enumerates chains by arity
         async fn load_text_then_holder<HolderSqlType, Holder, Row>(
             conn: &mut $conn,
@@ -1332,6 +1406,96 @@ macro_rules! async_bind_ladders {
             };
             Ok(rows)
         }
+
+        /// Load rows binding `binds` as an all-text chain (the
+        /// `roles_matching` catalog read without a holder filter).
+        ///
+        /// # Panics
+        ///
+        /// Panics outside the 1..=8 catalog window: types are non-empty
+        /// and the read caps at 8 total binds.
+        #[allow(clippy::too_many_lines)] // typed bind ladder enumerates chains by arity
+        async fn load_text_only<Row>(
+            conn: &mut $conn,
+            sql: &str,
+            binds: &[String],
+        ) -> Result<Vec<Row>, Error>
+        where
+            Row: diesel::deserialize::QueryableByName<$backend> + Send + 'static,
+        {
+            let rows = match binds.len() {
+                1 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                2 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                3 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                4 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                5 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                6 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .bind::<Text, _>(&binds[5])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                7 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .bind::<Text, _>(&binds[5])
+                    .bind::<Text, _>(&binds[6])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                8 => diesel::sql_query(sql)
+                    .bind::<Text, _>(&binds[0])
+                    .bind::<Text, _>(&binds[1])
+                    .bind::<Text, _>(&binds[2])
+                    .bind::<Text, _>(&binds[3])
+                    .bind::<Text, _>(&binds[4])
+                    .bind::<Text, _>(&binds[5])
+                    .bind::<Text, _>(&binds[6])
+                    .bind::<Text, _>(&binds[7])
+                    .load::<Row>(conn)
+                    .await
+                    .map_err(Error::Diesel)?,
+                _ => panic!("typed bind ladder exceeded the 8-bind catalog cap"),
+            };
+            Ok(rows)
+        }
     };
 }
 
@@ -1380,9 +1544,6 @@ macro_rules! sync_bind_dispatch {
 
         /// Dispatch a load whose placeholder sequence puts the typed
         /// holder LAST (the `roles_matching` holder filter).
-        // Dead until the kind-aware roles_matching lane wires it (the
-        // gate-fix task 2 commit).
-        #[allow(dead_code)]
         fn load_text_then_typed<Row>(
             conn: &mut $conn,
             sql: &str,
@@ -1461,9 +1622,6 @@ macro_rules! async_bind_dispatch {
 
         /// Dispatch a load whose placeholder sequence puts the typed
         /// holder LAST (the `roles_matching` holder filter).
-        // Dead until the kind-aware roles_matching lane wires it (the
-        // gate-fix task 2 commit).
-        #[allow(dead_code)]
         async fn load_text_then_typed<Row>(
             conn: &mut $conn,
             sql: &str,
@@ -2051,7 +2209,7 @@ mod pg_impl {
             let sql = format!(
                 "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
                  FROM {holder_table} AS holder \
-                 INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS TEXT) \
+                 INNER JOIN {join_table} AS link ON {holder_join} \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                  WHERE {type_filter} AND {where_clause}",
                 holder_table = holder_table,
@@ -2059,6 +2217,15 @@ mod pg_impl {
                 role_table = self.role_table,
                 type_filter = type_filter,
                 where_clause = where_clause,
+                // Kind-aware join (D-08-04): typed kinds compare the
+                // primary key natively; the string kind keeps the cast.
+                // The SELECT keeps cast_to_text: HolderIdRow decodes
+                // Text on every engine.
+                holder_join = crate::holder::holder_join_condition(
+                    self.holder_id_kind(),
+                    "holder.id",
+                    "link.user_id",
+                ),
             );
 
             // Binds are positional: the holder types first (placeholders
@@ -2294,6 +2461,7 @@ mod pg_impl {
             let holder_table = query.holder.map(|_| self.holder_table_sql());
 
             let base_sql = crate::sql::select_roles_matching(
+                self.holder_id_kind(),
                 &self.role_table,
                 &self.join_table,
                 holder_table.as_deref(),
@@ -2307,8 +2475,8 @@ mod pg_impl {
                 (String::new(), idx)
             };
             let (scope_filter, idx) = crate::sql::roles_matching_scope_filter(&query.scope, idx);
-            let (holder_filter, _) = if let Some(holder) = query.holder {
-                crate::sql::roles_matching_holder_filter(holder, idx)
+            let (holder_filter, _) = if has_holder {
+                crate::sql::roles_matching_holder_filter(self.holder_id_kind(), idx)
             } else {
                 (String::new(), idx)
             };
@@ -2319,89 +2487,39 @@ mod pg_impl {
                 .replace("{scope_filter}", &scope_filter)
                 .replace("{holder_filter}", &holder_filter);
 
-            let mut type_vals: Vec<&str> = query.types.to_vec();
+            // Leading text binds (types, optional name, optional scope
+            // id); the typed holder closes the placeholder sequence
+            // when present (D-08-05: parsed at the boundary, bound per
+            // the kind's physical type).
+            let mut text_binds: Vec<String> = query
+                .types
+                .iter()
+                .map(|resource_type| (*resource_type).to_owned())
+                .collect();
             if let Some(name) = query.name {
-                type_vals.push(name.as_str());
+                text_binds.push(name.as_str().to_owned());
             }
             match &query.scope {
                 CatalogScope::ClassOnly => {
-                    type_vals.push(SCOPE_SENTINEL);
+                    text_binds.push(SCOPE_SENTINEL.to_owned());
                 }
                 CatalogScope::InstanceOnly { resource_id } => {
-                    if let Some(rid) = resource_id {
-                        type_vals.push(rid.as_str());
+                    if let Some(resource_id) = resource_id {
+                        text_binds.push(resource_id.as_str().to_owned());
                     }
                 }
                 CatalogScope::ClassAndInstance => {}
             }
-            if let Some(holder) = query.holder {
-                type_vals.push(holder.as_str());
-            }
 
-            let q = diesel::sql_query(sql);
-            let rows: Vec<ResourceKeyRow> = match type_vals.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                2 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                3 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                4 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                5 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                6 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                7 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .bind::<Text, _>(type_vals[6])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                8 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .bind::<Text, _>(type_vals[6])
-                    .bind::<Text, _>(type_vals[7])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("roles_matching: too many bind values (max 8)"),
+            let rows: Vec<ResourceKeyRow> = if let Some(holder) = query.holder {
+                let holder_bind =
+                    match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                        Ok(parsed) => parsed,
+                        Err(e) => return async move { Err(Error::Core(e)) },
+                    };
+                load_text_then_typed::<ResourceKeyRow>(conn, &sql, &text_binds, &holder_bind)?
+            } else {
+                load_text_only::<ResourceKeyRow>(conn, &sql, &text_binds)?
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -3129,7 +3247,7 @@ mod mysql_impl {
             let sql = format!(
                 "SELECT DISTINCT CAST(holder.id AS CHAR) AS user_id \
                  FROM {holder_table} AS holder \
-                 INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS CHAR) \
+                 INNER JOIN {join_table} AS link ON {holder_join} \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                  WHERE {type_filter} AND {where_clause}",
                 holder_table = holder_table,
@@ -3137,6 +3255,15 @@ mod mysql_impl {
                 role_table = self.role_table,
                 type_filter = type_filter,
                 where_clause = where_clause,
+                // Kind-aware join (D-08-04): typed kinds compare the
+                // primary key natively; the string kind keeps the cast.
+                // The SELECT keeps cast_to_text: HolderIdRow decodes
+                // Text on every engine.
+                holder_join = crate::holder::holder_join_condition(
+                    self.holder_id_kind(),
+                    "holder.id",
+                    "link.user_id",
+                ),
             );
 
             // Binds are positional: the holder types first (placeholders
@@ -3375,6 +3502,7 @@ mod mysql_impl {
             let holder_table = query.holder.map(|_| self.holder_table_sql());
 
             let base_sql = crate::sql::select_roles_matching(
+                self.holder_id_kind(),
                 &self.role_table,
                 &self.join_table,
                 holder_table.as_deref(),
@@ -3388,8 +3516,8 @@ mod mysql_impl {
                 (String::new(), idx)
             };
             let (scope_filter, idx) = crate::sql::roles_matching_scope_filter(&query.scope, idx);
-            let (holder_filter, _) = if let Some(holder) = query.holder {
-                crate::sql::roles_matching_holder_filter(holder, idx)
+            let (holder_filter, _) = if has_holder {
+                crate::sql::roles_matching_holder_filter(self.holder_id_kind(), idx)
             } else {
                 (String::new(), idx)
             };
@@ -3400,89 +3528,39 @@ mod mysql_impl {
                 .replace("{scope_filter}", &scope_filter)
                 .replace("{holder_filter}", &holder_filter);
 
-            let mut type_vals: Vec<&str> = query.types.to_vec();
+            // Leading text binds (types, optional name, optional scope
+            // id); the typed holder closes the placeholder sequence
+            // when present (D-08-05: parsed at the boundary, bound per
+            // the kind's physical type).
+            let mut text_binds: Vec<String> = query
+                .types
+                .iter()
+                .map(|resource_type| (*resource_type).to_owned())
+                .collect();
             if let Some(name) = query.name {
-                type_vals.push(name.as_str());
+                text_binds.push(name.as_str().to_owned());
             }
             match &query.scope {
                 CatalogScope::ClassOnly => {
-                    type_vals.push(SCOPE_SENTINEL);
+                    text_binds.push(SCOPE_SENTINEL.to_owned());
                 }
                 CatalogScope::InstanceOnly { resource_id } => {
-                    if let Some(rid) = resource_id {
-                        type_vals.push(rid.as_str());
+                    if let Some(resource_id) = resource_id {
+                        text_binds.push(resource_id.as_str().to_owned());
                     }
                 }
                 CatalogScope::ClassAndInstance => {}
             }
-            if let Some(holder) = query.holder {
-                type_vals.push(holder.as_str());
-            }
 
-            let q = diesel::sql_query(sql);
-            let rows: Vec<ResourceKeyRow> = match type_vals.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                2 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                3 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                4 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                5 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                6 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                7 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .bind::<Text, _>(type_vals[6])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                8 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .bind::<Text, _>(type_vals[6])
-                    .bind::<Text, _>(type_vals[7])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("roles_matching: too many bind values (max 8)"),
+            let rows: Vec<ResourceKeyRow> = if let Some(holder) = query.holder {
+                let holder_bind =
+                    match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                        Ok(parsed) => parsed,
+                        Err(e) => return async move { Err(Error::Core(e)) },
+                    };
+                load_text_then_typed::<ResourceKeyRow>(conn, &sql, &text_binds, &holder_bind)?
+            } else {
+                load_text_only::<ResourceKeyRow>(conn, &sql, &text_binds)?
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -4208,7 +4286,7 @@ mod sqlite_impl {
             let sql = format!(
                 "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
                  FROM {holder_table} AS holder \
-                 INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS TEXT) \
+                 INNER JOIN {join_table} AS link ON {holder_join} \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                  WHERE {type_filter} AND {where_clause}",
                 holder_table = holder_table,
@@ -4216,6 +4294,15 @@ mod sqlite_impl {
                 role_table = self.role_table,
                 type_filter = type_filter,
                 where_clause = where_clause,
+                // Kind-aware join (D-08-04): typed kinds compare the
+                // primary key natively; the string kind keeps the cast.
+                // The SELECT keeps cast_to_text: HolderIdRow decodes
+                // Text on every engine.
+                holder_join = crate::holder::holder_join_condition(
+                    self.holder_id_kind(),
+                    "holder.id",
+                    "link.user_id",
+                ),
             );
 
             // Binds are positional: the holder types first (placeholders
@@ -4451,6 +4538,7 @@ mod sqlite_impl {
             let holder_table = query.holder.map(|_| self.holder_table_sql());
 
             let base_sql = crate::sql::select_roles_matching(
+                self.holder_id_kind(),
                 &self.role_table,
                 &self.join_table,
                 holder_table.as_deref(),
@@ -4464,8 +4552,8 @@ mod sqlite_impl {
                 (String::new(), idx)
             };
             let (scope_filter, idx) = crate::sql::roles_matching_scope_filter(&query.scope, idx);
-            let (holder_filter, _) = if let Some(holder) = query.holder {
-                crate::sql::roles_matching_holder_filter(holder, idx)
+            let (holder_filter, _) = if has_holder {
+                crate::sql::roles_matching_holder_filter(self.holder_id_kind(), idx)
             } else {
                 (String::new(), idx)
             };
@@ -4476,89 +4564,39 @@ mod sqlite_impl {
                 .replace("{scope_filter}", &scope_filter)
                 .replace("{holder_filter}", &holder_filter);
 
-            let mut type_vals: Vec<&str> = query.types.to_vec();
+            // Leading text binds (types, optional name, optional scope
+            // id); the typed holder closes the placeholder sequence
+            // when present (D-08-05: parsed at the boundary, bound per
+            // the kind's physical type).
+            let mut text_binds: Vec<String> = query
+                .types
+                .iter()
+                .map(|resource_type| (*resource_type).to_owned())
+                .collect();
             if let Some(name) = query.name {
-                type_vals.push(name.as_str());
+                text_binds.push(name.as_str().to_owned());
             }
             match &query.scope {
                 CatalogScope::ClassOnly => {
-                    type_vals.push(SCOPE_SENTINEL);
+                    text_binds.push(SCOPE_SENTINEL.to_owned());
                 }
                 CatalogScope::InstanceOnly { resource_id } => {
-                    if let Some(rid) = resource_id {
-                        type_vals.push(rid.as_str());
+                    if let Some(resource_id) = resource_id {
+                        text_binds.push(resource_id.as_str().to_owned());
                     }
                 }
                 CatalogScope::ClassAndInstance => {}
             }
-            if let Some(holder) = query.holder {
-                type_vals.push(holder.as_str());
-            }
 
-            let q = diesel::sql_query(sql);
-            let rows: Vec<ResourceKeyRow> = match type_vals.len() {
-                0 => unreachable!(),
-                1 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                2 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                3 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                4 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                5 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                6 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                7 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .bind::<Text, _>(type_vals[6])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                8 => q
-                    .bind::<Text, _>(type_vals[0])
-                    .bind::<Text, _>(type_vals[1])
-                    .bind::<Text, _>(type_vals[2])
-                    .bind::<Text, _>(type_vals[3])
-                    .bind::<Text, _>(type_vals[4])
-                    .bind::<Text, _>(type_vals[5])
-                    .bind::<Text, _>(type_vals[6])
-                    .bind::<Text, _>(type_vals[7])
-                    .load(conn)
-                    .map_err(Error::Diesel)?,
-                _ => panic!("roles_matching: too many bind values (max 8)"),
+            let rows: Vec<ResourceKeyRow> = if let Some(holder) = query.holder {
+                let holder_bind =
+                    match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                        Ok(parsed) => parsed,
+                        Err(e) => return async move { Err(Error::Core(e)) },
+                    };
+                load_text_then_typed::<ResourceKeyRow>(conn, &sql, &text_binds, &holder_bind)?
+            } else {
+                load_text_only::<ResourceKeyRow>(conn, &sql, &text_binds)?
             };
             async move { Ok(rows.into_iter().map(|r| r.to_record()).collect()) }
         }
@@ -5364,10 +5402,19 @@ mod pg_async_impl {
                 let type_filter =
                     format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
+                // Kind-aware join (D-08-04): typed kinds compare the
+                // primary key natively; the string kind keeps the cast.
+                // The SELECT keeps cast_to_text: HolderIdRow decodes
+                // Text on every engine.
+                let holder_join = crate::holder::holder_join_condition(
+                    self.holder_id_kind(),
+                    "holder.id",
+                    "link.user_id",
+                );
                 let sql = format!(
                     "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
                      FROM {holder_table} AS holder \
-                     INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS TEXT) \
+                     INNER JOIN {join_table} AS link ON {holder_join} \
                      INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                      WHERE {type_filter} AND {where_clause}",
                 );
@@ -5620,6 +5667,7 @@ mod pg_async_impl {
 
                 let has_holder = query.holder.is_some();
                 let base_sql = crate::sql::select_roles_matching(
+                    self.holder_id_kind(),
                     &role_table,
                     &join_table,
                     holder_table.as_deref(),
@@ -5634,8 +5682,8 @@ mod pg_async_impl {
                 };
                 let (scope_filter, idx) =
                     crate::sql::roles_matching_scope_filter(&query.scope, idx);
-                let (holder_filter, _) = if let Some(holder) = query.holder {
-                    crate::sql::roles_matching_holder_filter(holder, idx)
+                let (holder_filter, _) = if has_holder {
+                    crate::sql::roles_matching_holder_filter(self.holder_id_kind(), idx)
                 } else {
                     (String::new(), idx)
                 };
@@ -5646,97 +5694,40 @@ mod pg_async_impl {
                     .replace("{scope_filter}", &scope_filter)
                     .replace("{holder_filter}", &holder_filter);
 
-                let mut type_vals: Vec<&str> = query.types.to_vec();
+                // Leading text binds (types, optional name, optional
+                // scope id); the typed holder closes the placeholder
+                // sequence when present (D-08-05: parsed at the
+                // boundary, bound per the kind's physical type).
+                let mut text_binds: Vec<String> = query
+                    .types
+                    .iter()
+                    .map(|resource_type| (*resource_type).to_owned())
+                    .collect();
                 if let Some(name) = query.name {
-                    type_vals.push(name.as_str());
+                    text_binds.push(name.as_str().to_owned());
                 }
                 match &query.scope {
                     CatalogScope::ClassOnly => {
-                        type_vals.push(SCOPE_SENTINEL);
+                        text_binds.push(SCOPE_SENTINEL.to_owned());
                     }
                     CatalogScope::InstanceOnly { resource_id } => {
-                        if let Some(rid) = resource_id {
-                            type_vals.push(rid.as_str());
+                        if let Some(resource_id) = resource_id {
+                            text_binds.push(resource_id.as_str().to_owned());
                         }
                     }
                     CatalogScope::ClassAndInstance => {}
                 }
-                if let Some(holder) = query.holder {
-                    type_vals.push(holder.as_str());
-                }
 
-                let q = diesel::sql_query(sql);
-                let rows: Vec<ResourceKeyRow> = match type_vals.len() {
-                    0 => unreachable!(),
-                    1 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    2 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    3 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    4 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    5 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    6 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    7 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .bind::<Text, _>(type_vals[6])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    8 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .bind::<Text, _>(type_vals[6])
-                        .bind::<Text, _>(type_vals[7])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    _ => panic!("roles_matching: too many bind values (max 8)"),
+                let rows: Vec<ResourceKeyRow> = if let Some(holder) = query.holder {
+                    let holder_bind =
+                        match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                            Ok(parsed) => parsed,
+                            Err(e) => return Err(Error::Core(e)),
+                        };
+                    load_text_then_typed::<ResourceKeyRow>(conn, &sql, &text_binds, &holder_bind)
+                        .await?
+                } else {
+                    load_text_only::<ResourceKeyRow>(conn, &sql, &text_binds).await?
                 };
                 Ok(rows.into_iter().map(|r| r.to_record()).collect())
             }
@@ -6552,10 +6543,19 @@ mod mysql_async_impl {
                 let type_filter =
                     format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
+                // Kind-aware join (D-08-04): typed kinds compare the
+                // primary key natively; the string kind keeps the cast.
+                // The SELECT keeps cast_to_text: HolderIdRow decodes
+                // Text on every engine.
+                let holder_join = crate::holder::holder_join_condition(
+                    self.holder_id_kind(),
+                    "holder.id",
+                    "link.user_id",
+                );
                 let sql = format!(
                     "SELECT DISTINCT CAST(holder.id AS CHAR) AS user_id \
                      FROM {holder_table} AS holder \
-                     INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS CHAR) \
+                     INNER JOIN {join_table} AS link ON {holder_join} \
                      INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                      WHERE {type_filter} AND {where_clause}",
                 );
@@ -6808,6 +6808,7 @@ mod mysql_async_impl {
 
                 let has_holder = query.holder.is_some();
                 let base_sql = crate::sql::select_roles_matching(
+                    self.holder_id_kind(),
                     &role_table,
                     &join_table,
                     holder_table.as_deref(),
@@ -6822,8 +6823,8 @@ mod mysql_async_impl {
                 };
                 let (scope_filter, idx) =
                     crate::sql::roles_matching_scope_filter(&query.scope, idx);
-                let (holder_filter, _) = if let Some(holder) = query.holder {
-                    crate::sql::roles_matching_holder_filter(holder, idx)
+                let (holder_filter, _) = if has_holder {
+                    crate::sql::roles_matching_holder_filter(self.holder_id_kind(), idx)
                 } else {
                     (String::new(), idx)
                 };
@@ -6834,97 +6835,40 @@ mod mysql_async_impl {
                     .replace("{scope_filter}", &scope_filter)
                     .replace("{holder_filter}", &holder_filter);
 
-                let mut type_vals: Vec<&str> = query.types.to_vec();
+                // Leading text binds (types, optional name, optional
+                // scope id); the typed holder closes the placeholder
+                // sequence when present (D-08-05: parsed at the
+                // boundary, bound per the kind's physical type).
+                let mut text_binds: Vec<String> = query
+                    .types
+                    .iter()
+                    .map(|resource_type| (*resource_type).to_owned())
+                    .collect();
                 if let Some(name) = query.name {
-                    type_vals.push(name.as_str());
+                    text_binds.push(name.as_str().to_owned());
                 }
                 match &query.scope {
                     CatalogScope::ClassOnly => {
-                        type_vals.push(SCOPE_SENTINEL);
+                        text_binds.push(SCOPE_SENTINEL.to_owned());
                     }
                     CatalogScope::InstanceOnly { resource_id } => {
-                        if let Some(rid) = resource_id {
-                            type_vals.push(rid.as_str());
+                        if let Some(resource_id) = resource_id {
+                            text_binds.push(resource_id.as_str().to_owned());
                         }
                     }
                     CatalogScope::ClassAndInstance => {}
                 }
-                if let Some(holder) = query.holder {
-                    type_vals.push(holder.as_str());
-                }
 
-                let q = diesel::sql_query(sql);
-                let rows: Vec<ResourceKeyRow> = match type_vals.len() {
-                    0 => unreachable!(),
-                    1 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    2 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    3 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    4 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    5 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    6 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    7 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .bind::<Text, _>(type_vals[6])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    8 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .bind::<Text, _>(type_vals[6])
-                        .bind::<Text, _>(type_vals[7])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    _ => panic!("roles_matching: too many bind values (max 8)"),
+                let rows: Vec<ResourceKeyRow> = if let Some(holder) = query.holder {
+                    let holder_bind =
+                        match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                            Ok(parsed) => parsed,
+                            Err(e) => return Err(Error::Core(e)),
+                        };
+                    load_text_then_typed::<ResourceKeyRow>(conn, &sql, &text_binds, &holder_bind)
+                        .await?
+                } else {
+                    load_text_only::<ResourceKeyRow>(conn, &sql, &text_binds).await?
                 };
                 Ok(rows.into_iter().map(|r| r.to_record()).collect())
             }
@@ -7748,10 +7692,19 @@ mod sqlite_async_impl {
                 let type_filter =
                     format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
+                // Kind-aware join (D-08-04): typed kinds compare the
+                // primary key natively; the string kind keeps the cast.
+                // The SELECT keeps cast_to_text: HolderIdRow decodes
+                // Text on every engine.
+                let holder_join = crate::holder::holder_join_condition(
+                    self.holder_id_kind(),
+                    "holder.id",
+                    "link.user_id",
+                );
                 let sql = format!(
                     "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
                      FROM {holder_table} AS holder \
-                     INNER JOIN {join_table} AS link ON link.user_id = CAST(holder.id AS TEXT) \
+                     INNER JOIN {join_table} AS link ON {holder_join} \
                      INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
                      WHERE {type_filter} AND {where_clause}",
                 );
@@ -8004,6 +7957,7 @@ mod sqlite_async_impl {
 
                 let has_holder = query.holder.is_some();
                 let base_sql = crate::sql::select_roles_matching(
+                    self.holder_id_kind(),
                     &role_table,
                     &join_table,
                     holder_table.as_deref(),
@@ -8018,8 +7972,8 @@ mod sqlite_async_impl {
                 };
                 let (scope_filter, idx) =
                     crate::sql::roles_matching_scope_filter(&query.scope, idx);
-                let (holder_filter, _) = if let Some(holder) = query.holder {
-                    crate::sql::roles_matching_holder_filter(holder, idx)
+                let (holder_filter, _) = if has_holder {
+                    crate::sql::roles_matching_holder_filter(self.holder_id_kind(), idx)
                 } else {
                     (String::new(), idx)
                 };
@@ -8030,97 +7984,40 @@ mod sqlite_async_impl {
                     .replace("{scope_filter}", &scope_filter)
                     .replace("{holder_filter}", &holder_filter);
 
-                let mut type_vals: Vec<&str> = query.types.to_vec();
+                // Leading text binds (types, optional name, optional
+                // scope id); the typed holder closes the placeholder
+                // sequence when present (D-08-05: parsed at the
+                // boundary, bound per the kind's physical type).
+                let mut text_binds: Vec<String> = query
+                    .types
+                    .iter()
+                    .map(|resource_type| (*resource_type).to_owned())
+                    .collect();
                 if let Some(name) = query.name {
-                    type_vals.push(name.as_str());
+                    text_binds.push(name.as_str().to_owned());
                 }
                 match &query.scope {
                     CatalogScope::ClassOnly => {
-                        type_vals.push(SCOPE_SENTINEL);
+                        text_binds.push(SCOPE_SENTINEL.to_owned());
                     }
                     CatalogScope::InstanceOnly { resource_id } => {
-                        if let Some(rid) = resource_id {
-                            type_vals.push(rid.as_str());
+                        if let Some(resource_id) = resource_id {
+                            text_binds.push(resource_id.as_str().to_owned());
                         }
                     }
                     CatalogScope::ClassAndInstance => {}
                 }
-                if let Some(holder) = query.holder {
-                    type_vals.push(holder.as_str());
-                }
 
-                let q = diesel::sql_query(sql);
-                let rows: Vec<ResourceKeyRow> = match type_vals.len() {
-                    0 => unreachable!(),
-                    1 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    2 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    3 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    4 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    5 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    6 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    7 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .bind::<Text, _>(type_vals[6])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    8 => q
-                        .bind::<Text, _>(type_vals[0])
-                        .bind::<Text, _>(type_vals[1])
-                        .bind::<Text, _>(type_vals[2])
-                        .bind::<Text, _>(type_vals[3])
-                        .bind::<Text, _>(type_vals[4])
-                        .bind::<Text, _>(type_vals[5])
-                        .bind::<Text, _>(type_vals[6])
-                        .bind::<Text, _>(type_vals[7])
-                        .load(conn)
-                        .await
-                        .map_err(Error::Diesel)?,
-                    _ => panic!("roles_matching: too many bind values (max 8)"),
+                let rows: Vec<ResourceKeyRow> = if let Some(holder) = query.holder {
+                    let holder_bind =
+                        match crate::holder::parsed_for_store(self.holder_id_kind(), holder) {
+                            Ok(parsed) => parsed,
+                            Err(e) => return Err(Error::Core(e)),
+                        };
+                    load_text_then_typed::<ResourceKeyRow>(conn, &sql, &text_binds, &holder_bind)
+                        .await?
+                } else {
+                    load_text_only::<ResourceKeyRow>(conn, &sql, &text_binds).await?
                 };
                 Ok(rows.into_iter().map(|r| r.to_record()).collect())
             }
