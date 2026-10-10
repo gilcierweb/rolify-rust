@@ -71,15 +71,15 @@ mod sqlite {
     /// Canonical SQLite DDL for the kind's join column type (D-08-04).
     fn schema_ddl(kind: HolderIdKind) -> &'static str {
         match kind {
-            HolderIdKind::Integer => include_str!(
-                "../migrations/sqlite/integer/0000000001_rolify_create_tables/up.sql"
-            ),
-            HolderIdKind::Uuid => include_str!(
-                "../migrations/sqlite/uuid/0000000001_rolify_create_tables/up.sql"
-            ),
-            HolderIdKind::String => include_str!(
-                "../migrations/sqlite/string/0000000001_rolify_create_tables/up.sql"
-            ),
+            HolderIdKind::Integer => {
+                include_str!("../migrations/sqlite/integer/0000000001_rolify_create_tables/up.sql")
+            }
+            HolderIdKind::Uuid => {
+                include_str!("../migrations/sqlite/uuid/0000000001_rolify_create_tables/up.sql")
+            }
+            HolderIdKind::String => {
+                include_str!("../migrations/sqlite/string/0000000001_rolify_create_tables/up.sql")
+            }
         }
     }
 
@@ -129,10 +129,7 @@ mod sqlite {
             );
             // finder
             assert_eq!(
-                store
-                    .roles_of(&mut conn, &holder)
-                    .expect("roles_of")
-                    .len(),
+                store.roles_of(&mut conn, &holder).expect("roles_of").len(),
                 1,
                 "roles_of lists the granted role for {kind:?}"
             );
@@ -175,10 +172,7 @@ mod sqlite {
                 .add(&mut conn, &bad_holder, &admin)
                 .expect_err("invalid holder id must be rejected pre-SQL");
             assert!(
-                matches!(
-                    error,
-                    Error::Core(RolifyError::InvalidHolderId { .. })
-                ),
+                matches!(error, Error::Core(RolifyError::InvalidHolderId { .. })),
                 "expected InvalidHolderId for {kind:?}, got {error:?}"
             );
         }
@@ -207,12 +201,12 @@ mod postgres {
             HolderIdKind::Integer => include_str!(
                 "../migrations/postgres/integer/0000000001_rolify_create_tables/up.sql"
             ),
-            HolderIdKind::Uuid => include_str!(
-                "../migrations/postgres/uuid/0000000001_rolify_create_tables/up.sql"
-            ),
-            HolderIdKind::String => include_str!(
-                "../migrations/postgres/string/0000000001_rolify_create_tables/up.sql"
-            ),
+            HolderIdKind::Uuid => {
+                include_str!("../migrations/postgres/uuid/0000000001_rolify_create_tables/up.sql")
+            }
+            HolderIdKind::String => {
+                include_str!("../migrations/postgres/string/0000000001_rolify_create_tables/up.sql")
+            }
         }
     }
 
@@ -232,6 +226,12 @@ mod postgres {
 
     #[test]
     fn lifecycle_all_kinds() {
+        // The fresh_conn DROP+CREATE sequence races against the sibling
+        // pg test on the SHARED container database (pg_class_relname_nsp_index
+        // duplicates); the suite guard serializes the two for the whole
+        // test body (concurrency.rs precedent). SQLite legs use fresh
+        // per-connection :memory: databases and need no guard.
+        let _suite_guard = crate::support::SuiteGuard::acquire();
         for kind in all_kinds() {
             let mut conn = fresh_conn(kind);
             let mut store = store_for(kind);
@@ -258,10 +258,7 @@ mod postgres {
                 "where_ finds the granted role for {kind:?}"
             );
             assert_eq!(
-                store
-                    .roles_of(&mut conn, &holder)
-                    .expect("roles_of")
-                    .len(),
+                store.roles_of(&mut conn, &holder).expect("roles_of").len(),
                 1,
                 "roles_of lists the granted role for {kind:?}"
             );
@@ -280,6 +277,8 @@ mod postgres {
 
     #[test]
     fn invalid_holder_id_rejected_all_kinds() {
+        // Same shared-container serialization as the lifecycle leg.
+        let _suite_guard = crate::support::SuiteGuard::acquire();
         for kind in rejecting_kinds() {
             let mut conn = fresh_conn(kind);
             let mut store = store_for(kind);
@@ -318,15 +317,15 @@ mod mysql {
 
     fn schema_ddl(kind: HolderIdKind) -> &'static str {
         match kind {
-            HolderIdKind::Integer => include_str!(
-                "../migrations/mysql/integer/0000000001_rolify_create_tables/up.sql"
-            ),
-            HolderIdKind::Uuid => include_str!(
-                "../migrations/mysql/uuid/0000000001_rolify_create_tables/up.sql"
-            ),
-            HolderIdKind::String => include_str!(
-                "../migrations/mysql/string/0000000001_rolify_create_tables/up.sql"
-            ),
+            HolderIdKind::Integer => {
+                include_str!("../migrations/mysql/integer/0000000001_rolify_create_tables/up.sql")
+            }
+            HolderIdKind::Uuid => {
+                include_str!("../migrations/mysql/uuid/0000000001_rolify_create_tables/up.sql")
+            }
+            HolderIdKind::String => {
+                include_str!("../migrations/mysql/string/0000000001_rolify_create_tables/up.sql")
+            }
         }
     }
 
@@ -374,10 +373,7 @@ mod mysql {
                 "where_ finds the granted role for {kind:?}"
             );
             assert_eq!(
-                store
-                    .roles_of(&mut conn, &holder)
-                    .expect("roles_of")
-                    .len(),
+                store.roles_of(&mut conn, &holder).expect("roles_of").len(),
                 1,
                 "roles_of lists the granted role for {kind:?}"
             );
