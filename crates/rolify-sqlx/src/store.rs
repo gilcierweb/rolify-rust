@@ -506,6 +506,7 @@ fn holder_type_filter<DB: Database>(holder_alias: Option<&str>, type_count: usiz
     }
 }
 
+#[maybe_async::maybe_async(AFIT)]
 impl<DB> RoleStore for SqlxStore<DB>
 where
     DB: Database,
@@ -1005,6 +1006,7 @@ where
     }
 }
 
+#[maybe_async::maybe_async(AFIT)]
 impl<DB> ResourceStore for SqlxStore<DB>
 where
     DB: Database,

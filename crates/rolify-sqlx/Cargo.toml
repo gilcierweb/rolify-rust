@@ -10,6 +10,7 @@ rolify-core = { workspace = true }
 thiserror = { workspace = true }
 sqlx = { workspace = true, features = ["uuid"] }
 uuid = { workspace = true }
+maybe-async = { workspace = true }
 
 [dev-dependencies]
 rolify-test = { workspace = true, features = ["suite"] }
@@ -18,7 +19,6 @@ testcontainers-modules = { version = "=0.15.0", default-features = false, featur
 tokio = { workspace = true }
 rstest = { workspace = true }
 pretty_assertions = { workspace = true }
-maybe-async = { workspace = true }
 
 [features]
 default = []
