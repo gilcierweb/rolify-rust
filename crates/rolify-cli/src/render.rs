@@ -4,10 +4,12 @@
 //! content generation. D-22 mirrored-tree layout with D-19 timestamp stem.
 
 use crate::args::Backend;
-use rolify_core::HolderIdKind;
-use crate::emitters::{mongo::render_mongo, seaorm::render_seaorm, sql::render_sql};
+use crate::emitters::{
+    default_join_table, mongo::render_mongo, seaorm::render_seaorm, sql::render_sql,
+};
 use crate::error::CliError;
 use crate::templates::scaffolding::{config_example, holder_stub, readme, role_stub};
+use rolify_core::HolderIdKind;
 use std::collections::BTreeMap;
 
 /// Input plan for rendering.
@@ -24,16 +26,17 @@ pub struct RenderPlan {
 
 impl RenderPlan {
     /// Creates a `RenderPlan` from CLI args.
+    ///
+    /// The join table derives here exactly once (WR-03): an explicit
+    /// `--join-table` wins, otherwise [`default_join_table`] supplies
+    /// the documented holder-plural shape. `main` validates the plan's
+    /// value, so validation and rendering can never disagree.
     #[must_use]
     pub fn from_args(args: crate::args::GenerateArgs) -> Self {
-        let join_table = args.join_table.clone().unwrap_or_else(|| {
-            let holder_plural = if args.holder_name.ends_with('s') {
-                format!("{}_", args.holder_name.to_lowercase())
-            } else {
-                format!("{}s_", args.holder_name.to_lowercase())
-            };
-            format!("{}{}", holder_plural, args.roles_table)
-        });
+        let join_table = args
+            .join_table
+            .clone()
+            .unwrap_or_else(|| default_join_table(&args.holder_name, &args.roles_table));
         Self {
             backend: args.backend,
             role_name: args.role_name,

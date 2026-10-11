@@ -25,20 +25,36 @@ pub(crate) const HOLDER_ID_TYPE_SENTINEL: &str = "{{holder_id_type}}";
 /// (D-08-07).
 pub(crate) const HOLDER_FK_SENTINEL: &str = "{{holder_fk}}";
 
-/// Derives the holder table name from the holder name: the lowercase form,
-/// pluralized by appending `s` unless it already ends in one. This mirrors the
-/// join-table derivation in [`RenderPlan::from_args`] (`User` -> `users`,
-/// `Customer` -> `customers`), so the optional holder foreign key points at
-/// the consumer's conventional holder table.
-///
-/// [`RenderPlan::from_args`]: crate::render::RenderPlan::from_args
-pub(crate) fn holder_table_name(holder_name: &str) -> String {
+/// The pluralized holder stem shared by the join-table and holder-table
+/// derivations (WR-03: one pluralization rule, three consumers): the
+/// lowercase holder name plus a trailing `s` unless it already ends in
+/// one (`User` -> `users`, `Business` -> `business`).
+pub(crate) fn holder_plural(holder_name: &str) -> String {
     let lowercase = holder_name.to_lowercase();
     if lowercase.ends_with('s') {
         lowercase
     } else {
         format!("{lowercase}s")
     }
+}
+
+/// Derives the holder table name from the holder name through
+/// [`holder_plural`] (`User` -> `users`, `Customer` -> `customers`), so
+/// the optional holder foreign key points at the consumer's conventional
+/// holder table.
+pub(crate) fn holder_table_name(holder_name: &str) -> String {
+    holder_plural(holder_name)
+}
+
+/// The default join table: the pluralized holder stem plus `_` plus the
+/// roles table, exactly the derivation documented in the args.rs help
+/// text (`User` + `roles` -> `users_roles`). One derivation for the whole
+/// binary (WR-03): [`RenderPlan::from_args`](crate::render::RenderPlan::from_args)
+/// computes the plan's join table through it and `main` validates the
+/// plan's value, so validation can never check a different name than the
+/// one rendered into SQL and scaffolding.
+pub(crate) fn default_join_table(holder_name: &str, roles_table: &str) -> String {
+    format!("{}_{}", holder_plural(holder_name), roles_table)
 }
 
 /// Builds the optional holder-foreign-key clause for the given plan and engine
@@ -121,7 +137,11 @@ mod tests {
     use crate::args::Backend;
     use crate::templates;
 
-    fn plan(roles_table: &str, join_table: &str, holder_id_kind: rolify_core::config::HolderIdKind) -> RenderPlan {
+    fn plan(
+        roles_table: &str,
+        join_table: &str,
+        holder_id_kind: rolify_core::config::HolderIdKind,
+    ) -> RenderPlan {
         RenderPlan {
             backend: Backend::Diesel,
             role_name: "Role".to_string(),
@@ -138,11 +158,16 @@ mod tests {
     /// type for String kind (`VARCHAR(191)` for `Postgres`, full charset for `MySQL`, `TEXT` for `SQLite`).
     #[test]
     fn substitute_table_names_default_identity() {
-        let default_plan = plan("roles", "users_roles", rolify_core::config::HolderIdKind::String);
+        let default_plan = plan(
+            "roles",
+            "users_roles",
+            rolify_core::config::HolderIdKind::String,
+        );
 
         for engine in ["postgres", "mysql", "sqlite"] {
             for template in [templates::up(engine), templates::down(engine)] {
-                let expected_type = holder_id_type_sql(rolify_core::config::HolderIdKind::String, engine);
+                let expected_type =
+                    holder_id_type_sql(rolify_core::config::HolderIdKind::String, engine);
                 let expected = template
                     .replace("{{holder_id_type}}", expected_type)
                     .replace(HOLDER_FK_SENTINEL, "");
@@ -159,7 +184,11 @@ mod tests {
     /// the documented derivation: both sentinels become the same stem.
     #[test]
     fn substitute_table_names_derived_join() {
-        let derived_plan = plan("privileges", "users_privileges", rolify_core::config::HolderIdKind::Integer);
+        let derived_plan = plan(
+            "privileges",
+            "users_privileges",
+            rolify_core::config::HolderIdKind::Integer,
+        );
         let rendered = substitute_table_names(templates::up("postgres"), &derived_plan, "postgres");
 
         assert!(
@@ -180,8 +209,13 @@ mod tests {
     /// the roles pass can never re-scan the inserted join name.
     #[test]
     fn substitute_table_names_explicit_join_embeds_roles_stem() {
-        let explicit_plan = plan("privileges", "member_roles_archive", rolify_core::config::HolderIdKind::Integer);
-        let rendered = substitute_table_names(templates::up("postgres"), &explicit_plan, "postgres");
+        let explicit_plan = plan(
+            "privileges",
+            "member_roles_archive",
+            rolify_core::config::HolderIdKind::Integer,
+        );
+        let rendered =
+            substitute_table_names(templates::up("postgres"), &explicit_plan, "postgres");
 
         assert!(
             rendered.contains("CREATE TABLE member_roles_archive"),
@@ -197,11 +231,16 @@ mod tests {
     /// custom pair: the mechanism swap preserves shipped bytes (D-14).
     #[test]
     fn substitute_table_names_custom_pair_matches_longest_first_output() {
-        let custom_plan = plan("privileges", "customers_privileges", rolify_core::config::HolderIdKind::Integer);
+        let custom_plan = plan(
+            "privileges",
+            "customers_privileges",
+            rolify_core::config::HolderIdKind::Integer,
+        );
 
         for engine in ["postgres", "mysql", "sqlite"] {
             for template in [templates::up(engine), templates::down(engine)] {
-                let expected_type = holder_id_type_sql(rolify_core::config::HolderIdKind::Integer, engine);
+                let expected_type =
+                    holder_id_type_sql(rolify_core::config::HolderIdKind::Integer, engine);
                 let longest_first = template
                     .replace("{{holder_id_type}}", expected_type)
                     .replace(HOLDER_FK_SENTINEL, "")
@@ -222,7 +261,11 @@ mod tests {
     #[test]
     fn holder_fk_clause_disabled_by_default() {
         for engine in ["postgres", "mysql", "sqlite"] {
-            let default_plan = plan("roles", "users_roles", rolify_core::config::HolderIdKind::Integer);
+            let default_plan = plan(
+                "roles",
+                "users_roles",
+                rolify_core::config::HolderIdKind::Integer,
+            );
             let rendered = substitute_table_names(templates::up(engine), &default_plan, engine);
             assert!(
                 !rendered.contains("{{holder_fk}}") && !rendered.contains("_user_id_fk"),
@@ -252,7 +295,11 @@ mod tests {
         ] {
             let fk_plan = RenderPlan {
                 with_holder_fk: true,
-                ..plan("roles", "users_roles", rolify_core::config::HolderIdKind::Integer)
+                ..plan(
+                    "roles",
+                    "users_roles",
+                    rolify_core::config::HolderIdKind::Integer,
+                )
             };
             let rendered = substitute_table_names(templates::up(engine), &fk_plan, engine);
             assert!(
@@ -268,7 +315,11 @@ mod tests {
     fn holder_fk_clause_string_kind_is_noop() {
         let fk_plan = RenderPlan {
             with_holder_fk: true,
-            ..plan("roles", "users_roles", rolify_core::config::HolderIdKind::String)
+            ..plan(
+                "roles",
+                "users_roles",
+                rolify_core::config::HolderIdKind::String,
+            )
         };
         let rendered = substitute_table_names(templates::up("postgres"), &fk_plan, "postgres");
         assert!(
@@ -283,7 +334,11 @@ mod tests {
     fn holder_fk_clause_honors_custom_join_table() {
         let fk_plan = RenderPlan {
             with_holder_fk: true,
-            ..plan("privileges", "customers_privileges", rolify_core::config::HolderIdKind::Integer)
+            ..plan(
+                "privileges",
+                "customers_privileges",
+                rolify_core::config::HolderIdKind::Integer,
+            )
         };
         let rendered = substitute_table_names(templates::up("mysql"), &fk_plan, "mysql");
         assert!(
@@ -306,5 +361,18 @@ mod tests {
         assert_eq!(holder_table_name("Customer"), "customers");
         assert_eq!(holder_table_name("Business"), "business");
         assert_eq!(holder_table_name("people"), "peoples");
+    }
+
+    /// The default join table rides the same pluralization rule (WR-03:
+    /// one derivation consumed by `RenderPlan::from_args` and validated
+    /// by `main` against the plan's value).
+    #[test]
+    fn default_join_table_pluralizes_the_holder() {
+        assert_eq!(default_join_table("User", "roles"), "users_roles");
+        assert_eq!(default_join_table("Business", "roles"), "business_roles");
+        assert_eq!(
+            default_join_table("Customer", "privileges"),
+            "customers_privileges"
+        );
     }
 }

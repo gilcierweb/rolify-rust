@@ -10,32 +10,21 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Generate(args) => {
-            // Default join table derives as holder plural + _ + roles_table,
-            // exactly the derivation documented in the args.rs help text:
-            // the derived value is computed BEFORE validation and then flows
-            // as the single RenderPlan join_table into SQL and scaffolding
-            // alike (CR-01, D-05).
-            let join_table = args.join_table.clone().unwrap_or_else(|| {
-                let holder_plural = if args.holder_name.ends_with('s') {
-                    format!("{}_", args.holder_name.to_lowercase())
-                } else {
-                    format!("{}s_", args.holder_name.to_lowercase())
-                };
-                format!("{}{}", holder_plural, args.roles_table)
-            });
-
-            // Validate identifiers before any rendering
-            rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.roles_table)?;
-            rolify_core::config::RolifyConfigBuilder::validate_identifier(&join_table)?;
-            // Also validate role_name and holder_name (they become table name fragments)
-            rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.role_name)?;
-            rolify_core::config::RolifyConfigBuilder::validate_identifier(&args.holder_name)?;
-
             let out_dir = args.out_dir.clone();
             let force = args.force;
             let dry_run = args.dry_run;
 
+            // The plan derives (or takes) the join table exactly once
+            // (WR-03): validation below checks the SAME value that
+            // flows into SQL and scaffolding, never a recomputed twin.
             let plan = RenderPlan::from_args(args);
+
+            // Validate identifiers before any rendering
+            rolify_core::config::RolifyConfigBuilder::validate_identifier(&plan.roles_table)?;
+            rolify_core::config::RolifyConfigBuilder::validate_identifier(&plan.join_table)?;
+            // Also validate role_name and holder_name (they become table name fragments)
+            rolify_core::config::RolifyConfigBuilder::validate_identifier(&plan.role_name)?;
+            rolify_core::config::RolifyConfigBuilder::validate_identifier(&plan.holder_name)?;
 
             let rendered = render_all(&plan)?;
 
