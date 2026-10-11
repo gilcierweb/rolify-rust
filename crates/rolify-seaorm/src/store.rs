@@ -32,7 +32,7 @@ use maybe_async::maybe_async;
 use rolify_core::catalog::{CatalogScope, RoleCatalogQuery};
 use rolify_core::config::{HolderIdKind, RolifyConfig, RolifyConfigBuilder};
 use rolify_core::error::RolifyError;
-use rolify_core::holder::{parse_holder_id, ParsedHolderId};
+use rolify_core::holder::{ParsedHolderId, parse_holder_id};
 use rolify_core::kernel::RemovalTarget;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
@@ -44,7 +44,6 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DbBackend, DbErr, EntityTrait, QueryFilter, QueryResult, Set,
     SqlErr, Statement, Value,
 };
-
 
 use crate::entity::role;
 use crate::error::Error;
@@ -218,16 +217,30 @@ fn holder_compare_expr(backend: DbBackend, kind: HolderIdKind, expr: &str) -> St
     }
 }
 
+/// The holder primary-key PROJECTION feeding the SPI's stringified-id
+/// output contract (the sqlx `holder_project_expr` analog, 08 review
+/// WR-01): the integer and string kinds keep the uniform text cast on
+/// every engine, and the uuid kind keeps it on Postgres
+/// (`CAST(uuid AS TEXT)` is the canonical hyphenated form). `MySQL`
+/// stores the uuid kind as `BINARY(16)`, where `CAST(BINARY(16) AS
+/// CHAR)` returns the raw 16 bytes instead of the canonical string, so
+/// that engine canonicalizes through `BIN_TO_UUID` (`MySQL` 8+, the
+/// documented uuid column; sqlx solves the same corner in its row
+/// decoder, which the uniform `String` decode here cannot do).
+fn holder_project_expr(backend: DbBackend, kind: HolderIdKind, expr: &str) -> String {
+    match (kind, backend) {
+        (HolderIdKind::Uuid, DbBackend::MySql) => format!("BIN_TO_UUID({expr})"),
+        _ => cast_to_text(backend, expr),
+    }
+}
+
 fn backend_of<C: ConnectionTrait>(conn: &C) -> DbBackend {
     conn.get_database_backend()
 }
 
 /// Construct a runtime-typed `sea_orm::Value` for a holder id according to the configured kind.
 /// Parses and validates the holder id before any SQL executes (D-08-05).
-fn holder_value(
-    kind: HolderIdKind,
-    holder: &ResourceId,
-) -> Result<Value, Error> {
+fn holder_value(kind: HolderIdKind, holder: &ResourceId) -> Result<Value, Error> {
     let parsed = parse_holder_id(kind, holder.as_str()).map_err(Error::Core)?;
     Ok(match parsed {
         ParsedHolderId::Integer(n) => Value::BigInt(Some(n)),
@@ -237,19 +250,6 @@ fn holder_value(
         }
         ParsedHolderId::Text(s) => Value::String(Some(s)),
     })
-}
-
-/// Decode a holder id from a query result row according to the configured kind.
-/// The projection should be cast to text for integer/uuid kinds (see `cast_to_text`),
-/// so String decode works uniformly and we canonicalize via `holder_id_to_string`.
-fn decode_holder_id(kind: HolderIdKind, row_user_id: &str) -> ResourceId {
-    match kind {
-        HolderIdKind::Integer | HolderIdKind::Uuid => {
-            // Projection was CAST(... AS TEXT/CHAR), so decode as string and canonicalize
-            ResourceId::new(row_user_id)
-        }
-        HolderIdKind::String => ResourceId::new(row_user_id),
-    }
 }
 
 /// Compose the `roles_of`/`where_*` SELECT: role rows for one holder
@@ -737,9 +737,10 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
              INNER JOIN {join_table} AS link ON link.user_id = {} \
              INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
              WHERE holder.rolify_type IN ({type_placeholders}) AND {where_clause}",
-            // SELECT-list projection stays a text cast for the String
-            // decode below; the JOIN key is kind-aware (CR-01).
-            cast_to_text(backend, "holder.id"),
+            // The SELECT-list projection is kind-aware (canonical text
+            // per backend, WR-01); the JOIN key compares natively for
+            // typed kinds (CR-01).
+            holder_project_expr(backend, self.holder_id_kind, "holder.id"),
             holder_compare_expr(backend, self.holder_id_kind, "holder.id"),
         );
         let mut values: Vec<Value> = holder_types
@@ -759,7 +760,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let mut ids = Vec::with_capacity(rows.len());
         for row in &rows {
             let id: String = row.try_get("", "user_id").map_err(Error::Db)?;
-            ids.push(decode_holder_id(self.holder_id_kind, &id));
+            ids.push(ResourceId::new(&id));
         }
         Ok(ids)
     }
@@ -786,7 +787,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             .join(", ");
         let sql = format!(
             "SELECT {} AS user_id FROM {} AS holder WHERE holder.rolify_type IN ({type_placeholders})",
-            cast_to_text(backend, "holder.id"),
+            holder_project_expr(backend, self.holder_id_kind, "holder.id"),
             quote_identifier(backend, holder_table),
         );
         let values: Vec<Value> = holder_types
@@ -801,7 +802,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let mut ids = Vec::with_capacity(rows.len());
         for row in &rows {
             let id: String = row.try_get("", "user_id").map_err(Error::Db)?;
-            ids.push(decode_holder_id(self.holder_id_kind, &id));
+            ids.push(ResourceId::new(&id));
         }
         Ok(ids)
     }

@@ -90,14 +90,32 @@ fn uuid_bind(uuid: uuid::Uuid) -> DieselHolderBind {
 /// string link column stores text (Postgres rejects
 /// `integer = text`).
 ///
-/// The SELECT-list projection keeps `dialect::cast_to_text`
-/// unconditionally instead: `HolderIdRow` decodes `Text`, and every
-/// engine casts the holder key for that read (gate-fix note).
+/// The SELECT-list projection is [`holder_text_projection`] instead:
+/// `HolderIdRow` decodes `Text`, so the read path projects canonical
+/// text on every engine (WR-01).
 #[must_use]
 pub fn holder_id_projection(kind: HolderIdKind, holder_pk_column: &str) -> String {
     match kind {
         HolderIdKind::Integer | HolderIdKind::Uuid => holder_pk_column.to_owned(),
         HolderIdKind::String => crate::dialect::cast_to_text(holder_pk_column),
+    }
+}
+
+/// The holder primary-key PROJECTION feeding `HolderIdRow`'s text
+/// decode (08 review WR-01): integer and string kinds keep the
+/// uniform text cast on every engine, and the uuid kind keeps it on
+/// Postgres and `SQLite` (canonical hyphenated text both). `MySQL`
+/// stores the uuid kind as `BINARY(16)`, where `CAST(BINARY(16) AS
+/// CHAR)` decodes the raw 16 bytes instead of the canonical string, so
+/// that engine canonicalizes through `BIN_TO_UUID` (`MySQL` 8+, the
+/// documented uuid column; sqlx solves the same corner in its row
+/// decoder, which the compile-time-typed `QueryableByName` rows here
+/// cannot do).
+#[must_use]
+pub fn holder_text_projection(kind: HolderIdKind, holder_pk_column: &str) -> String {
+    match (kind, cfg!(feature = "mysql")) {
+        (HolderIdKind::Uuid, true) => format!("BIN_TO_UUID({holder_pk_column})"),
+        _ => crate::dialect::cast_to_text(holder_pk_column),
     }
 }
 
@@ -250,5 +268,32 @@ mod tests {
             holder_id_projection(HolderIdKind::String, "holder.id").contains("CAST"),
             "string kind keeps the legacy text cast"
         );
+    }
+
+    #[test]
+    fn text_projection_is_canonical_text_per_engine() {
+        // WR-01: the finder read path decodes Text on every engine.
+        // Integer and string kinds keep the uniform cast; the uuid kind
+        // keeps it on Postgres/SQLite (canonical text) while MySQL
+        // canonicalizes its BINARY(16) column through BIN_TO_UUID.
+        for kind in [
+            HolderIdKind::Integer,
+            HolderIdKind::String,
+            HolderIdKind::Uuid,
+        ] {
+            let projection = holder_text_projection(kind, "holder.id");
+            #[cfg(feature = "mysql")]
+            let expected_uuid_arm = matches!(kind, HolderIdKind::Uuid);
+            #[cfg(not(feature = "mysql"))]
+            let expected_uuid_arm = false;
+            if expected_uuid_arm {
+                assert_eq!(projection, "BIN_TO_UUID(holder.id)");
+            } else {
+                assert!(
+                    projection.starts_with("CAST(holder.id"),
+                    "kind {kind:?} should project the text cast, got {projection}"
+                );
+            }
+        }
     }
 }

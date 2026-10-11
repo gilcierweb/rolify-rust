@@ -2207,7 +2207,7 @@ mod pg_impl {
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
+                "SELECT DISTINCT {holder_projection} AS user_id \
                  FROM {holder_table} AS holder \
                  INNER JOIN {join_table} AS link ON {holder_join} \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
@@ -2219,8 +2219,10 @@ mod pg_impl {
                 where_clause = where_clause,
                 // Kind-aware join (D-08-04): typed kinds compare the
                 // primary key natively; the string kind keeps the cast.
-                // The SELECT keeps cast_to_text: HolderIdRow decodes
-                // Text on every engine.
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine.
+                holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "holder.id",),
                 holder_join = crate::holder::holder_join_condition(
                     self.holder_id_kind(),
                     "holder.id",
@@ -2409,8 +2411,12 @@ mod pg_impl {
                 (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
+            // Kind-aware projection (WR-01): canonical text for the
+            // Text-decoding HolderIdRow on every engine.
+            let holder_projection =
+                crate::holder::holder_text_projection(self.holder_id_kind(), "id");
             let sql = format!(
-                "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
+                "SELECT {holder_projection} AS user_id FROM {holder_table} WHERE {type_filter}",
             );
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
@@ -3224,7 +3230,7 @@ mod mysql_impl {
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT CAST(holder.id AS CHAR) AS user_id \
+                "SELECT DISTINCT {holder_projection} AS user_id \
                  FROM {holder_table} AS holder \
                  INNER JOIN {join_table} AS link ON {holder_join} \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
@@ -3236,8 +3242,11 @@ mod mysql_impl {
                 where_clause = where_clause,
                 // Kind-aware join (D-08-04): typed kinds compare the
                 // primary key natively; the string kind keeps the cast.
-                // The SELECT keeps cast_to_text: HolderIdRow decodes
-                // Text on every engine.
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine, with
+                // BIN_TO_UUID for the MySQL BINARY(16) uuid column.
+                holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "holder.id",),
                 holder_join = crate::holder::holder_join_condition(
                     self.holder_id_kind(),
                     "holder.id",
@@ -3426,10 +3435,15 @@ mod mysql_impl {
                 (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
+            // Kind-aware projection (WR-01): canonical text for the
+            // Text-decoding HolderIdRow on every engine, with
+            // BIN_TO_UUID for the MySQL BINARY(16) uuid column.
             let sql = format!(
-                "SELECT CAST(id AS CHAR) AS user_id FROM {holder_table} WHERE {type_filter}",
+                "SELECT {holder_projection} AS user_id FROM {holder_table} WHERE {type_filter}",
                 holder_table = holder_table,
                 type_filter = type_filter,
+                holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "id"),
             );
 
             let q = diesel::sql_query(sql);
@@ -4242,7 +4256,7 @@ mod sqlite_impl {
             let type_filter = format!("holder.rolify_type IN ({})", type_placeholders.join(", "));
 
             let sql = format!(
-                "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
+                "SELECT DISTINCT {holder_projection} AS user_id \
                  FROM {holder_table} AS holder \
                  INNER JOIN {join_table} AS link ON {holder_join} \
                  INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
@@ -4254,8 +4268,10 @@ mod sqlite_impl {
                 where_clause = where_clause,
                 // Kind-aware join (D-08-04): typed kinds compare the
                 // primary key natively; the string kind keeps the cast.
-                // The SELECT keeps cast_to_text: HolderIdRow decodes
-                // Text on every engine.
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine.
+                holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "holder.id",),
                 holder_join = crate::holder::holder_join_condition(
                     self.holder_id_kind(),
                     "holder.id",
@@ -4444,8 +4460,12 @@ mod sqlite_impl {
                 (1..=holder_types.len()).map(placeholder).collect();
             let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
+            // Kind-aware projection (WR-01): canonical text for the
+            // Text-decoding HolderIdRow on every engine.
+            let holder_projection =
+                crate::holder::holder_text_projection(self.holder_id_kind(), "id");
             let sql = format!(
-                "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
+                "SELECT {holder_projection} AS user_id FROM {holder_table} WHERE {type_filter}",
             );
             let q = diesel::sql_query(sql);
             let rows: Vec<HolderIdRow> = match holder_types.len() {
@@ -5362,15 +5382,17 @@ mod pg_async_impl {
 
                 // Kind-aware join (D-08-04): typed kinds compare the
                 // primary key natively; the string kind keeps the cast.
-                // The SELECT keeps cast_to_text: HolderIdRow decodes
-                // Text on every engine.
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine.
+                let holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "holder.id");
                 let holder_join = crate::holder::holder_join_condition(
                     self.holder_id_kind(),
                     "holder.id",
                     "link.user_id",
                 );
                 let sql = format!(
-                    "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
+                    "SELECT DISTINCT {holder_projection} AS user_id \
                      FROM {holder_table} AS holder \
                      INNER JOIN {join_table} AS link ON {holder_join} \
                      INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
@@ -5565,8 +5587,12 @@ mod pg_async_impl {
                     (1..=holder_types.len()).map(placeholder).collect();
                 let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine.
+                let holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "id");
                 let sql = format!(
-                    "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
+                    "SELECT {holder_projection} AS user_id FROM {holder_table} WHERE {type_filter}",
                 );
 
                 let q = diesel::sql_query(sql);
@@ -6503,15 +6529,18 @@ mod mysql_async_impl {
 
                 // Kind-aware join (D-08-04): typed kinds compare the
                 // primary key natively; the string kind keeps the cast.
-                // The SELECT keeps cast_to_text: HolderIdRow decodes
-                // Text on every engine.
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine, with
+                // BIN_TO_UUID for the MySQL BINARY(16) uuid column.
+                let holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "holder.id");
                 let holder_join = crate::holder::holder_join_condition(
                     self.holder_id_kind(),
                     "holder.id",
                     "link.user_id",
                 );
                 let sql = format!(
-                    "SELECT DISTINCT CAST(holder.id AS CHAR) AS user_id \
+                    "SELECT DISTINCT {holder_projection} AS user_id \
                      FROM {holder_table} AS holder \
                      INNER JOIN {join_table} AS link ON {holder_join} \
                      INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
@@ -6706,8 +6735,13 @@ mod mysql_async_impl {
                     (1..=holder_types.len()).map(placeholder).collect();
                 let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine, with
+                // BIN_TO_UUID for the MySQL BINARY(16) uuid column.
+                let holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "id");
                 let sql = format!(
-                    "SELECT CAST(id AS CHAR) AS user_id FROM {holder_table} WHERE {type_filter}",
+                    "SELECT {holder_projection} AS user_id FROM {holder_table} WHERE {type_filter}",
                 );
 
                 let q = diesel::sql_query(sql);
@@ -7652,15 +7686,17 @@ mod sqlite_async_impl {
 
                 // Kind-aware join (D-08-04): typed kinds compare the
                 // primary key natively; the string kind keeps the cast.
-                // The SELECT keeps cast_to_text: HolderIdRow decodes
-                // Text on every engine.
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine.
+                let holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "holder.id");
                 let holder_join = crate::holder::holder_join_condition(
                     self.holder_id_kind(),
                     "holder.id",
                     "link.user_id",
                 );
                 let sql = format!(
-                    "SELECT DISTINCT CAST(holder.id AS TEXT) AS user_id \
+                    "SELECT DISTINCT {holder_projection} AS user_id \
                      FROM {holder_table} AS holder \
                      INNER JOIN {join_table} AS link ON {holder_join} \
                      INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
@@ -7855,8 +7891,12 @@ mod sqlite_async_impl {
                     (1..=holder_types.len()).map(placeholder).collect();
                 let type_filter = format!("rolify_type IN ({})", type_placeholders.join(", "));
 
+                // Kind-aware projection (WR-01): canonical text for the
+                // Text-decoding HolderIdRow on every engine.
+                let holder_projection =
+                    crate::holder::holder_text_projection(self.holder_id_kind(), "id");
                 let sql = format!(
-                    "SELECT CAST(id AS TEXT) AS user_id FROM {holder_table} WHERE {type_filter}",
+                    "SELECT {holder_projection} AS user_id FROM {holder_table} WHERE {type_filter}",
                 );
 
                 let q = diesel::sql_query(sql);
