@@ -107,7 +107,13 @@ fn build_migrator(migration_dir: &Path) -> Result<Migrator, Box<dyn std::error::
     Ok(Migrator::with_migrations(migrations))
 }
 
-// Usage
+// Usage (inside an async context with a live pool):
+use sqlx::postgres::PgPoolOptions;
+
+let pool: PgPool = PgPoolOptions::new()
+    .max_connections(5)
+    .connect("postgres://user:pass@localhost/db")
+    .await?;
 let migrator = build_migrator(Path::new("migrations/postgres"))?;
 migrator.run(&pool).await?;
 ```
