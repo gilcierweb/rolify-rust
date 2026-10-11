@@ -962,7 +962,7 @@ fn readme_adapter_examples_use_real_spi() {
 /// body can never self-match.
 #[test]
 fn emitted_readmes_carry_no_fabricated_store_api() {
-    const FABRICATED: [&str; 8] = [
+    const FABRICATED: [&str; 11] = [
         "add_role_scoped",
         "store.add_role(",
         "store.has_role(",
@@ -971,6 +971,9 @@ fn emitted_readmes_carry_no_fabricated_store_api() {
         "Migrator::new(",
         "DieselStore::has_role",
         "DieselStore::add_role",
+        "::new(conn",
+        "::new(pool",
+        "::new(db,",
     ];
     for backend in ["diesel", "sqlx", "seaorm", "mongodb"] {
         let dir = test_temp_dir();
