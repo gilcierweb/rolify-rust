@@ -62,7 +62,7 @@ the recommended approach is to build a `Migrator` programmatically:
 
 ```rust
 use sqlx::migrate::{Migration, MigrationType, Migrator};
-use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
+use sqlx::{AssertSqlSafe, SqlSafeStr};
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
@@ -108,7 +108,7 @@ fn build_migrator(migration_dir: &Path) -> Result<Migrator, Box<dyn std::error::
 }
 
 // Usage (inside an async context with a live pool):
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgPool, PgPoolOptions};
 
 let pool: PgPool = PgPoolOptions::new()
     .max_connections(5)
