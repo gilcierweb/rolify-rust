@@ -690,4 +690,34 @@ mod tests {
             down_statements[1]
         );
     }
+
+    #[test]
+    fn extract_down_statements_splits_same_line_drops_join_first() {
+        // Two drops on one line are the defect-class input for the down path:
+        // the split-then-classify composition must yield one statement per
+        // drop with the join drop first, never a merged multi-command
+        // prepared statement (never-silently-truncate).
+        let script =
+            "DROP TABLE IF EXISTS users_roles; DROP TABLE IF EXISTS roles;";
+        let default_plan = plan("roles", "users_roles");
+
+        let down_statements =
+            extract_down_statements(script, &default_plan, "postgres").unwrap();
+
+        assert_eq!(
+            down_statements.len(),
+            2,
+            "same-line drops must split into two, got: {down_statements:?}"
+        );
+        assert!(
+            down_statements[0].contains("DROP TABLE IF EXISTS users_roles;"),
+            "join drop must come first, got: {}",
+            down_statements[0]
+        );
+        assert!(
+            down_statements[1].contains("DROP TABLE IF EXISTS roles;"),
+            "roles drop must come second, got: {}",
+            down_statements[1]
+        );
+    }
 }
