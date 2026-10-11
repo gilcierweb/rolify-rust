@@ -1,9 +1,10 @@
 //! Postgres acceptance pins for the raw-SQL SPI corners the frozen
 //! parity suite cannot see (05 code review CR-01..CR-05): the
-//! `where_any` holder gate (SQL operator precedence), the holder-filter
-//! text cast against integer holder ids, the `instance_only(None)`
-//! scope filter, the fail-loud holder-table guard, and the `in_list`
-//! no-type-check coverage (gem `resource_adapter.rb:27-30`).
+//! `where_any` holder gate (SQL operator precedence), the
+//! kind-aware holder-filter comparison against integer holder ids,
+//! the `instance_only(None)` scope filter, the fail-loud holder-table
+//! guard, and the `in_list` no-type-check coverage (gem
+//! `resource_adapter.rb:27-30`).
 //!
 //! Mirrors the sqlx crate's `resource_spi_pg.rs` supplement posture:
 //! the public statics never route through these branches (the
@@ -117,13 +118,19 @@ async fn where_any_second_ladder_stays_gated_on_the_holder() {
     assert_record_set(&rows, &[RoleRecord::global("alpha")]);
 }
 
-/// CR-02 pin: the holder-filtered catalog read joins the integer-keyed
-/// fixture holder table and filters by it; without the text cast on
-/// BOTH the join and the filter, Postgres rejects the comparison
-/// (`operator does not exist: integer = text`). Ported from the sqlx
-/// crate's `roles_matching_holder_join_casts_integer_holder_ids`.
+/// CR-02 pin, retargeted for the kind-aware world (08 review CR-01):
+/// the holder-filtered catalog read joins the integer-keyed fixture
+/// holder table under the integer-kind default, and BOTH the join and
+/// the filter must compare the bare `holder.id` against the typed link
+/// column and bind (diesel `holder_join_condition`, sqlx
+/// `holder_compare_expr`). The pre-08 unconditional text cast now
+/// breaks the typed comparison on Postgres (`operator does not exist:
+/// text = bigint`, SQLSTATE 42883). The zombie grant pins that the
+/// join and the filter actually isolate the requested holder (the
+/// sqlx namesake `roles_matching_holder_join_casts_integer_holder_ids`
+/// carries the same negative row).
 #[tokio::test]
-async fn roles_matching_holder_filter_casts_integer_holder_ids() {
+async fn roles_matching_holder_filter_compares_integer_holder_ids_kind_aware() {
     let mut backend = SeaormBackend::<DefaultUser>::build()
         .await
         .expect("backend build (container + migrator + fixtures)");
@@ -144,6 +151,14 @@ async fn roles_matching_holder_filter_casts_integer_holder_ids() {
         )
         .await
         .expect("admin: instance editor on Forum first");
+    backend
+        .grant_to(
+            "zombie",
+            &RoleName::from("ghost"),
+            ResourceRef::Instance("Forum", &ResourceId::from(1_i64)),
+        )
+        .await
+        .expect("zombie: instance ghost on Forum first");
 
     let admin_id = backend.holder_id("admin").expect("admin fixture");
     let query = RoleCatalogQuery::for_types(&["Forum"]).with_holder(&admin_id);

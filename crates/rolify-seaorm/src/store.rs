@@ -202,6 +202,22 @@ fn cast_to_text(backend: DbBackend, expr: &str) -> String {
     }
 }
 
+/// Kind-aware holder-id comparison expression (D-08-04): typed kinds
+/// compare the holder primary key natively (`BIGINT`, `UUID`/
+/// `BINARY(16)`) against the equally typed join column or bind, so the
+/// column stands bare; the string kind keeps the historical text cast
+/// because the fixture holder keys are integers while the string link
+/// column stores text (Postgres rejects `integer = text`). The diesel
+/// `holder_join_condition` and sqlx `holder_compare_expr` helpers are
+/// the sibling-adapter analogs (08 review CR-01: the unconditional
+/// cast survived the typed migration/bind retrofit here only).
+fn holder_compare_expr(backend: DbBackend, kind: HolderIdKind, expr: &str) -> String {
+    match kind {
+        HolderIdKind::Integer | HolderIdKind::Uuid => expr.to_owned(),
+        HolderIdKind::String => cast_to_text(backend, expr),
+    }
+}
+
 fn backend_of<C: ConnectionTrait>(conn: &C) -> DbBackend {
     conn.get_database_backend()
 }
@@ -721,8 +737,10 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
              INNER JOIN {join_table} AS link ON link.user_id = {} \
              INNER JOIN {role_table} AS role_row ON role_row.id = link.role_id \
              WHERE holder.rolify_type IN ({type_placeholders}) AND {where_clause}",
+            // SELECT-list projection stays a text cast for the String
+            // decode below; the JOIN key is kind-aware (CR-01).
             cast_to_text(backend, "holder.id"),
-            cast_to_text(backend, "holder.id"),
+            holder_compare_expr(backend, self.holder_id_kind, "holder.id"),
         );
         let mut values: Vec<Value> = holder_types
             .iter()
@@ -817,7 +835,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                 "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
                  INNER JOIN {} AS holder ON {} = link.user_id",
                 quote_identifier(backend, holder_table),
-                cast_to_text(backend, "holder.id"),
+                holder_compare_expr(backend, self.holder_id_kind, "holder.id"),
             ),
             _ => String::new(),
         };
@@ -873,14 +891,15 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             },
         }
         if let Some(holder_id) = &query.holder {
-            // Holder primary keys are integers while the bind carries
-            // the stringified id, so the comparison needs the same
-            // text cast the join uses (Postgres rejects integer =
-            // text without it).
+            // The bind is runtime-typed (holder_value) and the join is
+            // kind-aware, so the filter comparison uses the same
+            // kind-aware expression: bare column for the typed kinds,
+            // text cast for the string kind (Postgres rejects a stale
+            // unconditional cast as `text = bigint`, 42883).
             let _ = write!(
                 sql,
                 " AND {} = {}",
-                cast_to_text(backend, "holder.id"),
+                holder_compare_expr(backend, self.holder_id_kind, "holder.id"),
                 placeholder(backend, index)
             );
             values.push(holder_value(self.holder_id_kind, holder_id)?);
