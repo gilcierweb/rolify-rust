@@ -446,6 +446,113 @@ mod tests {
     }
 
     #[test]
+    fn split_statements_keeps_trailing_comment_attached() {
+        // A dash-comment after a terminator on the same line must ride along
+        // into the next statement buffer, never merge the two commands into
+        // one prepared statement and never drop the comment bytes
+        // (never-silently-truncate: the Postgres extended protocol rejects
+        // multi-command prepared statements, so a merge here would reintroduce
+        // the G1 defect class).
+        let commented =
+            "CREATE TABLE roles (id INT); -- trailing comment\nCREATE TABLE users_roles (id INT);";
+        let uncommented =
+            "CREATE TABLE roles (id INT);\nCREATE TABLE users_roles (id INT);";
+
+        let commented_statements = split_statements(commented).unwrap();
+        let plain_statements = split_statements(uncommented).unwrap();
+
+        assert_eq!(
+            commented_statements.len(),
+            2,
+            "trailing-comment input must split, got: {commented_statements:?}"
+        );
+        assert_eq!(
+            commented_statements[0], plain_statements[0],
+            "the first statement must stay byte-identical with or without the comment"
+        );
+        assert!(
+            commented_statements[0].ends_with("(id INT);"),
+            "first statement must end at its own terminator, got: {}",
+            commented_statements[0]
+        );
+        assert!(
+            commented_statements[1].contains("-- trailing comment"),
+            "comment must ride along into the second buffer, got: {}",
+            commented_statements[1]
+        );
+        assert!(
+            commented_statements[1].ends_with("(id INT);"),
+            "second statement must run to the real terminator, got: {}",
+            commented_statements[1]
+        );
+    }
+
+    #[test]
+    fn split_statements_accepts_comment_only_remainder() {
+        // A comment-only line between two commands is valid SQL prose: it must
+        // ride along with the statement that follows it, and the script must
+        // still yield exactly two statements (never-silently-truncate: the
+        // comment bytes must survive generation, attached, never merged).
+        let script =
+            "CREATE TABLE roles (id INT);\n-- standalone comment\nCREATE TABLE users_roles (id INT);";
+
+        let statements = split_statements(script).unwrap();
+
+        assert_eq!(
+            statements.len(),
+            2,
+            "comment-only remainder must not change the split count, got: {statements:?}"
+        );
+        assert!(
+            statements[0].ends_with("(id INT);"),
+            "first statement must end at its own terminator, got: {}",
+            statements[0]
+        );
+        assert!(
+            statements[1].starts_with("-- standalone comment"),
+            "comment must ride along with its following statement, got: {}",
+            statements[1]
+        );
+        assert!(
+            statements[1].ends_with("(id INT);"),
+            "second statement must run to the real terminator, got: {}",
+            statements[1]
+        );
+    }
+
+    #[test]
+    fn split_statements_splits_three_same_line_commands() {
+        // Three commands on one line must yield three statements in order:
+        // each semicolon terminates exactly one statement, so no prepared
+        // statement ever carries multiple commands (never-silently-truncate).
+        let script =
+            "DROP TABLE IF EXISTS alpha; DROP TABLE IF EXISTS beta; DROP TABLE IF EXISTS gamma;";
+
+        let statements = split_statements(script).unwrap();
+
+        assert_eq!(
+            statements.len(),
+            3,
+            "three same-line commands must split into three, got: {statements:?}"
+        );
+        assert!(
+            statements[0].ends_with("alpha;"),
+            "first command truncated: {}",
+            statements[0]
+        );
+        assert!(
+            statements[1].ends_with("beta;"),
+            "second command truncated: {}",
+            statements[1]
+        );
+        assert!(
+            statements[2].ends_with("gamma;"),
+            "third command truncated: {}",
+            statements[2]
+        );
+    }
+
+    #[test]
     fn split_statements_accepts_canonical_scripts() {
         for engine in ENGINES {
             let up_statements = split_statements(templates::up(engine)).unwrap();
