@@ -96,14 +96,18 @@ mod postgres_roundtrip {
         let admin_id: i64 = role_ids[0].try_get_by("id").expect("id column");
         let user_role_id: i64 = role_ids[1].try_get_by("id").expect("id column");
 
+        // The embedded migration defaults to the integer holder-id kind
+        // (D-08-02: BIGINT user_id), so the roundtrip link inserts carry
+        // an integer holder id; the pre-08 string 'u1' would fail with
+        // SQLSTATE 22P02 against the typed column.
         conn.execute_unprepared(&format!(
-            "INSERT INTO users_roles (user_id, role_id) VALUES ('u1', {admin_id})"
+            "INSERT INTO users_roles (user_id, role_id) VALUES (101, {admin_id})"
         ))
         .await
         .expect("first link insert");
         let dup_link = conn
             .execute_unprepared(&format!(
-                "INSERT INTO users_roles (user_id, role_id) VALUES ('u1', {admin_id})"
+                "INSERT INTO users_roles (user_id, role_id) VALUES (101, {admin_id})"
             ))
             .await;
         assert!(
@@ -251,14 +255,18 @@ mod mysql_roundtrip {
         let admin_id: i64 = role_ids[0].try_get_by("id").expect("id column");
         let _user_role_id: i64 = role_ids[1].try_get_by("id").expect("id column");
 
+        // The embedded migration defaults to the integer holder-id kind
+        // (D-08-02: BIGINT user_id), so the roundtrip link inserts carry
+        // an integer holder id; the pre-08 string 'u1' would fail with
+        // SQLSTATE 22P02 against the typed column.
         conn.execute_unprepared(&format!(
-            "INSERT INTO users_roles (user_id, role_id) VALUES ('u1', {admin_id})"
+            "INSERT INTO users_roles (user_id, role_id) VALUES (101, {admin_id})"
         ))
         .await
         .expect("first link insert");
         let dup_link = conn
             .execute_unprepared(&format!(
-                "INSERT INTO users_roles (user_id, role_id) VALUES ('u1', {admin_id})"
+                "INSERT INTO users_roles (user_id, role_id) VALUES (101, {admin_id})"
             ))
             .await;
         assert!(
