@@ -168,6 +168,16 @@ statement set.
 - `users_roles_pair_unique`: UNIQUE (user_id, role_id)
 - FK: users_roles.role_id -> roles.id ON DELETE CASCADE
 
+### Holder Id Type
+
+The `user_id` column type follows `--holder-id-type`: `BIGINT` by default
+(Postgres/MySQL) or `INTEGER` (SQLite), `UUID`/`BINARY(16)`/`TEXT` for the
+`uuid` kind, `VARCHAR(191)`/`TEXT` for the `string` kind. Match it to your
+holder table's primary key: holder PKs on Postgres `SERIAL`/`INTEGER`
+(4 bytes) need a hand edit to plain `INTEGER` (`SERIAL` creates a sequence
+and never goes on a join column). `--with-holder-fk` requires both sides to
+be the exact same type.
+
 ## Using with rolify-seaorm Adapter
 
 ```rust

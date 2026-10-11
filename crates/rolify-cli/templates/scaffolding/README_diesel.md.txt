@@ -79,6 +79,21 @@ The join column type follows `--holder-id-type` (default integer, shown
 here for Postgres: `BIGINT`; the `uuid` kind emits `UUID`, the `string`
 kind emits `VARCHAR(191)`).
 
+Match it to your holder table's actual primary key type:
+
+- `users.id` is `BIGINT`, `BIGSERIAL`, or `BIGINT GENERATED ... AS IDENTITY`
+  (Rails 5.1+ default, matches the gem's `t.references`): keep the default.
+- `users.id` is `SERIAL` or `INTEGER` (4 bytes, 1 to 2147483647): edit the
+  emitted `user_id` column from `BIGINT` to plain `INTEGER`. Never write
+  `SERIAL` on the join column: `SERIAL`/`BIGSERIAL` are PK-definition
+  pseudo-types that create a sequence; a join column carries the plain type.
+- `users.id` is `UUID`: regenerate with `--holder-id-type uuid`.
+- String holder ids: regenerate with `--holder-id-type string`.
+
+When `--with-holder-fk` is on, the two sides must be the exact same type:
+Postgres rejects a foreign key between `BIGINT` and `INTEGER`
+(incompatible types), and MySQL likewise requires identical column types.
+
 ## Using with rolify-diesel Adapter
 
 ```rust
@@ -135,6 +150,10 @@ let config = RolifyConfig::builder()
 
 ### PostgreSQL
 - Uses `BIGINT GENERATED ALWAYS AS IDENTITY` for auto-incrementing IDs
+  (the modern equivalent of `BIGSERIAL`, 8 bytes)
+- The default `users_roles.user_id BIGINT` assumes a bigint holder PK. If
+  your holder PK is `SERIAL`/`INTEGER` (4 bytes), change the join column to
+  plain `INTEGER`; if it is `UUID`, regenerate with `--holder-id-type uuid`
 - Uses `VARCHAR(255)` and `VARCHAR(191)` for string columns
 - Timestamps use `TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`
 

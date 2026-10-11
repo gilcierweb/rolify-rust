@@ -190,7 +190,12 @@ assert_eq!(roles.len(), 1);
 Each engine tree uses that engine's canonical dialect:
 
 - **PostgreSQL**: `BIGINT GENERATED ALWAYS AS IDENTITY` primary key,
-  `VARCHAR` string columns, `TIMESTAMP` defaults.
+  `VARCHAR` string columns, `TIMESTAMP` defaults. The default join column
+  `user_id BIGINT` assumes a bigint holder PK (Rails 5.1+, `BIGSERIAL`,
+  `IDENTITY`); holder PKs on `SERIAL`/`INTEGER` (4 bytes) need a hand edit
+  to plain `INTEGER` (`SERIAL` itself never goes on a join column), and
+  `UUID` holder PKs need `--holder-id-type uuid`. `--with-holder-fk`
+  requires both sides to be the exact same type.
 - **MySQL**: `BIGINT AUTO_INCREMENT` primary key, `utf8mb4` character set
   with `utf8mb4_bin` collation for byte-exact comparison, `InnoDB` engine
   for foreign key support.
