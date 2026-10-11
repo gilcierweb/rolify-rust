@@ -789,6 +789,22 @@ fn sqlx_run_emits_sqlx_readme() {
             "programmatic Migrator construction missing from {engine}/README.md"
         );
         assert!(
+            readme.contains("ReversibleUp"),
+            "reversible-up recipe marker missing from {engine}/README.md"
+        );
+        assert!(
+            readme.contains("ReversibleDown"),
+            "reversible-down recipe marker missing from {engine}/README.md"
+        );
+        assert!(
+            readme.contains("Migrator::with_migrations"),
+            "vector-based Migrator construction missing from {engine}/README.md"
+        );
+        assert!(
+            readme.contains("AssertSqlSafe"),
+            "audited-string conversion marker missing from {engine}/README.md"
+        );
+        assert!(
             !readme.contains("diesel migration run"),
             "diesel runner instructions must not reach sqlx consumers ({engine}/README.md)"
         );
@@ -870,6 +886,126 @@ fn generated_readmes_cite_no_planning_docs() {
                     "generated README cites the internal planning doc: {}",
                     entry.path().display()
                 );
+            }
+        }
+    }
+}
+
+/// Tests that every emitted README drives the real store SPI and names the
+/// idiomatic holder path, and every emitted holder stub hints only real SPI
+/// methods (G-06-1 lockstep pin for the hardened consumer examples).
+#[test]
+fn readme_adapter_examples_use_real_spi() {
+    for backend in ["diesel", "sqlx", "seaorm", "mongodb"] {
+        let dir = test_temp_dir();
+        let out_dir = dir.to_str().unwrap();
+
+        rolify_cli()
+            .args([
+                "generate",
+                "--backend",
+                backend,
+                "Role",
+                "User",
+                "--out-dir",
+                out_dir,
+            ])
+            .assert()
+            .success();
+
+        for entry in WalkDir::new(&dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let file_name = entry.file_name().to_str().unwrap_or("");
+            if file_name == "README.md" {
+                let readme = fs::read_to_string(entry.path()).unwrap();
+                for marker in [
+                    "find_or_create_by",
+                    "RolifyUser",
+                    "ResourceRef::Global",
+                    "ResourceFilter::Global",
+                ] {
+                    assert!(
+                        readme.contains(marker),
+                        "emitted README for backend {backend} must carry {marker}: {}",
+                        entry.path().display()
+                    );
+                }
+            } else if file_name == "holder_stub.rs" {
+                let holder_stub = fs::read_to_string(entry.path()).unwrap();
+                for marker in [
+                    "roles_of",
+                    "find_or_create_by",
+                    "where_",
+                    "store.remove(",
+                ] {
+                    assert!(
+                        holder_stub.contains(marker),
+                        "emitted holder stub for backend {backend} must carry {marker}: {}",
+                        entry.path().display()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Tests that no emitted README or holder stub carries a fabricated store
+/// API name: every marker below names a method, variant, or constructor that
+/// never existed on the real SPI or the pinned sqlx API, so any one of them
+/// re-entering a template fails here (G-06-1 and G-06-2 lockstep). The scan
+/// covers rendered output files only, so the marker literals in this test
+/// body can never self-match.
+#[test]
+fn emitted_readmes_carry_no_fabricated_store_api() {
+    const FABRICATED: [&str; 8] = [
+        "add_role_scoped",
+        "store.add_role(",
+        "store.has_role(",
+        "roles_for_user",
+        "ReversibleUpAndDown",
+        "Migrator::new(",
+        "DieselStore::has_role",
+        "DieselStore::add_role",
+    ];
+    for backend in ["diesel", "sqlx", "seaorm", "mongodb"] {
+        let dir = test_temp_dir();
+        let out_dir = dir.to_str().unwrap();
+
+        rolify_cli()
+            .args([
+                "generate",
+                "--backend",
+                backend,
+                "Role",
+                "User",
+                "--out-dir",
+                out_dir,
+            ])
+            .assert()
+            .success();
+
+        for entry in WalkDir::new(&dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let file_name = entry.file_name().to_str().unwrap_or("");
+            if file_name == "README.md" || file_name == "holder_stub.rs" {
+                let rendered = fs::read_to_string(entry.path()).unwrap();
+                for marker in FABRICATED {
+                    assert!(
+                        !rendered.contains(marker),
+                        "fabricated {marker} reached backend {backend} output: {}",
+                        entry.path().display()
+                    );
+                }
             }
         }
     }

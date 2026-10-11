@@ -1,4 +1,4 @@
-//! Compile-plus-shape gate for the README_sqlx Programmatic Migrator recipe (G-06-2).
+//! Compile-plus-shape gate for the `README_sqlx` Programmatic Migrator recipe (G-06-2).
 //!
 //! The recipe builds a `sqlx::migrate::Migrator` programmatically from the
 //! rolify-generated trees with the exact sqlx 0.9.0 construction calls (the
@@ -19,23 +19,21 @@ use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 
-/// Replicates the README_sqlx recipe construction over one engine tree: one
+/// Replicates the `README_sqlx` recipe construction over one engine tree: one
 /// `ReversibleUp` entry from `up.sql` plus one `ReversibleDown` entry from
 /// `down.sql` per versioned stem directory, combined through the
 /// vector-based `Migrator` constructor.
 fn build_migrator_like_recipe(migration_dir: &Path) -> Migrator {
     let mut entries: Vec<_> = fs::read_dir(migration_dir)
         .expect("generated migration dir reads")
-        .filter_map(|dir_entry| dir_entry.ok())
-        .filter(|dir_entry| {
-            dir_entry
-                .file_type()
-                .map(|file_type| file_type.is_dir())
-                .unwrap_or(false)
+        .filter_map(std::result::Result::ok)
+        .filter(|dir_entry| match dir_entry.file_type() {
+            Ok(file_type) => file_type.is_dir(),
+            Err(_) => false,
         })
         .collect();
 
-    entries.sort_by_key(|dir_entry| dir_entry.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     let mut migrations = Vec::new();
     for dir_entry in entries {
