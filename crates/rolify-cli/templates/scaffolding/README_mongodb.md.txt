@@ -70,27 +70,31 @@ use rolify_core::config::RolifyConfig;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
+use rolify_core::store::RoleStore;
+use rolify_core::user::RolifyUser;
 use rolify_mongodb::MongoStore;
 
 let config = RolifyConfig::builder().build()?;
+let client = mongodb::Client::with_uri_str("mongodb://127.0.0.1:27017/").await?;
+let db: mongodb::Database = client.database("mydb");
 let mut store = MongoStore::new(&db, &config);
 let mut conn = ();
 
 // Grant the global admin role: the store SPI mirrors the gem's adapter
-// calls (async here: every call awaits the database handle; the Mongo
+// calls (async here: every call awaits the database handle; the
 // connection is the unit value because the database lives in the store).
 let admin = store
     .find_or_create_by(&mut conn, &RoleName::from("admin"), ResourceRef::Global)
     .await?;
 store
-    .add(&mut conn, &ResourceId::from("user-1"), &admin)
+    .add(&mut conn, &ResourceId::from("1"), &admin)
     .await?;
 
 // Check membership through the where_ ladder.
 let roles = store
     .where_(
         &mut conn,
-        &ResourceId::from("user-1"),
+        &ResourceId::from("1"),
         &RoleQuery {
             name: &RoleName::from("admin"),
             filter: ResourceFilter::Global,

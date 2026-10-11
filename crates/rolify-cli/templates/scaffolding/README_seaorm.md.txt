@@ -175,26 +175,31 @@ use rolify_core::config::RolifyConfig;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
+use rolify_core::store::RoleStore;
+use rolify_core::user::RolifyUser;
 use rolify_seaorm::SeaormStore;
-use sea_orm::DatabaseConnection;
+use sea_orm::{Database, DatabaseConnection};
 
 let config = RolifyConfig::builder().build()?;
-let store = SeaormStore::<DatabaseConnection>::new(&config);
+let mut store = SeaormStore::<DatabaseConnection>::new(&config);
+let mut conn = Database::connect("postgres://user:pass@localhost/db").await?;
 
 // Grant the global admin role: the store SPI mirrors the gem's adapter
 // calls (async here: every call awaits the connection).
+// Holder ids parse under the configured holder-id kind (default integer,
+// so the canonical id here is "1").
 let admin = store
     .find_or_create_by(&mut conn, &RoleName::from("admin"), ResourceRef::Global)
     .await?;
 store
-    .add(&mut conn, &ResourceId::from("user-1"), &admin)
+    .add(&mut conn, &ResourceId::from("1"), &admin)
     .await?;
 
 // Check membership through the where_ ladder.
 let roles = store
     .where_(
         &mut conn,
-        &ResourceId::from("user-1"),
+        &ResourceId::from("1"),
         &RoleQuery {
             name: &RoleName::from("admin"),
             filter: ResourceFilter::Global,

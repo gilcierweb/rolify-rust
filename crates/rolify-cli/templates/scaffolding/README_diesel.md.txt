@@ -69,31 +69,42 @@ CREATE INDEX idx_roles_name ON roles (name);
 
 ```sql
 CREATE TABLE users_roles (
-    user_id VARCHAR(191) NOT NULL,
+    user_id BIGINT NOT NULL,
     role_id BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     CONSTRAINT users_roles_pair_unique UNIQUE (user_id, role_id)
 );
 ```
 
+The join column type follows `--holder-id-type` (default integer, shown
+here for Postgres: `BIGINT`; the `uuid` kind emits `UUID`, the `string`
+kind emits `VARCHAR(191)`).
+
 ## Using with rolify-diesel Adapter
 
 ```rust
+use diesel::Connection;
+use diesel::pg::PgConnection;
 use rolify_core::config::RolifyConfig;
 use rolify_core::query::{ResourceFilter, RoleQuery};
 use rolify_core::resource::ResourceRef;
 use rolify_core::role::{ResourceId, RoleName};
+use rolify_core::store::RoleStore;
+use rolify_core::user::RolifyUser;
 use rolify_diesel::DieselStore;
 
 let config = RolifyConfig::builder().build()?;
 let mut store = DieselStore::new(&config);
+let mut conn = PgConnection::establish("postgres://user:pass@localhost/db")?;
 
 // Grant the global admin role: the store SPI mirrors the gem's adapter
 // calls (find_or_create_by dedupes the role row, add links the holder).
+// Holder ids parse under the configured holder-id kind (default integer,
+// so the canonical id here is "1").
 let admin = store.find_or_create_by(&mut conn, &RoleName::from("admin"), ResourceRef::Global)?;
-store.add(&mut conn, &ResourceId::from("user-1"), &admin)?;
+store.add(&mut conn, &ResourceId::from("1"), &admin)?;
 
 // Check membership through the where_ ladder.
-let roles = store.where_(&mut conn, &ResourceId::from("user-1"), &RoleQuery {
+let roles = store.where_(&mut conn, &ResourceId::from("1"), &RoleQuery {
     name: &RoleName::from("admin"),
     filter: ResourceFilter::Global,
 })?;
