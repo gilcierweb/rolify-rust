@@ -30,7 +30,7 @@ pub enum ParsedHolderId {
 ///
 /// Returns [`RolifyError::InvalidHolderId`] if the input does not match
 /// the expected format for the kind:
-/// - `Integer`: must be a valid i64 (no leading zeros, no + sign, no whitespace, within i64 range)
+/// - `Integer`: must be a valid i64 (leading zeros are re-canonicalized, no + sign, no whitespace, within i64 range)
 /// - `Uuid`: must be a valid UUID (simple, URN, or braced forms accepted)
 /// - `String`: accepts any string (no validation)
 ///
