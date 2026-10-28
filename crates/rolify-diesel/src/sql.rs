@@ -196,7 +196,7 @@ mod backend_sql {
             idx = next_idx;
         }
 
-        (parts.join(" OR "), idx)
+        (format!("({})", parts.join(" OR ")), idx)
     }
 
     /// SELECT role rows for `where_` / `where_strict` / `where_any`.

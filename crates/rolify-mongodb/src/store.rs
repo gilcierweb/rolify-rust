@@ -407,11 +407,23 @@ impl RoleStore for MongoStore {
         // ONE logical round trip: the gem's `build_conditions`
         // `join(' OR ')` collapses to a `$or` of per-query filters.
         let roles = self.roles_collection();
-        let disjuncts: Vec<Document> = queries.iter().map(ladder_filter).collect();
+        let empty = queries.is_empty();
+        if !empty {
+            self.bump_query_count();
+        }
+        let disjuncts: Vec<Document> = if empty {
+            Vec::new()
+        } else {
+            queries.iter().map(ladder_filter).collect()
+        };
         let mut filter = doc! { "$or": disjuncts };
-        holder_filter(&mut filter, holder);
-        self.bump_query_count();
+        if !empty {
+            holder_filter(&mut filter, holder);
+        }
         async move {
+            if empty {
+                return Ok(Vec::new());
+            }
             let documents = find_docs(&roles, filter).await?;
             documents
                 .iter()

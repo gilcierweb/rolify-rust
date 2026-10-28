@@ -396,6 +396,9 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         holder: &ResourceId,
         queries: &[RoleQuery<'_>],
     ) -> Result<Vec<RoleRecord>, Self::Error> {
+        if queries.is_empty() {
+            return Ok(Vec::new());
+        }
         let backend = backend_of(conn);
         let (where_clause, _) = build_any_where(backend, queries, 2);
         let sql =

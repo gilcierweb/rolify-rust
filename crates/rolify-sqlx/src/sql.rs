@@ -213,7 +213,7 @@ pub(crate) fn build_any_where<DB: Database>(
         fragments.push(fragment);
         next_index = advanced;
     }
-    (fragments.join(" OR "), next_index)
+    (format!("({})", fragments.join(" OR ")), next_index)
 }
 
 /// SELECT role rows joined to one holder, filtered by `where_clause`
