@@ -41,8 +41,7 @@ use rolify_core::store::{
     RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, DbErr, EntityTrait, QueryFilter, QueryResult, Set,
-    SqlErr, Statement, Value,
+    ConnectionTrait, DbBackend, DbErr, QueryResult, SqlErr, Statement, Value,
 };
 
 use crate::entity::role;
@@ -423,41 +422,77 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         scope: ResourceRef<'_>,
     ) -> Result<RoleRecord, Self::Error> {
         let (name_value, resource_type, resource_id) = Self::scope_to_triple(name, scope);
+        let backend = backend_of(conn);
+        let role_table = quote_identifier(backend, &self.role_table);
+        // SELECT by triple (honors configured table name).
+        let select_sql = format!(
+            "SELECT name, resource_type, resource_id FROM {} WHERE name = {} AND resource_type = {} AND resource_id = {}",
+            role_table,
+            placeholder(backend, 1),
+            placeholder(backend, 2),
+            placeholder(backend, 3),
+        );
+        let stmt = Statement::from_sql_and_values(
+            backend,
+            select_sql,
+            vec![
+                Value::from(name_value.clone()),
+                Value::from(resource_type.clone()),
+                Value::from(resource_id.clone()),
+            ],
+        );
         self.bump(1);
-        if let Some(model) = role::Entity::find()
-            .filter(role::Column::Name.eq(&name_value))
-            .filter(role::Column::ResourceType.eq(&resource_type))
-            .filter(role::Column::ResourceId.eq(&resource_id))
-            .one(&*conn)
-            .await
-            .map_err(Error::Db)?
-        {
-            return Ok(model.to_record());
+        let rows = conn.query_all_raw(stmt).await.map_err(Error::Db)?;
+        if let Some(row) = rows.first() {
+            return model_from_row(row);
         }
         // Not found: insert (the unique triple arbitrates races).
-        let active = role::ActiveModel {
-            name: Set(name_value.clone()),
-            resource_type: Set(resource_type.clone()),
-            resource_id: Set(resource_id.clone()),
-            ..Default::default()
-        };
+        let insert_sql = format!(
+            "INSERT INTO {} (name, resource_type, resource_id) VALUES ({}, {}, {})",
+            role_table,
+            placeholder(backend, 1),
+            placeholder(backend, 2),
+            placeholder(backend, 3),
+        );
+        let stmt = Statement::from_sql_and_values(
+            backend,
+            insert_sql,
+            vec![
+                Value::from(name_value.clone()),
+                Value::from(resource_type.clone()),
+                Value::from(resource_id.clone()),
+            ],
+        );
         self.bump(1);
-        match role::Entity::insert(active).exec(&*conn).await {
+        match conn.execute_raw(stmt).await {
             Ok(_) => {}
             Err(db_err) if is_unique_violation(&db_err) => {}
             Err(other) => return Err(Error::Db(other)),
         }
         // Re-read so a race loser observes the row the winner wrote.
+        let stmt = Statement::from_sql_and_values(
+            backend,
+            format!(
+                "SELECT name, resource_type, resource_id FROM {} WHERE name = {} AND resource_type = {} AND resource_id = {}",
+                role_table,
+                placeholder(backend, 1),
+                placeholder(backend, 2),
+                placeholder(backend, 3),
+            ),
+            vec![
+                Value::from(name_value.clone()),
+                Value::from(resource_type.clone()),
+                Value::from(resource_id.clone()),
+            ],
+        );
         self.bump(1);
-        let model = role::Entity::find()
-            .filter(role::Column::Name.eq(&name_value))
-            .filter(role::Column::ResourceType.eq(&resource_type))
-            .filter(role::Column::ResourceId.eq(&resource_id))
-            .one(&*conn)
-            .await
-            .map_err(Error::Db)?
-            .ok_or_else(|| Error::Core(RolifyError::RoleNotFound { name: name_value }))?;
-        Ok(model.to_record())
+        let rows = conn.query_all_raw(stmt).await.map_err(Error::Db)?;
+        let row = rows.first().ok_or_else(|| {
+            Error::Core(RolifyError::RoleNotFound {
+                name: name_value.clone(),
+            })
+        })?;
+        model_from_row(row)
     }
 
     /// Gem `add` (role_adapter.rb:52-54): idempotent link creation -
@@ -470,20 +505,37 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
     ) -> Result<bool, Self::Error> {
         let resource_type = crate::entity::role::to_storage(role.resource_type.as_deref());
         let resource_id = crate::entity::role::resource_id_to_storage(role.resource_id.as_ref());
+        let backend = backend_of(conn);
+        let role_table = quote_identifier(backend, &self.role_table);
+        // Look up the role id by triple (honors configured table name).
+        let select_sql = format!(
+            "SELECT id FROM {} WHERE name = {} AND resource_type = {} AND resource_id = {}",
+            role_table,
+            placeholder(backend, 1),
+            placeholder(backend, 2),
+            placeholder(backend, 3),
+        );
         self.bump(1);
-        let model = role::Entity::find()
-            .filter(role::Column::Name.eq(role.name.as_str()))
-            .filter(role::Column::ResourceType.eq(resource_type))
-            .filter(role::Column::ResourceId.eq(&resource_id))
-            .one(&*conn)
+        let rows = conn
+            .query_all_raw(Statement::from_sql_and_values(
+                backend,
+                select_sql,
+                vec![
+                    Value::from(role.name.as_str().to_owned()),
+                    Value::from(resource_type.to_owned()),
+                    Value::from(resource_id.clone()),
+                ],
+            ))
             .await
-            .map_err(Error::Db)?
+            .map_err(Error::Db)?;
+        let role_id: i64 = rows
+            .first()
+            .and_then(|row| row.try_get("", "id").ok())
             .ok_or_else(|| {
                 Error::Core(RolifyError::RoleNotFound {
                     name: role.name.as_str().to_owned(),
                 })
             })?;
-        let backend = backend_of(conn);
         let sql = format!(
             "INSERT INTO {} (user_id, role_id) VALUES ({}, {})",
             quote_identifier(backend, &self.join_table),
@@ -491,7 +543,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             placeholder(backend, 2),
         );
         let holder_val = holder_value(self.holder_id_kind, holder)?;
-        let values = vec![holder_val, Value::BigInt(Some(model.id))];
+        let values = vec![holder_val, Value::BigInt(Some(role_id))];
         let stmt = Statement::from_sql_and_values(backend, sql, values);
         self.bump(1);
         match conn.execute_raw(stmt).await {
@@ -664,8 +716,10 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                 vec![holder_value(self.holder_id_kind, holder)?],
             ))
             .await
-            .map_err(Error::Db)?
-            .expect("COUNT(*) always returns one row");
+            .map_err(Error::Db)?;
+        let row = row.ok_or_else(|| Error::Core(RolifyError::InvalidConfig {
+            reason: "COUNT(*) query returned no row".into(),
+        }))?;
         let count: i64 = row.try_get("", "count").map_err(Error::Db)?;
         Ok(count > 0)
     }
