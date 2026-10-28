@@ -187,7 +187,7 @@ jobs:
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
       - name: cargo clippy (rolify-seaorm all engines)
-        run: cargo clippy -p rolify-seaorm --features postgres,mysql -- -D warnings
+        run: cargo clippy -p rolify-seaorm --all-targets --features postgres,mysql -- -D warnings
       # D-10 phase-5 floor: 1.94 for rolify-seaorm (sea-orm 2.0.4).
       - uses: dtolnay/rust-toolchain@1.94
       - name: cargo +1.94 check (rolify-seaorm)
