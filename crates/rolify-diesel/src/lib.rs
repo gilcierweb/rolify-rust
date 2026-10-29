@@ -6,7 +6,7 @@
 //!
 //! | Mode | Cargo features | Backend | Notes |
 //! |---|---|---|---|
-//! | sync (default) | (none, or `sync`) | engine feature required | On by default (just-works posture, D-08); forwards `rolify-core/is_sync` via `is_sync` |
+//! | sync (default) | (none, or `sync`) | `postgres` (default) | On by default (just-works posture, D-08); forwards `rolify-core/is_sync` via `is_sync`. Default engine is Postgres; override with `--no-default-features --features "sync,<engine>"` |
 //! | sync + Postgres | `sync,postgres` | `diesel::pg::PgConnection` | Pulls `diesel_migrations` |
 //! | sync + `MySQL` | `sync,mysql` | `diesel::mysql::MysqlConnection` | Pulls `diesel_migrations` |
 //! | sync + `SQLite` | `sync,sqlite` | `diesel::sqlite::SqliteConnection` | Pulls `diesel_migrations` + bundled `libsqlite3-sys` |
@@ -128,6 +128,15 @@ compile_error!("feature `postgres` requires one of the mode features `sync` or `
 compile_error!("feature `mysql` requires one of the mode features `sync` or `async`");
 #[cfg(all(feature = "sqlite", not(any(feature = "sync", feature = "async"))))]
 compile_error!("feature `sqlite` requires one of the mode features `sync` or `async`");
+
+// No-engine guard: at least one backend must be enabled (the inert stub
+// is not a supported build configuration — pick `postgres`, `mysql` or
+// `sqlite` together with a mode feature).
+#[cfg(not(any(feature = "postgres", feature = "mysql", feature = "sqlite")))]
+compile_error!(
+    "rolify-diesel requires at least one engine feature (`postgres`, `mysql`, or `sqlite`); \
+     enable one together with a mode feature (`sync` or `async`)"
+);
 
 // Re-export the migrations constant for the enabled backend.
 // Path is relative to the crate root (where Cargo.toml lives).
