@@ -485,16 +485,16 @@ impl RoleStore for MongoStore {
                 None => {
                     let new_doc = RoleDoc::from_record(role).to_document();
                     match insert_doc(&roles, new_doc).await {
-                        Ok(_) => read_role_doc(&roles, role)
-                            .await?
-                            .ok_or_else(|| invalid_config("add: role document vanished after insert"))?,
+                        Ok(_) => read_role_doc(&roles, role).await?.ok_or_else(|| {
+                            invalid_config("add: role document vanished after insert")
+                        })?,
                         Err(error) => {
                             if let Error::Mongo(mongo_error) = &error
                                 && is_duplicate_key(mongo_error)
                             {
-                                read_role_doc(&roles, role)
-                                    .await?
-                                    .ok_or_else(|| invalid_config("add: role document vanished after race"))?
+                                read_role_doc(&roles, role).await?.ok_or_else(|| {
+                                    invalid_config("add: role document vanished after race")
+                                })?
                             } else {
                                 return Err(error);
                             }

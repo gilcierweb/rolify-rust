@@ -22,7 +22,7 @@ pub const MONGO_DOCS: &str = include_str!("../../templates/mongo_docs.rs.txt");
 pub mod scaffolding {
     pub const ROLE_STUB: &str = include_str!("../../templates/scaffolding/role_stub.rs.txt");
     pub const ROLE_STUB_MONGO: &str =
-    include_str!("../../templates/scaffolding/role_stub_mongo.rs.txt");
+        include_str!("../../templates/scaffolding/role_stub_mongo.rs.txt");
     pub const HOLDER_STUB: &str = include_str!("../../templates/scaffolding/holder_stub.rs.txt");
     pub const CONFIG_EXAMPLE: &str =
         include_str!("../../templates/scaffolding/config_example.rs.txt");

@@ -71,7 +71,12 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
     // Validate identifiers at the render boundary (defense-in-depth: the
     // binary already checks, but library consumers may call render_all
     // directly). Returns CliError::Core on any violation.
-    for value in [&plan.roles_table, &plan.join_table, &plan.role_name, &plan.holder_name] {
+    for value in [
+        &plan.roles_table,
+        &plan.join_table,
+        &plan.role_name,
+        &plan.holder_name,
+    ] {
         rolify_core::config::RolifyConfigBuilder::validate_identifier(value)
             .map_err(|error| CliError::Core(error))?;
     }
@@ -215,7 +220,11 @@ fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry
             content: if plan.backend == Backend::Mongodb {
                 crate::templates::scaffolding::role_stub_mongo(&plan.role_name, &plan.holder_name)
             } else {
-                crate::templates::scaffolding::role_stub(&plan.role_name, plan.backend.as_str(), &plan.holder_name)
+                crate::templates::scaffolding::role_stub(
+                    &plan.role_name,
+                    plan.backend.as_str(),
+                    &plan.holder_name,
+                )
             },
         },
         FileEntry {
