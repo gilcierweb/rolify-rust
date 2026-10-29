@@ -655,15 +655,14 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             link_values.push(Value::from(*id));
         }
         self.bump(1);
-        let removed = conn
-            .execute_raw(Statement::from_sql_and_values(
-                backend,
-                delete_links_sql,
-                link_values,
-            ))
+        conn.execute_raw(Statement::from_sql_and_values(
+            backend,
+            delete_links_sql,
+            link_values,
+        ))
             .await
             .map_err(Error::Db)?;
-        let removed_links = usize::try_from(removed.rows_affected()).unwrap_or(usize::MAX);
+        let removed_links = affected_ids.len();
 
         // Orphan sweep: drop role rows whose last link just vanished
         // (remove_role_if_empty, role_adapter.rb:66-68).
@@ -676,22 +675,33 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             );
             for (id, record) in &affected {
                 self.bump(1);
-                let result = conn
-                    .execute_raw(Statement::from_sql_and_values(
-                        backend,
-                        sweep_sql.clone(),
-                        vec![Value::from(*id), Value::from(*id)],
-                    ))
+                conn.execute_raw(Statement::from_sql_and_values(
+                    backend,
+                    sweep_sql.clone(),
+                    vec![Value::from(*id), Value::from(*id)],
+                ))
                     .await
                     .map_err(Error::Db)?;
-                if result.rows_affected() > 0 {
+                // Check if the role was actually deleted (no links existed).
+                let check_sql = format!(
+                    "SELECT 1 FROM {role_table} WHERE id = {}",
+                    placeholder(backend, 1)
+                );
+                let check = conn
+                    .query_one_raw(Statement::from_sql_and_values(
+                        backend,
+                        check_sql,
+                        vec![Value::from(*id)],
+                    ))
+                    .await;
+                if check.is_err() {
                     removed_roles.push(record.clone());
                 }
             }
         }
 
         Ok(RemovalOutcome {
-            removed_links,
+            removed_links: affected_ids.len(),
             removed_roles,
         })
     }
