@@ -67,7 +67,7 @@
 //! store.ensure_indexes()?;            // sync in sync builds
 //! ```
 ///
-/// Compile-only regression test for D-08-08: MongoDB adapter must remain
+/// Compile-only regression test for D-08-08: `MongoDB` adapter must remain
 /// unchanged by the holder id kind selection (holder ids stay canonical
 /// strings in `user_ids`/`role_ids`).
 #[cfg(test)]
