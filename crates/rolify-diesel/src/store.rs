@@ -1740,6 +1740,7 @@ mod pg_impl {
     );
 
     // Helper functions for PgConnection
+    #[allow(clippy::needless_continue, clippy::cast_sign_loss)]
     fn find_or_create_by_triple(
         conn: &mut PgConnection,
         role_table: &str,
@@ -1757,18 +1758,31 @@ mod pg_impl {
             Err(e) => return Err(Error::Diesel(e)),
         }
 
-        let insert_sql = crate::sql::insert_role(role_table);
-        let insert_q = diesel::sql_query(insert_sql)
-            .bind::<Text, _>(name.as_str())
-            .bind::<Text, _>(resource_type)
-            .bind::<Text, _>(resource_id);
-        match insert_q.execute(conn) {
-            Ok(_)
-            | Err(diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => {}
-            Err(other) => return Err(Error::Diesel(other)),
+        // Retry on MySQL deadlock (SerializationFailure) - can occur on concurrent
+        // inserts of the same triple due to InnoDB gap locks.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let insert_sql = crate::sql::insert_role(role_table);
+            let insert_q = diesel::sql_query(insert_sql)
+                .bind::<Text, _>(name.as_str())
+                .bind::<Text, _>(resource_type)
+                .bind::<Text, _>(resource_id);
+            match insert_q.execute(conn) {
+                Ok(_)
+                | Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => break,
+                Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::SerializationFailure,
+                    _,
+                )) if attempts < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempts as u64));
+                    continue;
+                }
+                Err(other) => return Err(Error::Diesel(other)),
+            }
         }
 
         let q = diesel::sql_query(crate::sql::select_role_by_triple(role_table))
@@ -2806,18 +2820,31 @@ mod mysql_impl {
             Err(e) => return Err(Error::Diesel(e)),
         }
 
-        let insert_sql = crate::sql::insert_role(role_table);
-        let insert_q = diesel::sql_query(insert_sql)
-            .bind::<Text, _>(name.as_str())
-            .bind::<Text, _>(resource_type)
-            .bind::<Text, _>(resource_id);
-        match insert_q.execute(conn) {
-            Ok(_)
-            | Err(diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => {}
-            Err(other) => return Err(Error::Diesel(other)),
+        // Retry on MySQL deadlock (SerializationFailure) - can occur on concurrent
+        // inserts of the same triple due to InnoDB gap locks.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let insert_sql = crate::sql::insert_role(role_table);
+            let insert_q = diesel::sql_query(insert_sql)
+                .bind::<Text, _>(name.as_str())
+                .bind::<Text, _>(resource_type)
+                .bind::<Text, _>(resource_id);
+            match insert_q.execute(conn) {
+                Ok(_)
+                | Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => break,
+                Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::SerializationFailure,
+                    _,
+                )) if attempts < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempts as u64));
+                    continue;
+                }
+                Err(other) => return Err(Error::Diesel(other)),
+            }
         }
 
         let q = diesel::sql_query(crate::sql::select_role_by_triple(role_table))
@@ -3855,18 +3882,31 @@ mod sqlite_impl {
             Err(e) => return Err(Error::Diesel(e)),
         }
 
-        let insert_sql = crate::sql::insert_role(role_table);
-        let insert_q = diesel::sql_query(insert_sql)
-            .bind::<Text, _>(name.as_str())
-            .bind::<Text, _>(resource_type)
-            .bind::<Text, _>(resource_id);
-        match insert_q.execute(conn) {
-            Ok(_)
-            | Err(diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => {}
-            Err(other) => return Err(Error::Diesel(other)),
+        // Retry on MySQL deadlock (SerializationFailure) - can occur on concurrent
+        // inserts of the same triple due to InnoDB gap locks.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let insert_sql = crate::sql::insert_role(role_table);
+            let insert_q = diesel::sql_query(insert_sql)
+                .bind::<Text, _>(name.as_str())
+                .bind::<Text, _>(resource_type)
+                .bind::<Text, _>(resource_id);
+            match insert_q.execute(conn) {
+                Ok(_)
+                | Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => break,
+                Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::SerializationFailure,
+                    _,
+                )) if attempts < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempts as u64));
+                    continue;
+                }
+                Err(other) => return Err(Error::Diesel(other)),
+            }
         }
 
         let q = diesel::sql_query(crate::sql::select_role_by_triple(role_table))
@@ -4873,6 +4913,7 @@ mod pg_async_impl {
     use rolify_core::query::RoleQuery;
     use rolify_core::role::RoleRecord;
     use rolify_core::store::{RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn};
+    use tokio::time::sleep;
 
     use crate::dialect::placeholder;
     use crate::error::Error;
@@ -4911,20 +4952,31 @@ mod pg_async_impl {
             return Ok(row.to_record());
         }
 
-        let insert_sql = crate::sql::insert_role(role_table);
-        let insert_q = diesel::sql_query(insert_sql)
-            .bind::<Text, _>(name.as_str())
-            .bind::<Text, _>(resource_type)
-            .bind::<Text, _>(resource_id);
-        match insert_q.execute(conn).await {
-            // A unique violation means a concurrent holder won the
-            // insert race; the re-SELECT below reads the winner's row.
-            Ok(_)
-            | Err(diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => {}
-            Err(other) => return Err(Error::Diesel(other)),
+        // Retry on MySQL deadlock (SerializationFailure) - can occur on concurrent
+        // inserts of the same triple due to InnoDB gap locks.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let insert_sql = crate::sql::insert_role(role_table);
+            let insert_q = diesel::sql_query(insert_sql)
+                .bind::<Text, _>(name.as_str())
+                .bind::<Text, _>(resource_type)
+                .bind::<Text, _>(resource_id);
+            match insert_q.execute(conn).await {
+                Ok(_)
+                | Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => break,
+                Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::SerializationFailure,
+                    _,
+                )) if attempts < 3 => {
+                    sleep(std::time::Duration::from_millis(10 * attempts as u64)).await;
+                    continue;
+                }
+                Err(other) => return Err(Error::Diesel(other)),
+            }
         }
 
         diesel::sql_query(crate::sql::select_role_by_triple(role_table))
@@ -6052,6 +6104,7 @@ mod mysql_async_impl {
     use rolify_core::query::RoleQuery;
     use rolify_core::role::RoleRecord;
     use rolify_core::store::{RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn};
+    use tokio::time::sleep;
 
     use crate::dialect::placeholder;
     use crate::error::Error;
@@ -6089,20 +6142,31 @@ mod mysql_async_impl {
             return Ok(row.to_record());
         }
 
-        let insert_sql = crate::sql::insert_role(role_table);
-        let insert_q = diesel::sql_query(insert_sql)
-            .bind::<Text, _>(name.as_str())
-            .bind::<Text, _>(resource_type)
-            .bind::<Text, _>(resource_id);
-        match insert_q.execute(conn).await {
-            // A unique violation means a concurrent holder won the
-            // insert race; the re-SELECT below reads the winner's row.
-            Ok(_)
-            | Err(diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => {}
-            Err(other) => return Err(Error::Diesel(other)),
+        // Retry on MySQL deadlock (SerializationFailure) - can occur on concurrent
+        // inserts of the same triple due to InnoDB gap locks.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let insert_sql = crate::sql::insert_role(role_table);
+            let insert_q = diesel::sql_query(insert_sql)
+                .bind::<Text, _>(name.as_str())
+                .bind::<Text, _>(resource_type)
+                .bind::<Text, _>(resource_id);
+            match insert_q.execute(conn).await {
+                Ok(_)
+                | Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => break,
+                Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::SerializationFailure,
+                    _,
+                )) if attempts < 3 => {
+                    sleep(std::time::Duration::from_millis(10 * attempts as u64)).await;
+                    continue;
+                }
+                Err(other) => return Err(Error::Diesel(other)),
+            }
         }
 
         diesel::sql_query(crate::sql::select_role_by_triple(role_table))
@@ -7232,6 +7296,7 @@ mod sqlite_async_impl {
     use rolify_core::query::RoleQuery;
     use rolify_core::role::RoleRecord;
     use rolify_core::store::{RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn};
+    use tokio::time::sleep;
 
     use crate::dialect::placeholder;
     use crate::error::Error;
@@ -7270,20 +7335,31 @@ mod sqlite_async_impl {
             return Ok(row.to_record());
         }
 
-        let insert_sql = crate::sql::insert_role(role_table);
-        let insert_q = diesel::sql_query(insert_sql)
-            .bind::<Text, _>(name.as_str())
-            .bind::<Text, _>(resource_type)
-            .bind::<Text, _>(resource_id);
-        match insert_q.execute(conn).await {
-            // A unique violation means a concurrent holder won the
-            // insert race; the re-SELECT below reads the winner's row.
-            Ok(_)
-            | Err(diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => {}
-            Err(other) => return Err(Error::Diesel(other)),
+        // Retry on MySQL deadlock (SerializationFailure) - can occur on concurrent
+        // inserts of the same triple due to InnoDB gap locks.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let insert_sql = crate::sql::insert_role(role_table);
+            let insert_q = diesel::sql_query(insert_sql)
+                .bind::<Text, _>(name.as_str())
+                .bind::<Text, _>(resource_type)
+                .bind::<Text, _>(resource_id);
+            match insert_q.execute(conn).await {
+                Ok(_)
+                | Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::UniqueViolation,
+                    _,
+                )) => break,
+                Err(diesel::result::Error::DatabaseError(
+                    diesel::result::DatabaseErrorKind::SerializationFailure,
+                    _,
+                )) if attempts < 3 => {
+                    sleep(std::time::Duration::from_millis(10 * attempts as u64)).await;
+                    continue;
+                }
+                Err(other) => return Err(Error::Diesel(other)),
+            }
         }
 
         diesel::sql_query(crate::sql::select_role_by_triple(role_table))
