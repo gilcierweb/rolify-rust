@@ -22,7 +22,7 @@ pretty_assertions.workspace = true
 faker-rust = "0.1"
 tokio.workspace = true
 serde_json = "1"
-# rolify-test is a workspace member; available automatically for tests via resolver v3
+rolify-test = { workspace = true }
 
 [lints]
 workspace = true
