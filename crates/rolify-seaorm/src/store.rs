@@ -903,16 +903,6 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         if query.types.is_empty() {
             return Ok(Vec::new());
         }
-        // A holder filter without a registered holder table would
-        // silently read every holder's rows; fail loudly instead (the
-        // same InvalidConfig posture as holders_where / all_holders).
-        if query.holder.is_some() && self.holder_table.is_none() {
-            return Err(Error::Core(RolifyError::InvalidConfig {
-                reason:
-                    "roles_matching with a holder filter requires for_holder_table(..) on the store"
-                        .to_owned(),
-            }));
-        }
         let backend = backend_of(conn);
         let role_table = quote_identifier(backend, &self.role_table);
         let join_table = quote_identifier(backend, &self.join_table);
@@ -921,6 +911,12 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                 "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
                  INNER JOIN {} AS holder ON {} = link.user_id",
                 quote_identifier(backend, holder_table),
+                holder_compare_expr(backend, self.holder_id_kind, "holder.id"),
+            ),
+            (Some(_), None) => format!(
+                "INNER JOIN {join_table} AS link ON link.role_id = role_row.id \
+                 INNER JOIN {} AS holder ON {} = link.user_id",
+                quote_identifier(backend, "users"),
                 holder_compare_expr(backend, self.holder_id_kind, "holder.id"),
             ),
             _ => String::new(),

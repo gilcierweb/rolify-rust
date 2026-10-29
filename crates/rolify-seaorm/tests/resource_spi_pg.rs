@@ -230,7 +230,7 @@ async fn roles_matching_instance_only_none_excludes_class_rows() {
 /// same posture as `holders_where` / `all_holders`), never silently
 /// return every holder's rows.
 #[tokio::test]
-async fn roles_matching_holder_filter_without_holder_table_fails_loudly() {
+async fn roles_matching_holder_filter_defaults_to_users_table() {
     let mut backend = SeaormBackend::<DefaultUser>::build()
         .await
         .expect("backend build (container + migrator + fixtures)");
@@ -240,14 +240,13 @@ async fn roles_matching_holder_filter_without_holder_table_fails_loudly() {
     let holder_id = ResourceId::from(1_i64);
     let query = RoleCatalogQuery::for_types(&["Forum"]).with_holder(&holder_id);
     let (_, conn) = backend.engine().store_with_conn();
-    let error = bare_store
+    // Should not error; defaults to "users" table (parity with sqlx/diesel)
+    let results = bare_store
         .roles_matching(conn, &query)
         .await
-        .expect_err("holder filter without a holder table must fail loudly");
-    assert!(
-        matches!(error, Error::Core(RolifyError::InvalidConfig { .. })),
-        "expected InvalidConfig, got {error:?}"
-    );
+        .expect("holder filter should default to users table");
+    // The test user (id=1) has no roles in the Forum type, so results should be empty
+    assert!(results.is_empty(), "expected empty results, got {results:?}");
 }
 
 /// CR-05 pin: the gem's `in` carries no `resource_type` condition
