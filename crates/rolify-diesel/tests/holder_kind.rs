@@ -346,11 +346,20 @@ mod mysql {
         }
 
         // Apply schema DDL statement by statement for better error isolation
+        // Filter out comment lines and empty statements properly
         let ddl = schema_ddl(kind);
-        let statements: Vec<&str> = ddl
+        let statements: Vec<String> = ddl
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty() && !trimmed.starts_with("--")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
             .split(';')
             .map(|s| s.trim())
-            .filter(|s| !s.is_empty() && !s.starts_with("--"))
+            .filter(|s| !s.is_empty())
+            .map(String::from)
             .collect();
 
         for attempt in 1..=3 {
