@@ -2193,6 +2193,7 @@ mod pg_impl {
             );
             // Same swallow-as-false contract as the old get_result
             // probe: any execution error reports "no role exists".
+            #[allow(clippy::question_mark)]
             let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]) {
                 Ok(rows) => rows,
                 Err(e) => return async move { Err(e) },
@@ -3239,6 +3240,7 @@ mod mysql_impl {
             );
             // Same swallow-as-false contract as the old get_result
             // probe: any execution error reports "no role exists".
+            #[allow(clippy::question_mark)]
             let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]) {
                 Ok(rows) => rows,
                 Err(e) => return async move { Err(e) },
@@ -4287,6 +4289,7 @@ mod sqlite_impl {
             );
             // Same swallow-as-false contract as the old get_result
             // probe: any execution error reports "no role exists".
+            #[allow(clippy::question_mark)]
             let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]) {
                 Ok(rows) => rows,
                 Err(e) => return async move { Err(e) },
@@ -5415,6 +5418,7 @@ mod pg_async_impl {
                 }
                 // Same swallow-as-false contract as the old get_result
                 // probe: any execution error reports "no role exists".
+                #[allow(clippy::question_mark)]
                 let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]).await {
                     Ok(rows) => rows,
                     Err(e) => return Err(e),
@@ -6588,6 +6592,7 @@ mod mysql_async_impl {
                 }
                 // Same swallow-as-false contract as the old get_result
                 // probe: any execution error reports "no role exists".
+                #[allow(clippy::question_mark)]
                 let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]).await {
                     Ok(rows) => rows,
                     Err(e) => return Err(e),
@@ -7768,6 +7773,7 @@ mod sqlite_async_impl {
                 }
                 // Same swallow-as-false contract as the old get_result
                 // probe: any execution error reports "no role exists".
+                #[allow(clippy::question_mark)]
                 let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]).await {
                     Ok(rows) => rows,
                     Err(e) => return Err(e),

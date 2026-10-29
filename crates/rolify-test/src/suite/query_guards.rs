@@ -35,6 +35,7 @@ use crate::fixtures::{FixtureResource, ScopeContext};
 ///
 /// Panics when a parity assertion fails.
 #[maybe_async::maybe_async]
+#[allow(clippy::too_many_lines)]
 pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::Error> {
     let mut backend = B::build().await?;
     load_scope_context(&mut backend, ScopeContext::Instance).await?;

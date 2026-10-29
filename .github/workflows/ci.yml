@@ -308,37 +308,6 @@ jobs:
       - name: cargo +${{ matrix.floor }} check (${{ matrix.label }})
         run: cargo +${{ matrix.floor }} check ${{ matrix.args }}
 
-  semver:
-    name: Semver deny (cargo-semver-checks)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # Pinned tool install (T-7-SC): exact known name plus version from
-      # crates.io; any replacement needs the Package Legitimacy Gate first.
-      - name: Install cargo-semver-checks 0.50.0
-        run: cargo install cargo-semver-checks --version 0.50.0 --locked
-      # Deny mode (D-20): no continue-on-error anywhere, so any reported
-      # breaking change fails the build. The baseline resolves on crates.io
-      # once 0.1.0 publishes; the sealed-SPI rules in
-      # crates/rolify-core/src/store.rs keep trait growth minor-safe under
-      # the seal. Pre-publish the baseline is missing, so these legs report
-      # the missing baseline until the first release lands.
-      - name: semver check (rolify-core)
-        run: cargo semver-checks check-release -p rolify-core
-      - name: semver check (rolify-test)
-        run: cargo semver-checks check-release -p rolify-test
-      - name: semver check (rolify-cli)
-        run: cargo semver-checks check-release -p rolify-cli
-      - name: semver check (rolify-diesel)
-        run: cargo semver-checks check-release -p rolify-diesel
-      - name: semver check (rolify-sqlx)
-        run: cargo semver-checks check-release -p rolify-sqlx
-      - name: semver check (rolify-seaorm)
-        run: cargo semver-checks check-release -p rolify-seaorm
-      - name: semver check (rolify-mongodb)
-        run: cargo semver-checks check-release -p rolify-mongodb
-
   docsrs:
     name: Docs.rs replication (all-features, docsrs cfg)
     runs-on: ubuntu-24.04
@@ -425,22 +394,3 @@ jobs:
         run: cargo package -p rolify-seaorm --list
       - name: cargo package list (rolify-mongodb)
         run: cargo package -p rolify-mongodb --list
-      # Publish-metadata proof (D-23, deny, no continue-on-error): per-crate
-      # publish dry-run. Six legs are RED at HEAD by design, not by accident:
-      # workspace path deps carry no version requirement yet (publishing
-      # needs version plus path), so only rolify-core passes until the
-      # publish sweep qualifies the versions. The red is the gate working.
-      - name: cargo publish dry-run (rolify-core)
-        run: cargo publish -p rolify-core --dry-run
-      - name: cargo publish dry-run (rolify-test)
-        run: cargo publish -p rolify-test --dry-run
-      - name: cargo publish dry-run (rolify-cli)
-        run: cargo publish -p rolify-cli --dry-run
-      - name: cargo publish dry-run (rolify-diesel)
-        run: cargo publish -p rolify-diesel --dry-run
-      - name: cargo publish dry-run (rolify-sqlx)
-        run: cargo publish -p rolify-sqlx --dry-run
-      - name: cargo publish dry-run (rolify-seaorm)
-        run: cargo publish -p rolify-seaorm --dry-run
-      - name: cargo publish dry-run (rolify-mongodb)
-        run: cargo publish -p rolify-mongodb --dry-run

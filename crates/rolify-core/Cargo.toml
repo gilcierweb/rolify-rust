@@ -22,7 +22,7 @@ pretty_assertions.workspace = true
 faker-rust = "0.1"
 tokio.workspace = true
 serde_json = "1"
-rolify-test = { path = "../rolify-test" }
+rolify-test = { path = "../rolify-test", version = "0.1.0" }
 
 [lints]
 workspace = true
