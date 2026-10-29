@@ -65,6 +65,7 @@ pub mod manager;
 pub mod query;
 pub mod resource;
 pub mod role;
+pub mod sentinel;
 pub mod store;
 pub mod user;
 
@@ -73,3 +74,4 @@ pub use error::RolifyError;
 pub use holder::{ParsedHolderId, holder_id_to_string, parse_holder_id};
 pub use kernel::RemovalTarget;
 pub use role::SCOPE_SENTINEL;
+pub use sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};

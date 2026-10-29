@@ -20,6 +20,7 @@
 //! fill them on insert).
 
 use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
+use rolify_core::sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
 use sea_orm::entity::prelude::*;
 
 /// Role row: one role name at one scope, with the `user_ids` link rows
@@ -71,43 +72,6 @@ impl Model {
         }
     }
 }
-
-/// Write side of D-06: semantic `None` becomes the sentinel `''`.
-#[inline]
-#[must_use]
-pub fn to_storage(value: Option<&str>) -> &str {
-    value.unwrap_or(SCOPE_SENTINEL)
-}
-
-/// Write side of D-06 for resource ids.
-#[inline]
-#[must_use]
-pub fn resource_id_to_storage(value: Option<&ResourceId>) -> String {
-    value.map_or_else(|| SCOPE_SENTINEL.to_owned(), |id| id.as_str().to_owned())
-}
-
-/// Read side of D-06: the sentinel `''` becomes semantic `None`.
-#[inline]
-#[must_use]
-pub fn from_storage(value: &str) -> Option<String> {
-    if value == SCOPE_SENTINEL {
-        None
-    } else {
-        Some(value.to_owned())
-    }
-}
-
-/// Read side of D-06 for resource ids.
-#[inline]
-#[must_use]
-pub fn resource_id_from_storage(value: &str) -> Option<ResourceId> {
-    if value == SCOPE_SENTINEL {
-        None
-    } else {
-        Some(ResourceId::new(value))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

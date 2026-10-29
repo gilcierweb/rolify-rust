@@ -518,8 +518,10 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         holder: &ResourceId,
         role: &RoleRecord,
     ) -> Result<bool, Self::Error> {
-        let resource_type = crate::entity::role::to_storage(role.resource_type.as_deref());
-        let resource_id = crate::entity::role::resource_id_to_storage(role.resource_id.as_ref());
+        use rolify_core::sentinel::{to_storage, resource_id_to_storage};
+
+        let resource_type = to_storage(role.resource_type.as_deref());
+        let resource_id = resource_id_to_storage(role.resource_id.as_ref());
         let backend = backend_of(conn);
         let role_table = quote_identifier(backend, &self.role_table);
         // Look up the role id by triple (honors configured table name).

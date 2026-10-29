@@ -1,5 +1,6 @@
 //! Sentinel translation: `None` ↔ `''` at the adapter boundary (D-02).
 //!
+//! Re-exported from [`rolify_core::sentinel`] for convenience.
 //! The core SPI uses `Option<String>` / `Option<ResourceId>` for scope
 //! columns (semantic `None` = global/class). The physical storage uses
 //! the sentinel empty string `''` for both columns so the `UNIQUE` triple
@@ -12,49 +13,7 @@
 //! The sentinel never crosses the SPI boundary: `RoleRecord` keeps
 //! `Option` semantics throughout the kernel and consumer API.
 
-use rolify_core::role::ResourceId;
-use rolify_core::role::SCOPE_SENTINEL;
-
-/// Convert an optional scope column value to its physical storage form.
-///
-/// `None` (global/class scope) becomes the sentinel `''`.
-/// `Some(value)` becomes `value` unchanged.
-#[inline]
-#[must_use]
-pub fn to_storage(value: Option<&str>) -> &str {
-    value.unwrap_or(SCOPE_SENTINEL)
-}
-
-/// Convert an optional `ResourceId` to its physical storage form.
-#[inline]
-#[must_use]
-pub fn resource_id_to_storage(value: Option<&ResourceId>) -> &str {
-    value.map_or(SCOPE_SENTINEL, ResourceId::as_str)
-}
-
-/// Convert a physical storage value back to the semantic `Option`.
-///
-/// The sentinel `''` becomes `None`. Any other value becomes `Some(value)`.
-#[inline]
-#[must_use]
-pub fn from_storage(value: &str) -> Option<String> {
-    if value == SCOPE_SENTINEL {
-        None
-    } else {
-        Some(value.to_owned())
-    }
-}
-
-/// Convert a physical storage value back to `Option<ResourceId>`.
-#[inline]
-#[must_use]
-pub fn resource_id_from_storage(value: &str) -> Option<ResourceId> {
-    if value == SCOPE_SENTINEL {
-        None
-    } else {
-        Some(ResourceId::new(value))
-    }
-}
+pub use rolify_core::sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
 
 #[cfg(test)]
 mod tests {
@@ -97,7 +56,7 @@ mod tests {
         // ResourceId roundtrip
         let id = ResourceId::from("123");
         assert_eq!(
-            resource_id_from_storage(resource_id_to_storage(Some(&id))),
+            resource_id_from_storage(&resource_id_to_storage(Some(&id))),
             Some(id)
         );
     }
