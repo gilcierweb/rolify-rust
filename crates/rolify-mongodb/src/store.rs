@@ -480,24 +480,23 @@ impl RoleStore for MongoStore {
             // the diesel/sqlx adapters' `find_or_create_by` inside `add`
             // (role_adapter.rb find_or_create_by + add). Keeps cross-backend
             // semantics identical for hand-built records.
-            let document = match read_role_doc(&roles, role).await? {
-                Some(existing) => existing,
-                None => {
-                    let new_doc = RoleDoc::from_record(role).to_document();
-                    match insert_doc(&roles, new_doc).await {
-                        Ok(_) => read_role_doc(&roles, role).await?.ok_or_else(|| {
-                            invalid_config("add: role document vanished after insert")
-                        })?,
-                        Err(error) => {
-                            if let Error::Mongo(mongo_error) = &error
-                                && is_duplicate_key(mongo_error)
-                            {
-                                read_role_doc(&roles, role).await?.ok_or_else(|| {
-                                    invalid_config("add: role document vanished after race")
-                                })?
-                            } else {
-                                return Err(error);
-                            }
+            let document = if let Some(existing) = read_role_doc(&roles, role).await? {
+                existing
+            } else {
+                let new_doc = RoleDoc::from_record(role).to_document();
+                match insert_doc(&roles, new_doc).await {
+                    Ok(_) => read_role_doc(&roles, role).await?.ok_or_else(|| {
+                        invalid_config("add: role document vanished after insert")
+                    })?,
+                    Err(error) => {
+                        if let Error::Mongo(mongo_error) = &error
+                            && is_duplicate_key(mongo_error)
+                        {
+                            read_role_doc(&roles, role).await?.ok_or_else(|| {
+                                invalid_config("add: role document vanished after race")
+                            })?
+                        } else {
+                            return Err(error);
                         }
                     }
                 }

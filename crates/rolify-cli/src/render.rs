@@ -78,7 +78,7 @@ pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>,
         &plan.holder_name,
     ] {
         rolify_core::config::RolifyConfigBuilder::validate_identifier(value)
-            .map_err(|error| CliError::Core(error))?;
+            .map_err(CliError::Core)?;
     }
     let mut result = BTreeMap::new();
 
