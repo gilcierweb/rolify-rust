@@ -72,23 +72,44 @@ pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::E
 
     // has_cached_role (non-strict)
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global);
-    assert!(role_set.has_cached_role(&query), "admin global answers global");
+    assert!(
+        role_set.has_cached_role(&query),
+        "admin global answers global"
+    );
     let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum"));
-    assert!(role_set.has_cached_role(&query), "manager class answers class");
+    assert!(
+        role_set.has_cached_role(&query),
+        "manager class answers class"
+    );
     let query =
         RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Instance("Forum", forum_id));
-    assert!(role_set.has_cached_role(&query), "moderator instance answers instance");
+    assert!(
+        role_set.has_cached_role(&query),
+        "moderator instance answers instance"
+    );
     // Global override visible through cache
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
-    assert!(role_set.has_cached_role(&query), "global admin covers class");
+    assert!(
+        role_set.has_cached_role(&query),
+        "global admin covers class"
+    );
     let query =
         RoleQuery::with_role_and_filter(&admin, ResourceFilter::Instance("Forum", forum_id));
-    assert!(role_set.has_cached_role(&query), "global admin covers instance");
+    assert!(
+        role_set.has_cached_role(&query),
+        "global admin covers instance"
+    );
     // Reverse never holds
     let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Global);
-    assert!(!role_set.has_cached_role(&query), "manager does not answer global");
+    assert!(
+        !role_set.has_cached_role(&query),
+        "manager does not answer global"
+    );
     let query = RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Class("Forum"));
-    assert!(!role_set.has_cached_role(&query), "moderator does not answer class");
+    assert!(
+        !role_set.has_cached_role(&query),
+        "moderator does not answer class"
+    );
     // Any includes global (D-2)
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Any);
     assert!(role_set.has_cached_role(&query), "admin answers any");
@@ -98,16 +119,28 @@ pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::E
 
     // has_strict_cached_role
     let query = RoleQuery::with_role_and_filter(&manager, ResourceFilter::Class("Forum"));
-    assert!(role_set.has_strict_cached_role(&query), "strict manager class");
+    assert!(
+        role_set.has_strict_cached_role(&query),
+        "strict manager class"
+    );
     let query =
         RoleQuery::with_role_and_filter(&moderator, ResourceFilter::Instance("Forum", forum_id));
-    assert!(role_set.has_strict_cached_role(&query), "strict moderator instance");
+    assert!(
+        role_set.has_strict_cached_role(&query),
+        "strict moderator instance"
+    );
     // No overrides under strict
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Class("Forum"));
-    assert!(!role_set.has_strict_cached_role(&query), "strict no global override (class)");
+    assert!(
+        !role_set.has_strict_cached_role(&query),
+        "strict no global override (class)"
+    );
     let query =
         RoleQuery::with_role_and_filter(&manager, ResourceFilter::Instance("Forum", forum_id));
-    assert!(!role_set.has_strict_cached_role(&query), "strict no class override (instance)");
+    assert!(
+        !role_set.has_strict_cached_role(&query),
+        "strict no class override (instance)"
+    );
 
     // has_all_cached
     let queries = [
@@ -137,11 +170,17 @@ pub async fn cached_predicates_zero_queries<B: TestBackend>() -> Result<(), B::E
 
     // only_has_cached
     let query = RoleQuery::with_role_and_filter(&admin, ResourceFilter::Global);
-    assert!(!role_set.only_has_cached(&query), "only_has false on full set");
+    assert!(
+        !role_set.only_has_cached(&query),
+        "only_has false on full set"
+    );
     let solo_role = RoleRecord::global("admin");
     let solo_roles = vec![solo_role];
     let solo_set = RoleSet::new(&solo_roles);
-    assert!(solo_set.only_has_cached(&query), "only_has true on solo set");
+    assert!(
+        solo_set.only_has_cached(&query),
+        "only_has true on solo set"
+    );
 
     // Assert zero queries if counting is supported
     if let Some(count) = backend.query_count() {
