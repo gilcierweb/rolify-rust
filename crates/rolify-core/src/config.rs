@@ -387,16 +387,8 @@ impl RolifyConfigBuilder {
     pub fn build(self) -> Result<RolifyConfig, RolifyError> {
         let role_table = self.role_table.unwrap_or_else(|| "roles".to_owned());
         let join_table = self.join_table.unwrap_or_else(|| "users_roles".to_owned());
-        if role_table.is_empty() {
-            return Err(RolifyError::InvalidConfig {
-                reason: "role_table must not be empty".into(),
-            });
-        }
-        if join_table.is_empty() {
-            return Err(RolifyError::InvalidConfig {
-                reason: "join_table must not be empty".into(),
-            });
-        }
+        // validate_identifier also rejects empty names ("identifier must
+        // not be empty"), so no separate emptiness branch is needed (DRY).
         Self::validate_identifier(&role_table)?;
         Self::validate_identifier(&join_table)?;
         Ok(RolifyConfig {

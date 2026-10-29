@@ -39,7 +39,7 @@ fn empty_role_table_is_invalid_config() {
     let outcome = RolifyConfig::builder().role_table("").build();
     assert!(matches!(
         outcome,
-        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("role_table")
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("empty")
     ));
 }
 
@@ -48,7 +48,7 @@ fn empty_join_table_is_invalid_config() {
     let outcome = RolifyConfig::builder().join_table("").build();
     assert!(matches!(
         outcome,
-        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("join_table")
+        Err(RolifyError::InvalidConfig { ref reason }) if reason.contains("empty")
     ));
 }
 
