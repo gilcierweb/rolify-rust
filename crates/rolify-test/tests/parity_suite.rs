@@ -12,7 +12,7 @@
 //!
 //! Every module below is a real expansion - no stub arm remains - and
 //! the frozen macro binds all twelve for BOTH bindings above, so the
-//! full suite is 121 wrappers per binding. Self-gated cases (the gem
+//! full suite is 125 wrappers per binding. Self-gated cases (the gem
 //! runs some files only for `User`, others only for `StrictUser`) still
 //! EXECUTE and PASS under both bindings: they early-return `Ok(())` in
 //! the binding their rows do not own. Config-driven cases (the
@@ -28,15 +28,15 @@
 //! | `callbacks` | 02-03 | 7 | runs in full (fixed hook-config classes) |
 //! | `scopes` | 02-04 | 4 | runs in full (zero-I/O snapshot narrows) |
 //! | `roles` | 02-04 | 3 | runs in full (strict-safe rows only) |
-//! | `resource_reads` | 02-05 | 9 | runs in full |
+//! | `resource_reads` | 02-05 | 10 | runs in full |
 //! | `has_all_roles` | 02-06 | 7 | self-gated split |
-//! | `has_any_role` | 02-06 | 4 | runs in full (no strict redirect, role.rb:69-75) |
+//! | `has_any_role` | 02-06 | 5 | runs in full (no strict redirect, role.rb:69-75) |
 //! | `only_has_role` | 02-06 | 10 | self-gated split |
 //! | `finders` | 02-07 | 9 | self-gated split (strict-awareness rows = strict binding) |
 //! | `resource_queries` | 02-08 | 10 | runs in full |
 //!
-//! Total: 121 wrappers per binding (15 + 28 + 15 + 7 + 4 + 3 + 9 + 7 +
-//! 4 + 10 + 9 + 10). The `suite_is_fully_expanded` test proves the
+//! Total: 125 wrappers per binding (15 + 28 + 15 + 7 + 4 + 3 + 10 + 7 +
+//! 5 + 10 + 9 + 10 + 2). The `suite_is_fully_expanded` test proves the
 //! structure (no stub arm, per-plan case-fn minimums met) by parsing
 //! the module files directly; the phase-gate cargo runs prove the
 //! behavior.
@@ -90,9 +90,9 @@ const MODULE_CASE_MINIMUMS: &[(&str, usize)] = &[
 ];
 
 /// The wrapper total the thirteen minimums sum to (15 + 28 + 15 + 7 + 4 +
-/// 3 + 9 + 7 + 4 + 10 + 9 + 10 + 2): the structural half of the 02-09 gate
+/// 3 + 10 + 7 + 5 + 10 + 9 + 10 + 2): the structural half of the 02-09 gate
 /// plus the 03-04 `query_guards` extension.
-const WRAPPER_TOTAL_MINIMUM: usize = 123;
+const WRAPPER_TOTAL_MINIMUM: usize = 125;
 
 /// Structural closure proof for the 02-09/03-04 phase gate: every suite
 /// module is a real expansion.

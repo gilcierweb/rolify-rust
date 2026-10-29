@@ -20,7 +20,7 @@
 //!
 //! ## Closure map (02-09)
 //!
-//! All twelve modules below are filled by plans 02-01..02-08 - no stub
+//! All thirteen modules below are filled by plans 02-01..02-08 plus 03-04 - no stub
 //! expansion point remains, and the phase gate proves the full suite
 //! green against `InMemoryStore` in both modes:
 //!

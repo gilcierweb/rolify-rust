@@ -1,10 +1,10 @@
 //! In-memory SPI grid tests - every assertion passes by kernel delegation
 //! (TEST-03). Runs in BOTH modes via two cargo invocations:
 //! `cargo test -p rolify-test` and
-//! `cargo test --workspace --features rolify-core/is_sync` (the workspace
-//! command forwards `is_sync` into this crate; a bare
-//! `-p rolify-test --features rolify-core/is_sync` would leave this crate's
-//! maybe-async in async shape against a sync core - run the workspace form).
+//! `cargo test -p rolify-test --features is_sync` (this crate forwards
+//! `is_sync` to `rolify-core/is_sync` and `maybe-async/is_sync`, so the
+//! bare crate form keeps both in sync). The workspace form
+//! `cargo test --workspace --features rolify-core/is_sync` also works.
 
 use pretty_assertions::assert_eq;
 use rolify_core::catalog::RoleCatalogQuery;
