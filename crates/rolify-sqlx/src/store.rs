@@ -599,11 +599,18 @@ where
             let records = Self::decode_role_rows(&rows)?;
             // Set semantics: one row can satisfy several OR-joined
             // ladders; the result carries it once. Use HashSet of tuples for O(n) dedup.
-            let mut seen: std::collections::HashSet<(RoleName, Option<String>, Option<ResourceId>)> =
-                std::collections::HashSet::with_capacity(records.len());
+            let mut seen: std::collections::HashSet<(
+                RoleName,
+                Option<String>,
+                Option<ResourceId>,
+            )> = std::collections::HashSet::with_capacity(records.len());
             let mut result: Vec<RoleRecord> = Vec::with_capacity(records.len());
             for record in records {
-                let key = (record.name.clone(), record.resource_type.clone(), record.resource_id.clone());
+                let key = (
+                    record.name.clone(),
+                    record.resource_type.clone(),
+                    record.resource_id.clone(),
+                );
                 if seen.insert(key) {
                     result.push(record);
                 }
@@ -651,7 +658,7 @@ where
         let holder_bind = holder_bind_value(self.holder_id_kind, holder, DB::NAME);
         let name_text = role.name.as_str().to_owned();
         let resource_type = to_storage(role.resource_type.as_deref()).to_owned();
-        let resource_id = resource_id_to_storage(role.resource_id.as_ref()).to_owned();
+        let resource_id = resource_id_to_storage(role.resource_id.as_ref()).clone();
         let counter = self.query_counter.clone();
         async move {
             let holder_bind = holder_bind?;
@@ -733,8 +740,7 @@ where
             if remove_role_if_empty {
                 for record in &affected_records {
                     let resource_type = to_storage(record.resource_type.as_deref()).to_owned();
-                    let resource_id =
-                        resource_id_to_storage(record.resource_id.as_ref()).to_owned();
+                    let resource_id = resource_id_to_storage(record.resource_id.as_ref()).clone();
                     // Resolve the row id; a concurrent remove may have
                     // swept the row already (nothing left to clean).
                     let role_id = match Self::get_role_id_by_triple(
@@ -767,7 +773,9 @@ where
                         BindValue::Text(resource_type.clone()),
                         BindValue::Text(resource_id.clone()),
                     ];
-                    let check_rows = Self::fetch_rows(&mut *transaction, check_sql, &check_binds, &counter).await?;
+                    let check_rows =
+                        Self::fetch_rows(&mut *transaction, check_sql, &check_binds, &counter)
+                            .await?;
                     if check_rows.is_empty() {
                         removed_roles.push(record.clone());
                     }

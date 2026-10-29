@@ -19,8 +19,10 @@
 //! writes them, so the model intentionally omits them (database defaults
 //! fill them on insert).
 
-use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
-use rolify_core::sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
+use rolify_core::role::{RoleName, RoleRecord};
+use rolify_core::sentinel::{
+    from_storage, resource_id_from_storage, resource_id_to_storage, to_storage,
+};
 use sea_orm::entity::prelude::*;
 
 /// Role row: one role name at one scope, with the `user_ids` link rows
@@ -75,6 +77,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rolify_core::role::ResourceId;
 
     #[test]
     fn to_record_maps_global_sentinel_to_none() {

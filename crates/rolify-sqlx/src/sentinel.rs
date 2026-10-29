@@ -13,7 +13,9 @@
 //! The sentinel never crosses the SPI boundary: `RoleRecord` keeps
 //! `Option` semantics throughout the kernel and consumer API.
 
-pub use rolify_core::sentinel::{from_storage, resource_id_from_storage, resource_id_to_storage, to_storage};
+pub use rolify_core::sentinel::{
+    from_storage, resource_id_from_storage, resource_id_to_storage, to_storage,
+};
 
 #[cfg(test)]
 mod tests {

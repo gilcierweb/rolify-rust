@@ -409,6 +409,7 @@ pub(crate) fn select_affected_roles<DB: Database>(
 ///
 /// Bind order: `1=role id (i64)`.
 #[must_use]
+#[expect(dead_code, reason = "kept for potential future use in orphan sweep")]
 pub(crate) fn select_link_exists_for_role<DB: Database>(join_table: &str) -> String {
     format!(
         "SELECT 1 FROM {join_table} WHERE role_id = {role_ph} LIMIT 1",

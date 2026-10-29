@@ -11,8 +11,8 @@
 //! the `&str` column indexes below always resolve; the store never emits
 //! `SELECT *` (joined name clashes, the diesel Pitfall 9).
 
-use rolify_core::role::{RoleName, RoleRecord};
 use crate::sentinel::{from_storage, resource_id_from_storage};
+use rolify_core::role::{RoleName, RoleRecord};
 use rolify_core::store::ResourceKey;
 use sqlx::Row;
 use sqlx::database::Database;

@@ -246,7 +246,10 @@ async fn roles_matching_holder_filter_defaults_to_users_table() {
         .await
         .expect("holder filter should default to users table");
     // The test user (id=1) has no roles in the Forum type, so results should be empty
-    assert!(results.is_empty(), "expected empty results, got {results:?}");
+    assert!(
+        results.is_empty(),
+        "expected empty results, got {results:?}"
+    );
 }
 
 /// CR-05 pin: the gem's `in` carries no `resource_type` condition

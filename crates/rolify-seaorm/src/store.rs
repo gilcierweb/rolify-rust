@@ -375,7 +375,11 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             std::collections::HashSet::with_capacity(records.len());
         let mut result: Vec<RoleRecord> = Vec::with_capacity(records.len());
         for record in records {
-            let key = (record.name.clone(), record.resource_type.clone(), record.resource_id.clone());
+            let key = (
+                record.name.clone(),
+                record.resource_type.clone(),
+                record.resource_id.clone(),
+            );
             if seen.insert(key) {
                 result.push(record);
             }
@@ -518,7 +522,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         holder: &ResourceId,
         role: &RoleRecord,
     ) -> Result<bool, Self::Error> {
-        use rolify_core::sentinel::{to_storage, resource_id_to_storage};
+        use rolify_core::sentinel::{resource_id_to_storage, to_storage};
 
         let resource_type = to_storage(role.resource_type.as_deref());
         let resource_id = resource_id_to_storage(role.resource_id.as_ref());
@@ -667,9 +671,9 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             delete_links_sql,
             link_values,
         ))
-            .await
-            .map_err(Error::Db)?;
-        let removed_links = affected_ids.len();
+        .await
+        .map_err(Error::Db)?;
+        let _removed_links = affected_ids.len();
 
         // Orphan sweep: drop role rows whose last link just vanished
         // (remove_role_if_empty, role_adapter.rb:66-68).
@@ -687,8 +691,8 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
                     sweep_sql.clone(),
                     vec![Value::from(*id), Value::from(*id)],
                 ))
-                    .await
-                    .map_err(Error::Db)?;
+                .await
+                .map_err(Error::Db)?;
                 // Check if the role was actually deleted (no links existed).
                 let check_sql = format!(
                     "SELECT 1 FROM {role_table} WHERE id = {}",
@@ -762,10 +766,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
     ) -> Result<Vec<RoleRecord>, Self::Error> {
         let backend = backend_of(conn);
         let sql = format!(
-            "{} \
-             FROM {} AS role_row \
-             INNER JOIN {} AS link ON link.role_id = role_row.id \
-             WHERE link.user_id = {}",
+            "{} FROM {} AS role_row INNER JOIN {} AS link ON link.role_id = role_row.id WHERE link.user_id = {}",
             ROLE_PROJECTION,
             quote_identifier(backend, &self.role_table),
             quote_identifier(backend, &self.join_table),
@@ -897,6 +898,7 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
     /// Gem `find_roles` catalog branch (`resource_adapter.rb:6-11`):
     /// resource rows never global (structural `resource_type != ''`),
     /// `types`/`name`/`scope`/`holder` filters per the SPI contract.
+    #[allow(clippy::uninlined_format_args)]
     async fn roles_matching(
         &self,
         conn: &mut Self::Conn,
@@ -935,10 +937,8 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             values.push(Value::from((*type_name).to_owned()));
         }
         let mut sql = format!(
-            "{} \
-             FROM {role_table} AS role_row {holder_join} \
-             WHERE role_row.resource_type != '' AND role_row.resource_type IN ({type_placeholders})",
-            ROLE_PROJECTION,
+            "{ROLE_PROJECTION} FROM {role_table} AS role_row {holder_join} WHERE role_row.resource_type != '' AND role_row.resource_type IN ({type_placeholders})",
+            ROLE_PROJECTION = ROLE_PROJECTION,
         );
         if let Some(name) = query.name {
             let _ = write!(sql, " AND role_row.name = {}", placeholder(backend, index));
@@ -1039,6 +1039,7 @@ impl<C: ConnectionTrait + Send + 'static> ResourceStore for SeaormStore<C> {
     /// given STI type family holding `name` at class scope (expanded
     /// through the registry, one joined SELECT per registered type) or at
     /// their own instance scope (one SELECT over stored ids).
+    #[allow(clippy::uninlined_format_args)]
     async fn resources_find(
         &self,
         conn: &mut Self::Conn,
@@ -1059,10 +1060,8 @@ impl<C: ConnectionTrait + Send + 'static> ResourceStore for SeaormStore<C> {
             .join(", ");
         let name_ph = placeholder(backend, types.len() + 1);
         let instance_sql = format!(
-            "{} \
-             FROM {role_table} AS role_row \
-             WHERE role_row.resource_type IN ({type_placeholders}) AND role_row.resource_id != '' AND role_row.name = {name_ph}",
-            ROLE_PROJECTION,
+            "{ROLE_PROJECTION} FROM {role_table} AS role_row WHERE role_row.resource_type IN ({type_placeholders}) AND role_row.resource_id != '' AND role_row.name = {name_ph}",
+            ROLE_PROJECTION = ROLE_PROJECTION,
         );
         let mut values: Vec<Value> = types
             .iter()
