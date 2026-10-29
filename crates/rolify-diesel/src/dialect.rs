@@ -51,7 +51,7 @@ pub fn quote_identifier(name: &str) -> String {
     format!("\"{name}\"")
 }
 
-/// Quote an identifier for MySQL (backticks).
+/// Quote an identifier for `MySQL` (backticks).
 #[cfg(feature = "mysql")]
 #[must_use]
 pub fn quote_identifier(name: &str) -> String {
@@ -70,8 +70,8 @@ pub fn cast_to_text(column: &str) -> String {
     format!("CAST({column} AS TEXT)")
 }
 
-/// Wrap an integer-key column so it decodes as text on MySQL
-/// (`CAST AS CHAR`: MySQL rejects `TEXT` as a cast target).
+/// Wrap an integer-key column so it decodes as text on `MySQL`
+/// (`CAST AS CHAR`: `MySQL` rejects `TEXT` as a cast target).
 #[cfg(feature = "mysql")]
 #[must_use]
 pub fn cast_to_text(column: &str) -> String {

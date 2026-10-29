@@ -25,7 +25,7 @@ pub enum DieselHolderBind {
     /// Postgres native UUID: binds via `diesel/uuid`'s `Uuid` codec.
     #[cfg(feature = "postgres")]
     Uuid(uuid::Uuid),
-    /// MySQL native binary UUID: binds as `Vec<u8>` over `BINARY(16)`.
+    /// `MySQL` native binary UUID: binds as `Vec<u8>` over `BINARY(16)`.
     #[cfg(feature = "mysql")]
     UuidBytes(Vec<u8>),
     /// SQLite/any: canonical hyphenated UUID string bound as `Text`.
@@ -70,7 +70,7 @@ fn uuid_bind(uuid: uuid::Uuid) -> DieselHolderBind {
     }
     #[cfg(all(feature = "mysql", not(feature = "postgres")))]
     {
-        return DieselHolderBind::UuidBytes(uuid.as_bytes().to_vec());
+        DieselHolderBind::UuidBytes(uuid.as_bytes().to_vec())
     }
 }
 
