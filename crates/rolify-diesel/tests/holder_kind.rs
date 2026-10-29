@@ -341,16 +341,22 @@ mod mysql {
         conn.batch_execute("DROP TABLE IF EXISTS roles")
             .expect("drop roles");
 
-        // Retry DDL execution to handle transient MySQL state issues
-        // in shared testcontainer (mysql:8.4 can have transient FK
-        // check failures when reusing the same container across tests).
+        // Retry DDL execution ONLY for transient FK check failures
+        // (mysql:8.4 can have transient FK check failures when reusing
+        // the same container across tests). Do NOT retry "table already
+        // exists" — that indicates a DROP failure, which is a test bug.
         let ddl = schema_ddl(kind);
         for attempt in 1..=3 {
             match conn.batch_execute(ddl) {
                 Ok(_) => break,
                 Err(e) if attempt < 3 => {
-                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
-                    continue;
+                    let err_msg = e.to_string();
+                    // Only retry transient FK check failures, not schema conflicts
+                    if err_msg.contains("foreign key") || err_msg.contains("FK") || err_msg.contains("constraint") {
+                        std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+                        continue;
+                    }
+                    panic!("apply kind-specific DDL failed (non-transient): {e}");
                 }
                 Err(e) => panic!("apply kind-specific DDL after retries: {e}"),
             }
