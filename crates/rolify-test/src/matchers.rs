@@ -94,6 +94,7 @@ use rolify_core::user::RolifyUser;
 /// }
 /// ```
 #[maybe_async::maybe_async(AFIT)]
+#[maybe_async::maybe_async]
 pub trait RoleAssertions: RolifyUser {
     /// Positive assertion (D-03 `assert_has_role` naming leg): passes when
     /// [`RolifyUser::has_role`] holds, else panics with the full context

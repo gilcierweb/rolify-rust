@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 maybe-async.workspace = true
 rolify-core = { path = "../rolify-core", version = "0.1.0" }
+async-trait = { workspace = true }
 rstest = { workspace = true, optional = true }
 faker-rust = { version = "0.1", optional = true }
 

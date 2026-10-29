@@ -3503,6 +3503,7 @@ dependencies = [
 name = "rolify-test"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "faker-rust",
  "maybe-async",
  "pretty_assertions",
