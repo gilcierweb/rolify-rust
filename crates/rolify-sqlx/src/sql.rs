@@ -507,18 +507,9 @@ pub(crate) fn select_instance_resource_keys<DB: Database>(
 ///
 /// AUDIT (T-04-07): `resource_type` interpolates as a LITERAL both in
 /// the projection and in the join condition. That is safe because the
-/// interpolated value is a resource-table REGISTRY entry that passed
-/// `RolifyConfigBuilder::validate_identifier` at
-/// `SqlxStore::register_resource_table` time (allow-list grammar
-/// `^[A-Za-z_][A-Za-z0-9_]*$`), never consumer input - the diesel
-/// reference carries the same literal interpolation under the same
-/// justification (`rolify-diesel/src/sql.rs:465-501`,
-/// `select_resources_find_class_expansion`). `resource_table` and
-/// `pk_column` arrive from the same validated registry (the table is
-/// already per-engine quoted). The role name travels as a bind, and
-/// resource ids leave the engine through the integer-to-text cast.
-///
 /// Bind order: 1=name.
+/// The `resource_type` is interpolated as a literal (validated via registry).
+/// `resource_table` and `pk_column` arrive from the validated registry.
 #[must_use]
 pub(crate) fn select_resources_find_class_expansion<DB: Database>(
     role_table: &str,

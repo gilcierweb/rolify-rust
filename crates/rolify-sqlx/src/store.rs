@@ -1091,6 +1091,8 @@ where
                 all_keys.extend(Self::decode_key_rows(&class_rows)?);
             }
 
+            let mut seen: std::collections::HashSet<ResourceKey> = std::collections::HashSet::new();
+            all_keys.retain(|k| seen.insert(k.clone()));
             Ok(all_keys)
         }
     }

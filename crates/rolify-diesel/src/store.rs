@@ -2610,10 +2610,9 @@ mod pg_impl {
                         &self.role_table,
                         resource_table,
                         pk_column,
+                        type_name,
                     );
-                    let q = diesel::sql_query(expansion_sql)
-                        .bind::<Text, _>(type_name.as_str())
-                        .bind::<Text, _>(name.as_str());
+                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
                     let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
                     for row in class_rows {
                         all_keys.push(row.to_key());
@@ -3645,10 +3644,9 @@ mod mysql_impl {
                         &self.role_table,
                         resource_table,
                         pk_column,
+                        type_name,
                     );
-                    let q = diesel::sql_query(expansion_sql)
-                        .bind::<Text, _>(type_name.as_str())
-                        .bind::<Text, _>(name.as_str());
+                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
                     let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
                     for row in class_rows {
                         all_keys.push(row.to_key());
@@ -4671,10 +4669,9 @@ mod sqlite_impl {
                         &self.role_table,
                         resource_table,
                         pk_column,
+                        type_name,
                     );
-                    let q = diesel::sql_query(expansion_sql)
-                        .bind::<Text, _>(type_name.as_str())
-                        .bind::<Text, _>(name.as_str());
+                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
                     let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
                     for row in class_rows {
                         all_keys.push(row.to_key());
@@ -5783,6 +5780,7 @@ mod pg_async_impl {
                                 &role_table,
                                 resource_table,
                                 pk_column,
+                                type_name,
                             ),
                             type_name.clone(),
                         )
@@ -5827,9 +5825,8 @@ mod pg_async_impl {
                 }
 
                 // 2. Class-scoped roles: expand via resource registry
-                for (expansion_sql, type_name) in expansions {
+                for (expansion_sql, _type_name) in expansions {
                     let class_rows: Vec<ResourceKeyRow> = diesel::sql_query(expansion_sql)
-                        .bind::<Text, _>(type_name.as_str())
                         .bind::<Text, _>(&name_owned)
                         .load(conn)
                         .await
@@ -6940,6 +6937,7 @@ mod mysql_async_impl {
                                 &role_table,
                                 resource_table,
                                 pk_column,
+                                type_name,
                             ),
                             type_name.clone(),
                         )
@@ -6984,9 +6982,8 @@ mod mysql_async_impl {
                 }
 
                 // 2. Class-scoped roles: expand via resource registry
-                for (expansion_sql, type_name) in expansions {
+                for (expansion_sql, _type_name) in expansions {
                     let class_rows: Vec<ResourceKeyRow> = diesel::sql_query(expansion_sql)
-                        .bind::<Text, _>(type_name.as_str())
                         .bind::<Text, _>(&name_owned)
                         .load(conn)
                         .await
@@ -8100,6 +8097,7 @@ mod sqlite_async_impl {
                                 &role_table,
                                 resource_table,
                                 pk_column,
+                                type_name,
                             ),
                             type_name.clone(),
                         )
@@ -8144,9 +8142,8 @@ mod sqlite_async_impl {
                 }
 
                 // 2. Class-scoped roles: expand via resource registry
-                for (expansion_sql, type_name) in expansions {
+                for (expansion_sql, _type_name) in expansions {
                     let class_rows: Vec<ResourceKeyRow> = diesel::sql_query(expansion_sql)
-                        .bind::<Text, _>(type_name.as_str())
                         .bind::<Text, _>(&name_owned)
                         .load(conn)
                         .await
