@@ -145,6 +145,7 @@ mod sqlite {
     };
 
     /// Canonical `SQLite` DDL for the kind's join column type (D-08-04).
+    #[allow(clippy::match_same_arms)] // uuid and string migrations are byte-identical on SQLite (both TEXT)
     fn schema_ddl(kind: HolderIdKind) -> &'static str {
         match kind {
             HolderIdKind::Integer => {
