@@ -1,4 +1,4 @@
-//! Tracer (05.1-02): the end-to-end happy path on a real `mongo:8.0`
+//! Tracer (05.1-02): the end-to-end happy path on a real `mongo:8.2`
 //! container in async mode - `ensure_indexes`, then grant/check/revoke one
 //! role at each scope through PUBLIC `RolifyUser` methods (`add_role` /
 //! `has_role` / `remove_role`), mirroring the gem's Mongoid flow

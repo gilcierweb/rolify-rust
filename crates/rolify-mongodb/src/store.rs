@@ -476,10 +476,31 @@ impl RoleStore for MongoStore {
         let holders = self.holders_collection();
         self.bump_query_count();
         async move {
-            let Some(document) = read_role_doc(&roles, role).await? else {
-                return Err(invalid_config(
-                    "add: role document must exist before linking (use find_or_create_by first)",
-                ));
+            // Auto-create the role document if it does not exist yet, mirroring
+            // the diesel/sqlx adapters' `find_or_create_by` inside `add`
+            // (role_adapter.rb find_or_create_by + add). Keeps cross-backend
+            // semantics identical for hand-built records.
+            let document = match read_role_doc(&roles, role).await? {
+                Some(existing) => existing,
+                None => {
+                    let new_doc = RoleDoc::from_record(role).to_document();
+                    match insert_doc(&roles, new_doc).await {
+                        Ok(_) => read_role_doc(&roles, role)
+                            .await?
+                            .ok_or_else(|| invalid_config("add: role document vanished after insert"))?,
+                        Err(error) => {
+                            if let Error::Mongo(mongo_error) = &error
+                                && is_duplicate_key(mongo_error)
+                            {
+                                read_role_doc(&roles, role)
+                                    .await?
+                                    .ok_or_else(|| invalid_config("add: role document vanished after race"))?
+                            } else {
+                                return Err(error);
+                            }
+                        }
+                    }
+                }
             };
             let holder_key = holder.as_str().to_owned();
             // Link-guard dedupe (level 2, gem `unless include?`): the
@@ -911,11 +932,11 @@ impl ResourceStore for MongoStore {
 /// The gem's scope column names, identical on documents; kept local to the
 /// store reads/writes so the schema can never drift from
 /// `document::RoleDoc`'s builders.
-const FIELDS_ID: &str = "_id";
-const FIELDS_NAME: &str = "name";
-const FIELDS_RESOURCE_TYPE: &str = "resource_type";
-const FIELDS_RESOURCE_ID: &str = "resource_id";
-const FIELDS_USER_IDS: &str = "user_ids";
+const FIELDS_ID: &str = crate::document::fields::ID;
+const FIELDS_NAME: &str = crate::document::fields::NAME;
+const FIELDS_RESOURCE_TYPE: &str = crate::document::fields::RESOURCE_TYPE;
+const FIELDS_RESOURCE_ID: &str = crate::document::fields::RESOURCE_ID;
+const FIELDS_USER_IDS: &str = crate::document::fields::USER_IDS;
 const FIELDS_ROLE_IDS: &str = "role_ids";
 const FIELDS_HOLDER_ID: &str = "holder_id";
 const FIELDS_ROLIFY_TYPE: &str = "rolify_type";

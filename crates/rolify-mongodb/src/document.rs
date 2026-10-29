@@ -24,12 +24,12 @@ pub use bson::oid::ObjectId;
 /// Wired schema field names. The BSON field-name injection boundary
 /// (T-05.1-04) is closed by construction: every filter/update is assembled
 /// from these literals plus typed values, never from raw consumer strings.
-mod fields {
-    pub(super) const ID: &str = "_id";
-    pub(super) const NAME: &str = "name";
-    pub(super) const RESOURCE_TYPE: &str = "resource_type";
-    pub(super) const RESOURCE_ID: &str = "resource_id";
-    pub(super) const USER_IDS: &str = "user_ids";
+pub(crate) mod fields {
+    pub(crate) const ID: &str = "_id";
+    pub(crate) const NAME: &str = "name";
+    pub(crate) const RESOURCE_TYPE: &str = "resource_type";
+    pub(crate) const RESOURCE_ID: &str = "resource_id";
+    pub(crate) const USER_IDS: &str = "user_ids";
 }
 
 /// Role document: one role row as stored in Mongo.
@@ -46,7 +46,7 @@ mod fields {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RoleDoc {
-    /// Driver-generated document id (`ObjectId`), distinct from `resource_id`."
+    /// Driver-generated document id (`ObjectId`), distinct from `resource_id`.
     #[cfg_attr(feature = "serde", serde(rename = "_id"))]
     pub id: ObjectId,
     /// Role name, byte-exact (CORE-01; no normalization).

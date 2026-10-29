@@ -47,7 +47,7 @@ pub fn role_index_model() -> IndexModel {
 ///
 /// Returns [`Error::Mongo`] when the server rejects the index (conflicting
 /// existing index, permission failure, connection error).
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn ensure_role_index(collection: &CollectionHandle) -> Result<(), Error> {
     collection.create_index(role_index_model()).await?;
     Ok(())
@@ -61,7 +61,7 @@ pub async fn ensure_role_index(collection: &CollectionHandle) -> Result<(), Erro
 /// # Errors
 ///
 /// Returns [`Error::Mongo`] when the server rejects the index.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn ensure_role_index(collection: &CollectionHandle) -> Result<(), Error> {
     collection.create_index(role_index_model()).run()?;
     Ok(())

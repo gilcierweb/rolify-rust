@@ -34,8 +34,8 @@ pretty_assertions = { workspace = true }
 # suite binding (Phase 2 D-11/D-12).
 [features]
 default = []
-is_sync = ["maybe-async/is_sync", "rolify-core/is_sync"]
-sync = ["is_sync", "mongodb/sync"]
+is_sync = ["maybe-async/is_sync", "rolify-core/is_sync", "mongodb/sync"]
+sync = ["is_sync"]
 serde = ["dep:serde"]
 suite = ["rolify-test/suite"]
 

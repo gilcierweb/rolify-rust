@@ -27,23 +27,23 @@ use bson::Document;
 
 /// Database handle for the active driver mode (D-16: `Database` +
 /// validated collection names is the whole handle surface of the store).
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub type DatabaseHandle = mongodb::Database;
 
 /// Sync-mode database handle (`mongodb::sync::Database` wraps the async
 /// one; cloning is an `Arc` bump in both modes).
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub type DatabaseHandle = mongodb::sync::Database;
 
 /// Document collection handle for the active driver mode. `Document`
 /// carries every collection the adapter touches (roles, holders,
 /// resources): conversion to typed structs happens at the `RoleDoc`
 /// boundary.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub type CollectionHandle = mongodb::Collection<Document>;
 
 /// Sync-mode document collection handle.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub type CollectionHandle = mongodb::sync::Collection<Document>;
 
 /// Resolve the typed document handle for a collection by validated name.
@@ -61,7 +61,7 @@ pub(crate) fn collection_for(database: &DatabaseHandle, name: &str) -> Collectio
 ///
 /// Returns the adapter `Error` when the driver call or cursor driving
 /// fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn find_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -80,7 +80,7 @@ pub async fn find_docs(
 ///
 /// Returns the adapter `Error` when the driver call or cursor driving
 /// fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn find_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -98,7 +98,7 @@ pub fn find_docs(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the driver call fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn find_one_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -111,7 +111,7 @@ pub async fn find_one_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the driver call fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn find_one_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -125,7 +125,7 @@ pub fn find_one_doc(
 ///
 /// Returns the adapter `Error` when the insert fails (including the 11000
 /// duplicate-key race arm).
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn insert_doc(
     collection: &CollectionHandle,
     document: Document,
@@ -139,7 +139,7 @@ pub async fn insert_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the insert fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn insert_doc(
     collection: &CollectionHandle,
     document: Document,
@@ -155,7 +155,8 @@ pub fn insert_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the update fails.
-#[cfg(not(feature = "sync"))]
+#[doc(hidden)]
+#[cfg(not(feature = "is_sync"))]
 pub async fn set_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -170,7 +171,8 @@ pub async fn set_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the update fails.
-#[cfg(feature = "sync")]
+#[doc(hidden)]
+#[cfg(feature = "is_sync")]
 pub fn set_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -185,7 +187,7 @@ pub fn set_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the update fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn update_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -199,7 +201,7 @@ pub async fn update_docs(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the update fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn update_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -213,7 +215,7 @@ pub fn update_docs(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the update fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn update_one_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -227,7 +229,7 @@ pub async fn update_one_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the update fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn update_one_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -241,7 +243,7 @@ pub fn update_one_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the delete fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn delete_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -254,7 +256,7 @@ pub async fn delete_docs(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the delete fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn delete_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -267,7 +269,7 @@ pub fn delete_docs(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the delete fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn delete_one_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -280,7 +282,7 @@ pub async fn delete_one_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the delete fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn delete_one_doc(
     collection: &CollectionHandle,
     filter: Document,
@@ -293,7 +295,7 @@ pub fn delete_one_doc(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the count fails.
-#[cfg(not(feature = "sync"))]
+#[cfg(not(feature = "is_sync"))]
 pub async fn count_docs(
     collection: &CollectionHandle,
     filter: Document,
@@ -306,7 +308,7 @@ pub async fn count_docs(
 /// # Errors
 ///
 /// Returns the adapter `Error` when the count fails.
-#[cfg(feature = "sync")]
+#[cfg(feature = "is_sync")]
 pub fn count_docs(
     collection: &CollectionHandle,
     filter: Document,
