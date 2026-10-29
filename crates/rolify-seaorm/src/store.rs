@@ -363,7 +363,19 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
         let stmt = Statement::from_sql_and_values(backend, sql, values);
         self.bump(1);
         let rows = conn.query_all_raw(stmt).await.map_err(Error::Db)?;
-        rows.iter().map(model_from_row).collect()
+        let records: Vec<RoleRecord> = rows.iter().map(model_from_row).collect::<Result<_, _>>()?;
+        // Set semantics: one row can satisfy several OR-joined ladders; the result carries it once.
+        // Use HashSet of (name, resource_type, resource_id) tuples for O(n) dedup.
+        let mut seen: std::collections::HashSet<(RoleName, Option<String>, Option<ResourceId>)> =
+            std::collections::HashSet::with_capacity(records.len());
+        let mut result: Vec<RoleRecord> = Vec::with_capacity(records.len());
+        for record in records {
+            let key = (record.name.clone(), record.resource_type.clone(), record.resource_id.clone());
+            if seen.insert(key) {
+                result.push(record);
+            }
+        }
+        Ok(result)
     }
 
     /// Gem `where_strict`: exact scope, no override (role_adapter.rb:11-26).
