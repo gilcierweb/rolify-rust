@@ -11,7 +11,8 @@
 //! the `&str` column indexes below always resolve; the store never emits
 //! `SELECT *` (joined name clashes, the diesel Pitfall 9).
 
-use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
+use rolify_core::role::{RoleName, RoleRecord};
+use crate::sentinel::{from_storage, resource_id_from_storage};
 use rolify_core::store::ResourceKey;
 use sqlx::Row;
 use sqlx::database::Database;
@@ -196,28 +197,6 @@ impl ResourceKeyRow {
     }
 }
 
-/// Physical `resource_type` storage value back to the semantic `Option`.
-#[inline]
-#[must_use]
-fn from_storage(value: &str) -> Option<String> {
-    if value == SCOPE_SENTINEL {
-        None
-    } else {
-        Some(value.to_owned())
-    }
-}
-
-/// Physical `resource_id` storage value back to `Option<ResourceId>`.
-#[inline]
-#[must_use]
-fn resource_id_from_storage(value: &str) -> Option<ResourceId> {
-    if value == SCOPE_SENTINEL {
-        None
-    } else {
-        Some(ResourceId::new(value))
-    }
-}
-
 /// Single-column row for `SELECT COUNT(*) AS count FROM roles` (role row count).
 #[derive(Debug, Clone)]
 pub struct CountRow {
@@ -248,6 +227,7 @@ impl CountRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rolify_core::role::ResourceId;
 
     #[test]
     fn role_row_to_record_translates_every_scope() {
