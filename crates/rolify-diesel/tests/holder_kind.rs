@@ -352,7 +352,10 @@ mod mysql {
                 Err(e) if attempt < 3 => {
                     let err_msg = e.to_string();
                     // Only retry transient FK check failures, not schema conflicts
-                    if err_msg.contains("foreign key") || err_msg.contains("FK") || err_msg.contains("constraint") {
+                    if err_msg.contains("foreign key")
+                        || err_msg.contains("FK")
+                        || err_msg.contains("constraint")
+                    {
                         std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
                         continue;
                     }
