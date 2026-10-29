@@ -29,6 +29,7 @@ use rolify_test::fixtures::{FixtureResource, FixtureResources, UserClass, fixtur
 
 /// The store type used by the suite bindings: a plain pooled
 /// `DatabaseConnection` executor.
+#[allow(dead_code)] // unused in dual-feature builds where the other arm is selected
 pub type SuiteStore = SeaormStore<DatabaseConnection>;
 
 // ---------------------------------------------------------------------------
@@ -108,21 +109,25 @@ pub mod mysql {
 }
 
 #[cfg(feature = "postgres")]
+#[allow(dead_code)] // unused in dual-feature builds where the other arm is selected
 pub async fn connect() -> DatabaseConnection {
     pg::connect().await
 }
 
 #[cfg(all(feature = "mysql", not(feature = "postgres")))]
+#[allow(dead_code)] // unused in dual-feature builds where the other arm is selected
 pub async fn connect() -> DatabaseConnection {
     mysql::connect().await
 }
 
 #[cfg(feature = "postgres")]
+#[allow(dead_code)]
 fn fixture_ddl() -> &'static [&'static str] {
     rolify_test::ddl::POSTGRES
 }
 
 #[cfg(all(feature = "mysql", not(feature = "postgres")))]
+#[allow(dead_code)]
 fn fixture_ddl() -> &'static [&'static str] {
     rolify_test::ddl::MYSQL
 }
@@ -130,6 +135,7 @@ fn fixture_ddl() -> &'static [&'static str] {
 /// Apply the Migrator plus the shared fixture DDL and canonical rows
 /// (mirroring `data.rb`, identical across engines except for the
 /// reserved-word `groups` quoting on `MySQL`).
+#[allow(dead_code)]
 pub async fn setup_schema(conn: &DatabaseConnection) {
     Migrator::up(conn, None).await.expect("Migrator up");
     for statement in fixture_ddl() {
@@ -164,6 +170,7 @@ pub async fn setup_schema(conn: &DatabaseConnection) {
 }
 
 /// Delete all link and role rows (fixture tables are never truncated).
+#[allow(dead_code)]
 async fn reset_role_rows(conn: &DatabaseConnection) {
     conn.execute_unprepared("DELETE FROM users_roles")
         .await
@@ -210,6 +217,7 @@ impl Drop for SuiteGuard {
 
 /// The suite subject: a holder identity over the backend's engine
 /// (mirrors the diesel/sqlx local subject wrappers).
+#[allow(dead_code)]
 pub struct SeaormSubject<C: UserClass> {
     login: String,
     holder: ResourceId,
@@ -244,6 +252,7 @@ impl<C: UserClass> RolifyUser for SeaormSubject<C> {
 }
 
 /// `TestBackend` over the `SeaORM` store and a pooled connection.
+#[allow(dead_code)]
 pub struct SeaormBackend<C: UserClass> {
     // Process-wide suite lock, held for the backend's whole lifetime.
     #[allow(dead_code)]
@@ -378,6 +387,7 @@ impl<C: UserClass> TestBackend for SeaormBackend<C> {
 
 /// Build the registered store (holder table plus resource registry,
 /// mirrors the diesel suite backend wiring).
+#[allow(dead_code)]
 pub fn build_store<C: sea_orm::ConnectionTrait + Send + 'static>(
     config: &RolifyConfig,
 ) -> SeaormStore<C> {
