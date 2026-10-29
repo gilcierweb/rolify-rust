@@ -336,27 +336,32 @@ mod mysql {
 
     fn fresh_conn(kind: HolderIdKind) -> MysqlConnection {
         let mut conn = mysql_conn();
-        conn.batch_execute("DROP TABLE IF EXISTS users_roles")
-            .expect("drop join");
-        conn.batch_execute("DROP TABLE IF EXISTS roles")
-            .expect("drop roles");
 
-        // Retry DDL execution ONLY for transient FK check failures
-        // (mysql:8.4 can have transient FK check failures when reusing
-        // the same container across tests). Do NOT retry "table already
-        // exists" — that indicates a DROP failure, which is a test bug.
+        // Ensure clean state: drop tables in separate statements with explicit commits
+        // to avoid transaction isolation issues in shared testcontainer
+        conn.batch_execute("DROP TABLE IF EXISTS users_roles").ok();
+        conn.batch_execute("COMMIT").ok();
+        conn.batch_execute("DROP TABLE IF EXISTS roles").ok();
+        conn.batch_execute("COMMIT").ok();
+
+        // Apply schema DDL with retry for transient FK failures
         let ddl = schema_ddl(kind);
         for attempt in 1..=3 {
             match conn.batch_execute(ddl) {
                 Ok(_) => break,
                 Err(e) if attempt < 3 => {
                     let err_msg = e.to_string();
-                    // Only retry transient FK check failures, not schema conflicts
-                    if err_msg.contains("foreign key")
+                    // Retry on: transient FK failures, OR "already exists" (race)
+                    let is_transient = err_msg.contains("foreign key")
                         || err_msg.contains("FK")
                         || err_msg.contains("constraint")
-                    {
+                        || err_msg.contains("already exists");
+                    if is_transient {
                         std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+                        // Force cleanup before retry
+                        conn.batch_execute("DROP TABLE IF EXISTS users_roles").ok();
+                        conn.batch_execute("DROP TABLE IF EXISTS roles").ok();
+                        conn.batch_execute("COMMIT").ok();
                         continue;
                     }
                     panic!("apply kind-specific DDL failed (non-transient): {e}");
