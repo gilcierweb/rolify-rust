@@ -193,7 +193,7 @@ mod postgres_race {
             .acquire()
             .await
             .expect("pool checkout for the racing task on Postgres");
-        let mut store = SqlxStore::new(&RolifyConfig::default());
+        let mut store = SqlxStore::<sqlx::Postgres>::new(&RolifyConfig::default());
         barrier.wait().await;
         let record = store
             .find_or_create_by(
@@ -443,7 +443,7 @@ mod mysql_race {
             .acquire()
             .await
             .expect("pool checkout for the racing task on MySQL");
-        let mut store = SqlxStore::new(&RolifyConfig::default());
+        let mut store = SqlxStore::<sqlx::MySql>::new(&RolifyConfig::default());
         barrier.wait().await;
         let mut retries_left = DEADLOCK_RETRIES;
         loop {

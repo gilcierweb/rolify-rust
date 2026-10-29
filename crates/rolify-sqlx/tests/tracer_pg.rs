@@ -63,7 +63,7 @@ async fn tracer_grant_check_revoke_lifecycle_on_postgres() {
     let user_id = insert_holder_pg(&mut conn, "users", "User", "tracer_user").await;
     let mut user = FixtureUser::new(
         user_id.clone(),
-        SqlxStore::new(&config),
+        SqlxStore::<sqlx::Postgres>::new(&config),
         pg_conn().await,
         config.clone(),
     );
@@ -357,7 +357,7 @@ async fn tracer_grant_check_revoke_lifecycle_on_postgres() {
     let other_id = insert_holder_pg(&mut other_conn, "users", "User", "tracer_other").await;
     let mut other_user = FixtureUser::new(
         other_id,
-        SqlxStore::new(&config),
+        SqlxStore::<sqlx::Postgres>::new(&config),
         pg_conn().await,
         config.clone(),
     );

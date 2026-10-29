@@ -93,7 +93,7 @@ async fn executor_uniformity_bare_checkout_tx_commit_rollback() {
 
     // --- LEG 1: bare connection (autocommit) ---
     let mut conn = pg_conn().await;
-    let mut store = SqlxStore::new(&config);
+    let mut store = SqlxStore::<sqlx::Postgres>::new(&config);
     let user_id = insert_holder_pg(&mut conn, "users", "User", "executor_user_bare").await;
 
     let admin = store
@@ -132,7 +132,7 @@ async fn executor_uniformity_bare_checkout_tx_commit_rollback() {
 
     // --- LEG 2: pool checkout (a reborrow of the inner connection) ---
     let mut checkout = pool.acquire().await.expect("pool checkout");
-    let mut store_pooled = SqlxStore::new(&config);
+    let mut store_pooled = SqlxStore::<sqlx::Postgres>::new(&config);
     let user_id_pooled =
         insert_holder_pg(&mut checkout, "users", "User", "executor_user_pooled").await;
 
@@ -176,7 +176,7 @@ async fn executor_uniformity_bare_checkout_tx_commit_rollback() {
     // --- LEG 3: caller-owned transaction (commit, mid-flight read) ---
     let mut seed_conn = pg_conn().await;
     let user_id_tx = insert_holder_pg(&mut seed_conn, "users", "User", "executor_user_tx").await;
-    let mut store_tx = SqlxStore::new(&config);
+    let mut store_tx = SqlxStore::<sqlx::Postgres>::new(&config);
 
     let mut tx = pool.begin().await.expect("tx: begin on the pool");
     let moderator = store_tx
@@ -247,7 +247,7 @@ async fn executor_uniformity_bare_checkout_tx_commit_rollback() {
     // --- LEG 4: caller-owned transaction (rollback absorption) ---
     let mut seed_conn = pg_conn().await;
     let user_id_rb = insert_holder_pg(&mut seed_conn, "users", "User", "executor_user_rb").await;
-    let mut store_rb = SqlxStore::new(&config);
+    let mut store_rb = SqlxStore::<sqlx::Postgres>::new(&config);
 
     let mut tx = pool.begin().await.expect("rb: begin on the pool");
     // The scoped grant block: a deliberate Err returned from this

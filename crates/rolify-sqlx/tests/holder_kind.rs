@@ -174,7 +174,7 @@ mod sqlite {
     }
 
     fn store_for(kind: HolderIdKind) -> SqlxStore<sqlx::Sqlite> {
-        SqlxStore::new(&config_for(kind))
+        SqlxStore::<sqlx::Sqlite>::new(&config_for(kind))
     }
 
     #[sqlx::test]
@@ -326,7 +326,7 @@ mod postgres {
     }
 
     fn store_for(kind: HolderIdKind) -> SqlxStore<sqlx::Postgres> {
-        SqlxStore::new(&config_for(kind))
+        SqlxStore::<sqlx::Postgres>::new(&config_for(kind))
     }
 
     async fn fresh_conn(kind: HolderIdKind) -> PgConnection {
@@ -469,7 +469,7 @@ mod mysql {
     }
 
     fn store_for(kind: HolderIdKind) -> SqlxStore<sqlx::MySql> {
-        SqlxStore::new(&config_for(kind))
+        SqlxStore::<sqlx::MySql>::new(&config_for(kind))
     }
 
     async fn fresh_conn(kind: HolderIdKind) -> MySqlConnection {

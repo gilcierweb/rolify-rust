@@ -84,7 +84,7 @@ async fn tracer_grant_check_revoke_lifecycle_on_sqlite() {
     let user_holder_conn = sqlite_file_conn(&db_path).await;
     let mut user = FixtureUser::new(
         user_id.clone(),
-        SqlxStore::new(&config),
+        SqlxStore::<sqlx::Sqlite>::new(&config),
         user_holder_conn,
         config.clone(),
     );
@@ -381,7 +381,7 @@ async fn tracer_grant_check_revoke_lifecycle_on_sqlite() {
     let other_holder_conn = sqlite_file_conn(&db_path).await;
     let mut other_user = FixtureUser::new(
         other_id,
-        SqlxStore::new(&config),
+        SqlxStore::<sqlx::Sqlite>::new(&config),
         other_holder_conn,
         config.clone(),
     );
