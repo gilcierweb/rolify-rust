@@ -340,8 +340,21 @@ mod mysql {
             .expect("drop join");
         conn.batch_execute("DROP TABLE IF EXISTS roles")
             .expect("drop roles");
-        conn.batch_execute(schema_ddl(kind))
-            .expect("apply kind-specific DDL");
+
+        // Retry DDL execution to handle transient MySQL state issues
+        // in shared testcontainer (mysql:8.4 can have transient FK
+        // check failures when reusing the same container across tests).
+        let ddl = schema_ddl(kind);
+        for attempt in 1..=3 {
+            match conn.batch_execute(ddl) {
+                Ok(_) => break,
+                Err(e) if attempt < 3 => {
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+                    continue;
+                }
+                Err(e) => panic!("apply kind-specific DDL after retries: {e}"),
+            }
+        }
         conn
     }
 

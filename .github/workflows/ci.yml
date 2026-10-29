@@ -87,7 +87,7 @@ jobs:
       - name: cargo test (workspace async mode, exclude rolify-diesel and rolify-cli)
         run: cargo test --workspace --exclude rolify-diesel --exclude rolify-cli
       - name: cargo test (workspace sync mode, exclude rolify-sqlx and rolify-seaorm)
-        run: cargo test --workspace --features rolify-core/is_sync,rolify-mongodb/sync --exclude rolify-sqlx --exclude rolify-seaorm
+        run: cargo test --workspace --features rolify-core/is_sync,rolify-mongodb/sync,rolify-test/is_sync --exclude rolify-sqlx --exclude rolify-seaorm
       - name: cargo test (rolify-test suite async)
         run: cargo test -p rolify-test --features suite
       - name: cargo test (rolify-test suite sync)
