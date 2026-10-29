@@ -94,9 +94,6 @@ mod tests {
             expected: "integer",
             got: "abc".into(),
         };
-        assert_eq!(
-            err.to_string(),
-            "invalid holder id for integer kind: abc"
-        );
+        assert_eq!(err.to_string(), "invalid holder id for integer kind: abc");
     }
 }

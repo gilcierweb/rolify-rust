@@ -455,8 +455,7 @@ mod tests {
         // the G1 defect class).
         let commented =
             "CREATE TABLE roles (id INT); -- trailing comment\nCREATE TABLE users_roles (id INT);";
-        let uncommented =
-            "CREATE TABLE roles (id INT);\nCREATE TABLE users_roles (id INT);";
+        let uncommented = "CREATE TABLE roles (id INT);\nCREATE TABLE users_roles (id INT);";
 
         let commented_statements = split_statements(commented).unwrap();
         let plain_statements = split_statements(uncommented).unwrap();
@@ -493,8 +492,7 @@ mod tests {
         // ride along with the statement that follows it, and the script must
         // still yield exactly two statements (never-silently-truncate: the
         // comment bytes must survive generation, attached, never merged).
-        let script =
-            "CREATE TABLE roles (id INT);\n-- standalone comment\nCREATE TABLE users_roles (id INT);";
+        let script = "CREATE TABLE roles (id INT);\n-- standalone comment\nCREATE TABLE users_roles (id INT);";
 
         let statements = split_statements(script).unwrap();
 
@@ -581,7 +579,8 @@ mod tests {
         let default_plan = plan("roles", "users_roles");
 
         let down_statements =
-            extract_down_statements(templates::down("postgres"), &default_plan, "postgres").unwrap();
+            extract_down_statements(templates::down("postgres"), &default_plan, "postgres")
+                .unwrap();
 
         assert_eq!(down_statements.len(), 2, "exactly two down statements");
         assert!(
@@ -697,12 +696,10 @@ mod tests {
         // the split-then-classify composition must yield one statement per
         // drop with the join drop first, never a merged multi-command
         // prepared statement (never-silently-truncate).
-        let script =
-            "DROP TABLE IF EXISTS users_roles; DROP TABLE IF EXISTS roles;";
+        let script = "DROP TABLE IF EXISTS users_roles; DROP TABLE IF EXISTS roles;";
         let default_plan = plan("roles", "users_roles");
 
-        let down_statements =
-            extract_down_statements(script, &default_plan, "postgres").unwrap();
+        let down_statements = extract_down_statements(script, &default_plan, "postgres").unwrap();
 
         assert_eq!(
             down_statements.len(),

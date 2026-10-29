@@ -209,7 +209,11 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Default to integer kind (D-08-02) for the embedded migration.
         // Other kinds are tested via CLI-generated migrations.
-        let statements = get_statements(manager.get_database_backend(), HolderIdKind::Integer, MigrationDirection::Up)?;
+        let statements = get_statements(
+            manager.get_database_backend(),
+            HolderIdKind::Integer,
+            MigrationDirection::Up,
+        )?;
         for statement in statements {
             manager
                 .get_connection()
@@ -220,7 +224,11 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let statements = get_statements(manager.get_database_backend(), HolderIdKind::Integer, MigrationDirection::Down)?;
+        let statements = get_statements(
+            manager.get_database_backend(),
+            HolderIdKind::Integer,
+            MigrationDirection::Down,
+        )?;
         for statement in statements {
             manager
                 .get_connection()
@@ -237,42 +245,78 @@ mod tests {
 
     #[test]
     fn get_statements_postgres_integer_up() {
-        let stmts = get_statements(DbBackend::Postgres, HolderIdKind::Integer, MigrationDirection::Up).unwrap();
+        let stmts = get_statements(
+            DbBackend::Postgres,
+            HolderIdKind::Integer,
+            MigrationDirection::Up,
+        )
+        .unwrap();
         assert!(!stmts.is_empty());
         // Verify user_id is BIGINT
-        let create_join = stmts.iter().find(|s| s.contains("CREATE TABLE users_roles")).unwrap();
+        let create_join = stmts
+            .iter()
+            .find(|s| s.contains("CREATE TABLE users_roles"))
+            .unwrap();
         assert!(create_join.contains("user_id BIGINT NOT NULL"));
     }
 
     #[test]
     fn get_statements_postgres_uuid_up() {
-        let stmts = get_statements(DbBackend::Postgres, HolderIdKind::Uuid, MigrationDirection::Up).unwrap();
+        let stmts = get_statements(
+            DbBackend::Postgres,
+            HolderIdKind::Uuid,
+            MigrationDirection::Up,
+        )
+        .unwrap();
         assert!(!stmts.is_empty());
-        let create_join = stmts.iter().find(|s| s.contains("CREATE TABLE users_roles")).unwrap();
+        let create_join = stmts
+            .iter()
+            .find(|s| s.contains("CREATE TABLE users_roles"))
+            .unwrap();
         assert!(create_join.contains("user_id UUID NOT NULL"));
     }
 
     #[test]
     fn get_statements_postgres_string_up() {
-        let stmts = get_statements(DbBackend::Postgres, HolderIdKind::String, MigrationDirection::Up).unwrap();
+        let stmts = get_statements(
+            DbBackend::Postgres,
+            HolderIdKind::String,
+            MigrationDirection::Up,
+        )
+        .unwrap();
         assert!(!stmts.is_empty());
-        let create_join = stmts.iter().find(|s| s.contains("CREATE TABLE users_roles")).unwrap();
+        let create_join = stmts
+            .iter()
+            .find(|s| s.contains("CREATE TABLE users_roles"))
+            .unwrap();
         assert!(create_join.contains("user_id VARCHAR(191) NOT NULL"));
     }
 
     #[test]
     fn get_statements_mysql_integer_up() {
-        let stmts = get_statements(DbBackend::MySql, HolderIdKind::Integer, MigrationDirection::Up).unwrap();
+        let stmts = get_statements(
+            DbBackend::MySql,
+            HolderIdKind::Integer,
+            MigrationDirection::Up,
+        )
+        .unwrap();
         assert!(!stmts.is_empty());
-        let create_join = stmts.iter().find(|s| s.contains("CREATE TABLE users_roles")).unwrap();
+        let create_join = stmts
+            .iter()
+            .find(|s| s.contains("CREATE TABLE users_roles"))
+            .unwrap();
         assert!(create_join.contains("user_id BIGINT NOT NULL"));
     }
 
     #[test]
     fn get_statements_mysql_uuid_up() {
-        let stmts = get_statements(DbBackend::MySql, HolderIdKind::Uuid, MigrationDirection::Up).unwrap();
+        let stmts =
+            get_statements(DbBackend::MySql, HolderIdKind::Uuid, MigrationDirection::Up).unwrap();
         assert!(!stmts.is_empty());
-        let create_join = stmts.iter().find(|s| s.contains("CREATE TABLE users_roles")).unwrap();
+        let create_join = stmts
+            .iter()
+            .find(|s| s.contains("CREATE TABLE users_roles"))
+            .unwrap();
         assert!(create_join.contains("user_id BINARY(16) NOT NULL"));
         // BINARY(16) should not have charset clause
         assert!(!create_join.contains("CHARACTER SET"));
@@ -280,22 +324,43 @@ mod tests {
 
     #[test]
     fn get_statements_mysql_string_up() {
-        let stmts = get_statements(DbBackend::MySql, HolderIdKind::String, MigrationDirection::Up).unwrap();
+        let stmts = get_statements(
+            DbBackend::MySql,
+            HolderIdKind::String,
+            MigrationDirection::Up,
+        )
+        .unwrap();
         assert!(!stmts.is_empty());
-        let create_join = stmts.iter().find(|s| s.contains("CREATE TABLE users_roles")).unwrap();
-        assert!(create_join.contains("user_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL"));
+        let create_join = stmts
+            .iter()
+            .find(|s| s.contains("CREATE TABLE users_roles"))
+            .unwrap();
+        assert!(
+            create_join.contains(
+                "user_id VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL"
+            )
+        );
     }
 
     #[test]
     fn get_statements_down() {
-        let stmts = get_statements(DbBackend::Postgres, HolderIdKind::Integer, MigrationDirection::Down).unwrap();
+        let stmts = get_statements(
+            DbBackend::Postgres,
+            HolderIdKind::Integer,
+            MigrationDirection::Down,
+        )
+        .unwrap();
         assert_eq!(stmts, DOWN_STATEMENTS);
     }
 
     #[test]
     fn get_statements_unsupported_backend() {
         // SQLite is not supported by this migration module
-        let result = get_statements(DbBackend::Sqlite, HolderIdKind::Integer, MigrationDirection::Up);
+        let result = get_statements(
+            DbBackend::Sqlite,
+            HolderIdKind::Integer,
+            MigrationDirection::Up,
+        );
         assert!(result.is_err());
     }
 }

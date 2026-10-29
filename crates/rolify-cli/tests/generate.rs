@@ -937,12 +937,7 @@ fn readme_adapter_examples_use_real_spi() {
                 }
             } else if file_name == "holder_stub.rs" {
                 let holder_stub = fs::read_to_string(entry.path()).unwrap();
-                for marker in [
-                    "roles_of",
-                    "find_or_create_by",
-                    "where_",
-                    "store.remove(",
-                ] {
+                for marker in ["roles_of", "find_or_create_by", "where_", "store.remove("] {
                     assert!(
                         holder_stub.contains(marker),
                         "emitted holder stub for backend {backend} must carry {marker}: {}",
@@ -1137,14 +1132,19 @@ fn generate_mysql_uuid_kind() {
         .assert()
         .success();
 
-    let up_sql = fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql")).unwrap();
+    let up_sql =
+        fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql"))
+            .unwrap();
     assert!(
         up_sql.contains("user_id BINARY(16) NOT NULL"),
         "MySQL uuid up.sql must contain 'user_id BINARY(16) NOT NULL', got:\n{up_sql}"
     );
     // Check that the user_id column specifically doesn't have CHARACTER SET
     // (the roles table columns and comments may contain it, but user_id should not)
-    let users_roles_section = up_sql.split("CREATE TABLE users_roles").nth(1).unwrap_or("");
+    let users_roles_section = up_sql
+        .split("CREATE TABLE users_roles")
+        .nth(1)
+        .unwrap_or("");
     assert!(
         !users_roles_section.contains("CHARACTER SET"),
         "MySQL uuid user_id column must not have CHARACTER SET clause, got:\n{users_roles_section}"
@@ -1172,7 +1172,9 @@ fn generate_sqlite_integer_kind() {
         .assert()
         .success();
 
-    let up_sql = fs::read_to_string(dir.join("migrations/sqlite/0000000001_rolify_create_tables/up.sql")).unwrap();
+    let up_sql =
+        fs::read_to_string(dir.join("migrations/sqlite/0000000001_rolify_create_tables/up.sql"))
+            .unwrap();
     assert!(
         up_sql.contains("user_id INTEGER NOT NULL"),
         "SQLite integer up.sql must contain 'user_id INTEGER NOT NULL', got:\n{up_sql}"
@@ -1200,7 +1202,9 @@ fn mysql_string_kind() {
         .assert()
         .success();
 
-    let up_sql = fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql")).unwrap();
+    let up_sql =
+        fs::read_to_string(dir.join("migrations/mysql/0000000001_rolify_create_tables/up.sql"))
+            .unwrap();
     assert!(
         up_sql.contains("VARCHAR(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"),
         "MySQL string up.sql must contain full charset clause, got:\n{up_sql}"
@@ -1229,7 +1233,9 @@ fn generate_postgres_uuid_kind() {
         .assert()
         .success();
 
-    let up_sql = fs::read_to_string(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql")).unwrap();
+    let up_sql =
+        fs::read_to_string(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql"))
+            .unwrap();
     assert!(
         up_sql.contains("user_id UUID NOT NULL"),
         "postgres uuid up.sql must contain 'user_id UUID NOT NULL', got:\n{up_sql}"
@@ -1258,7 +1264,9 @@ fn generate_with_holder_fk() {
         .assert()
         .success();
 
-    let postgres_up = fs::read_to_string(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql")).unwrap();
+    let postgres_up =
+        fs::read_to_string(dir.join("migrations/postgres/0000000001_rolify_create_tables/up.sql"))
+            .unwrap();
     assert!(
         postgres_up.contains("user_id BIGINT NOT NULL REFERENCES users(id),"),
         "postgres postgres-holder FK must be inline, got:\n{postgres_up}"
@@ -1321,7 +1329,11 @@ fn generate_with_holder_fk_string_noop() {
 /// kind explicitly as a `HolderIdKind` variant (D-08-03).
 #[test]
 fn generate_config_example_pins_kind() {
-    for (kind, variant) in [("integer", "Integer"), ("uuid", "Uuid"), ("string", "String")] {
+    for (kind, variant) in [
+        ("integer", "Integer"),
+        ("uuid", "Uuid"),
+        ("string", "String"),
+    ] {
         let dir = test_temp_dir();
         let out_dir = dir.to_str().unwrap();
 
@@ -1353,7 +1365,11 @@ fn generate_config_example_pins_kind() {
 /// field type: `i64` (integer), `uuid::Uuid` (uuid), `String` (string).
 #[test]
 fn generate_holder_stub_id_type() {
-    for (kind, id_type) in [("integer", "i64"), ("uuid", "uuid::Uuid"), ("string", "String")] {
+    for (kind, id_type) in [
+        ("integer", "i64"),
+        ("uuid", "uuid::Uuid"),
+        ("string", "String"),
+    ] {
         let dir = test_temp_dir();
         let out_dir = dir.to_str().unwrap();
 

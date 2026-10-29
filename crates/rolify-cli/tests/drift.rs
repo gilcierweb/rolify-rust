@@ -35,7 +35,8 @@ fn read_sqlx_canonical(engine: &str, kind: &str, file: &str) -> String {
         "0000000001_rolify_create_tables.down.sql"
     };
     let path = format!("{manifest_dir}/../rolify-sqlx/migrations/{engine}/{kind}/{suffix}");
-    fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read sqlx canonical file: {path}"))
+    fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("failed to read sqlx canonical file: {path}"))
 }
 
 /// Reads the expected snapshot file for `SeaORM` or Mongo.
@@ -130,8 +131,9 @@ fn renderer_matches_canonical_all_kinds() {
                 with_holder_fk: false,
             };
 
-            let rendered = render_all(&plan)
-                .unwrap_or_else(|error| panic!("render failed for {engine}/{kind_name}: {error:?}"));
+            let rendered = render_all(&plan).unwrap_or_else(|error| {
+                panic!("render failed for {engine}/{kind_name}: {error:?}")
+            });
             let files = rendered
                 .get(engine)
                 .unwrap_or_else(|| panic!("no files for engine: {engine}"));
@@ -182,8 +184,8 @@ fn renderer_custom_names_longest_first() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_all(&plan).unwrap();
@@ -233,8 +235,8 @@ fn seaorm_renderer_matches_snapshot() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -250,8 +252,8 @@ fn seaorm_renderer_custom_names_longest_first() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -290,8 +292,8 @@ fn seaorm_explicit_join_name_survives_substitution() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "member_roles_archive".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -315,8 +317,8 @@ fn seaorm_renderer_semantic_checklist() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_seaorm(&plan).unwrap();
@@ -554,8 +556,8 @@ fn mongo_renderer_matches_snapshot() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -580,8 +582,8 @@ fn mongo_emitted_files_are_well_formed() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -643,8 +645,8 @@ fn mongo_renderer_custom_names_substitution() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let (role_doc, _) = render_mongo(&plan).unwrap();
@@ -677,8 +679,8 @@ fn mongo_explicit_join_name_survives_substitution() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "member_roles_archive".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let (role_doc, index_notes) = render_mongo(&plan).unwrap();
@@ -744,8 +746,8 @@ fn rendered_sql_carries_no_em_dash() {
         holder_name: "User".to_string(),
         roles_table: "roles".to_string(),
         join_table: "users_roles".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_all(&plan).unwrap();
@@ -777,8 +779,8 @@ fn custom_names_postgres_matches_snapshots() {
         holder_name: "Customer".to_string(),
         roles_table: "privileges".to_string(),
         join_table: "customers_privileges".to_string(),
-            holder_id_kind: rolify_core::config::HolderIdKind::Integer,
-            with_holder_fk: false,
+        holder_id_kind: rolify_core::config::HolderIdKind::Integer,
+        with_holder_fk: false,
     };
 
     let rendered = render_all(&plan).unwrap();

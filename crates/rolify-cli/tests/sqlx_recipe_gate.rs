@@ -60,8 +60,7 @@ fn build_migrator_like_recipe(migration_dir: &Path) -> Migrator {
             false,
         ));
 
-        let down_sql =
-            fs::read_to_string(stem_dir.join("down.sql")).expect("down.sql reads");
+        let down_sql = fs::read_to_string(stem_dir.join("down.sql")).expect("down.sql reads");
         migrations.push(Migration::new(
             version,
             description,
@@ -128,10 +127,7 @@ fn sqlx_recipe_constructs_typed_migrator_from_generated_tree() {
         up_entry.description.contains("rolify_create_tables"),
         "description names the stem"
     );
-    assert!(
-        !up_entry.sql.as_str().is_empty(),
-        "up entry carries SQL"
-    );
+    assert!(!up_entry.sql.as_str().is_empty(), "up entry carries SQL");
     assert!(
         !down_entry.sql.as_str().is_empty(),
         "down entry carries SQL"

@@ -40,9 +40,7 @@ use rolify_core::role::{ResourceId, RoleName, RoleRecord, SCOPE_SENTINEL};
 use rolify_core::store::{
     RemovalOutcome, ResourceKey, ResourceStore, RoleStore, ScopeColumn, Sealed,
 };
-use sea_orm::{
-    ConnectionTrait, DbBackend, DbErr, QueryResult, SqlErr, Statement, Value,
-};
+use sea_orm::{ConnectionTrait, DbBackend, DbErr, QueryResult, SqlErr, Statement, Value};
 
 use crate::entity::role;
 use crate::error::Error;
@@ -717,9 +715,11 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             ))
             .await
             .map_err(Error::Db)?;
-        let row = row.ok_or_else(|| Error::Core(RolifyError::InvalidConfig {
-            reason: "COUNT(*) query returned no row".into(),
-        }))?;
+        let row = row.ok_or_else(|| {
+            Error::Core(RolifyError::InvalidConfig {
+                reason: "COUNT(*) query returned no row".into(),
+            })
+        })?;
         let count: i64 = row.try_get("", "count").map_err(Error::Db)?;
         Ok(count > 0)
     }

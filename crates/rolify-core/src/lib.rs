@@ -70,6 +70,6 @@ pub mod user;
 
 pub use config::HolderIdKind;
 pub use error::RolifyError;
-pub use holder::{holder_id_to_string, parse_holder_id, ParsedHolderId};
+pub use holder::{ParsedHolderId, holder_id_to_string, parse_holder_id};
 pub use kernel::RemovalTarget;
 pub use role::SCOPE_SENTINEL;
