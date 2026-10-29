@@ -337,36 +337,65 @@ mod mysql {
     fn fresh_conn(kind: HolderIdKind) -> MysqlConnection {
         let mut conn = mysql_conn();
 
-        // Ensure clean state: drop tables in separate statements with explicit commits
-        // to avoid transaction isolation issues in shared testcontainer
-        conn.batch_execute("DROP TABLE IF EXISTS users_roles").ok();
-        conn.batch_execute("COMMIT").ok();
-        conn.batch_execute("DROP TABLE IF EXISTS roles").ok();
-        conn.batch_execute("COMMIT").ok();
+        // Ensure clean state: execute DROPs individually with verification
+        for table in ["users_roles", "roles"] {
+            conn.batch_execute(&format!("DROP TABLE IF EXISTS {}", table))
+                .unwrap_or_else(|e| panic!("drop {} failed: {}", table, e));
+            conn.batch_execute("COMMIT")
+                .unwrap_or_else(|e| panic!("commit failed: {}", e));
+        }
 
-        // Apply schema DDL with retry for transient FK failures
+        // Apply schema DDL statement by statement for better error isolation
         let ddl = schema_ddl(kind);
+        let statements: Vec<&str> = ddl
+            .split(';')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && !s.starts_with("--"))
+            .collect();
+
         for attempt in 1..=3 {
-            match conn.batch_execute(ddl) {
-                Ok(_) => break,
-                Err(e) if attempt < 3 => {
+            let mut success = true;
+            for stmt in &statements {
+                if let Err(e) = conn.batch_execute(stmt) {
                     let err_msg = e.to_string();
-                    // Retry on: transient FK failures, OR "already exists" (race)
                     let is_transient = err_msg.contains("foreign key")
                         || err_msg.contains("FK")
                         || err_msg.contains("constraint")
-                        || err_msg.contains("already exists");
-                    if is_transient {
+                        || err_msg.contains("already exists")
+                        || err_msg.contains("doesn't exist");
+                    if attempt < 3 && is_transient {
                         std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
                         // Force cleanup before retry
                         conn.batch_execute("DROP TABLE IF EXISTS users_roles").ok();
                         conn.batch_execute("DROP TABLE IF EXISTS roles").ok();
                         conn.batch_execute("COMMIT").ok();
-                        continue;
+                        success = false;
+                        break;
                     }
-                    panic!("apply kind-specific DDL failed (non-transient): {e}");
+                    panic!(
+                        "DDL statement failed (non-transient): {} ... error: {}",
+                        &stmt[..stmt.len().min(100)],
+                        e
+                    );
                 }
-                Err(e) => panic!("apply kind-specific DDL after retries: {e}"),
+            }
+            if success {
+                // Verify tables exist
+                let roles_exist = conn.batch_execute("SELECT 1 FROM roles LIMIT 1").is_ok();
+                let join_exist = conn
+                    .batch_execute("SELECT 1 FROM users_roles LIMIT 1")
+                    .is_ok();
+                if roles_exist && join_exist {
+                    break;
+                }
+                if attempt < 3 {
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+                    conn.batch_execute("DROP TABLE IF EXISTS users_roles").ok();
+                    conn.batch_execute("DROP TABLE IF EXISTS roles").ok();
+                    conn.batch_execute("COMMIT").ok();
+                    continue;
+                }
+                panic!("Tables not created after DDL execution");
             }
         }
         conn
