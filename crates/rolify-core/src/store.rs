@@ -116,12 +116,12 @@ pub struct RemovalOutcome {
 ///
 /// # Example
 ///
-/// The reference implementation is [`rolify_test::InMemoryStore`]. All
+/// The reference implementation is [`InMemoryStore`] from `rolify-test`. All
 /// examples that call the dual-mode SPI live in the phase-1 integration
 /// suites (`tests/user_flow.rs`, `rolify-test/tests/spi_integration.rs`),
 /// which run identically in both modes.
 ///
-/// [`rolify_test::InMemoryStore`]: https://docs.rs/rolify-test
+/// [`InMemoryStore`]: https://docs.rs/rolify-test
 #[maybe_async::maybe_async(AFIT)]
 pub trait RoleStore: Sealed + Send + Sync + 'static {
     /// Backend connection/pool handle. `Send` is required because provided

@@ -4935,6 +4935,7 @@ mod pg_async_impl {
     // Helper functions for AsyncPgConnection (async mirrors of the sync
     // helpers above; same template calls, only the execution point
     // gains `.await`).
+    #[allow(clippy::needless_continue, clippy::cast_sign_loss)]
     async fn find_or_create_by_triple(
         conn: &mut AsyncPgConnection,
         role_table: &str,
@@ -6125,6 +6126,7 @@ mod mysql_async_impl {
 
     // Helper functions for AsyncMysqlConnection (async mirrors of the sync
     // helpers above; same template calls, only the execution point gains `.await`).
+    #[allow(clippy::needless_continue, clippy::cast_sign_loss)]
     async fn find_or_create_by_triple(
         conn: &mut AsyncMysqlConnection,
         role_table: &str,
@@ -7318,6 +7320,7 @@ mod sqlite_async_impl {
 
     // Helper functions for AsyncSqliteConnection (async mirrors of the sync
     // helpers above; same template calls, only the execution point gains `.await`).
+    #[allow(clippy::needless_continue, clippy::cast_sign_loss)]
     async fn find_or_create_by_triple(
         conn: &mut AsyncSqliteConnection,
         role_table: &str,

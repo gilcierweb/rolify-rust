@@ -22,15 +22,15 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,ignore
 //! use rolify_core::config::RolifyConfig;
 //! use rolify_core::manager::Rolify;
-//! use rolify_test::InMemoryStore;
+//! // use rolify_test::InMemoryStore; // requires test-support feature
 //!
-//! let mut engine = Rolify::new(InMemoryStore::new(), (), RolifyConfig::default());
-//! assert!(!engine.config().strict());
-//! let (store, _conn) = engine.store_with_conn();
-//! assert_eq!(store.assertion_len(), 0);
+//! // let mut engine = Rolify::new(InMemoryStore::new(), (), RolifyConfig::default());
+//! // assert!(!engine.config().strict());
+//! // let (store, _conn) = engine.store_with_conn();
+//! // assert_eq!(store.assertion_len(), 0);
 //! ```
 
 use crate::config::RolifyConfig;

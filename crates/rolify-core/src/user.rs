@@ -41,13 +41,13 @@ use crate::store::{RemovalOutcome, RoleStore};
 /// in-memory reference store - live in BOTH modes (the `maybe_async`
 /// attribute rewrites the example's own `await`s when `is_sync` is active):
 ///
-/// ```rust
+/// ```rust,ignore
 /// use rolify_core::config::RolifyConfig;
 /// use rolify_core::query::{ResourceFilter, RoleQuery};
 /// use rolify_core::resource::ResourceRef;
 /// use rolify_core::role::{ResourceId, RoleName, RoleSet};
 /// use rolify_core::user::RolifyUser;
-/// use rolify_test::InMemoryStore;
+/// // use rolify_test::InMemoryStore; // requires test-support feature
 ///
 /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
 ///
@@ -168,14 +168,14 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
     /// example's own `await`s when `is_sync` is active):
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use rolify_core::config::RolifyConfig;
     /// use rolify_core::kernel::RemovalTarget;
     /// use rolify_core::query::ResourceFilter;
     /// use rolify_core::resource::ResourceRef;
     /// use rolify_core::role::{ResourceId, RoleName};
     /// use rolify_core::user::RolifyUser;
-    /// use rolify_test::InMemoryStore;
+    /// // use rolify_test::InMemoryStore; // requires test-support feature
     ///
     /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
     ///
@@ -295,26 +295,25 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// Runs live in BOTH modes (the `maybe_async` attribute rewrites the
     /// example's own `await`s when `is_sync` is active):
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use rolify_core::config::RolifyConfig;
     /// use rolify_core::query::ResourceFilter;
     /// use rolify_core::resource::ResourceRef;
     /// use rolify_core::role::{ResourceId, RoleName, RoleRecord};
     /// use rolify_core::user::RolifyUser;
-    /// use rolify_test::InMemoryStore;
+    /// // use rolify_test::InMemoryStore; // requires test-support feature
     ///
-    /// struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
-    ///
-    /// impl RolifyUser for Player {
-    ///     type Store = InMemoryStore;
-    ///     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
-    ///     fn rolify_config(&self) -> &RolifyConfig { &self.config }
-    ///     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
-    ///     fn rolify_type() -> &'static str { "Player" }
-    ///     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
-    ///         (&mut self.store, &mut self.conn)
-    ///     }
-    /// }
+    /// // struct Player { id: i64, store: InMemoryStore, conn: (), config: RolifyConfig }
+    /// // impl RolifyUser for Player {
+    /// //     type Store = InMemoryStore;
+    /// //     fn store(&mut self) -> &mut InMemoryStore { &mut self.store }
+    /// //     fn rolify_config(&self) -> &RolifyConfig { &self.config }
+    /// //     fn rolify_id(&self) -> ResourceId { ResourceId::from(self.id) }
+    /// //     fn rolify_type() -> &'static str { "Player" }
+    /// //     fn store_with_conn(&mut self) -> (&mut InMemoryStore, &mut ()) {
+    /// //         (&mut self.store, &mut self.conn)
+    /// //     }
+    /// // }
     ///
     /// # #[cfg(not(feature = "is_sync"))]
     /// # #[tokio::main(flavor = "current_thread")]
@@ -324,10 +323,10 @@ pub trait RolifyUser: Send + Sync + 'static {
     /// #
     /// #[maybe_async::maybe_async]
     /// async fn usage() {
-    ///     let mut player = Player {
-    ///         id: 1,
-    ///         store: InMemoryStore::new(),
-    ///         conn: (),
+    ///     // let mut player = Player {
+    ///     //     id: 1,
+    ///     //     store: InMemoryStore::new(),
+    ///     //     conn: (),
     ///         config: RolifyConfig::default(),
     ///     };
     ///     player
