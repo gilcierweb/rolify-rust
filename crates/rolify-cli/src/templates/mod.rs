@@ -21,6 +21,8 @@ pub const MONGO_DOCS: &str = include_str!("../../templates/mongo_docs.rs.txt");
 // Scaffolding templates (D-20)
 pub mod scaffolding {
     pub const ROLE_STUB: &str = include_str!("../../templates/scaffolding/role_stub.rs.txt");
+    pub const ROLE_STUB_MONGO: &str =
+    include_str!("../../templates/scaffolding/role_stub_mongo.rs.txt");
     pub const HOLDER_STUB: &str = include_str!("../../templates/scaffolding/holder_stub.rs.txt");
     pub const CONFIG_EXAMPLE: &str =
         include_str!("../../templates/scaffolding/config_example.rs.txt");
@@ -38,6 +40,13 @@ pub mod scaffolding {
         ROLE_STUB
             .replace("{role_name}", role_name)
             .replace("{backend}", backend)
+            .replace("{holder_name}", holder_name)
+    }
+    /// Renders the Mongo-specific role stub (Option<String> scope, D-07).
+    #[must_use]
+    pub fn role_stub_mongo(role_name: &str, holder_name: &str) -> String {
+        ROLE_STUB_MONGO
+            .replace("{role_name}", role_name)
             .replace("{holder_name}", holder_name)
     }
 

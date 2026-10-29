@@ -3406,7 +3406,6 @@ dependencies = [
  "testcontainers-modules",
  "thiserror",
  "tokio",
- "uuid",
  "walkdir",
 ]
 

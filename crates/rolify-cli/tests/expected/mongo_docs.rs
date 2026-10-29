@@ -1,14 +1,13 @@
 //! MongoDB role document template for rolify.
 //!
-//! PROVISIONAL: Converges with `rolify-mongodb` `document.rs` when Phase 5
-//! executes (D-17). Shape frozen to the 05-CONTEXT spec (D-07, D-08).
+//! Converged with `rolify-mongodb` `document.rs` (D-07, D-08, D-17).
 //! No BSON-type invention beyond the spec; no camelCase fields.
 //!
 //! Field set (exact):
 //! - `name`: String - role name (byte-exact per gem)
 //! - `resource_type`: Option<String> - explicit null when global/class scope
 //! - `resource_id`: Option<String> - explicit null when global/class scope
-//! - `user_ids`: Vec<ObjectId> - user references (two-sided HABTM)
+//! - `user_ids`: Vec<String> - user references (two-sided HABTM)
 //!
 //! Index notes (CLI documents; adapter converges at setup per Phase 5 D-10):
 //! - Unique compound index on (name, resource_type, resource_id) ensured
@@ -30,8 +29,9 @@ use serde::{Deserialize, Serialize};
 /// Role document as stored in MongoDB.
 ///
 /// Sentinel nulls (not absent) for resource_type/resource_id when scope is
-/// global or class - matches the gem's Mongoid `''` sentinel strategy
-/// translated to MongoDB explicit null (05-CONTEXT D-08). A `None` scope
+/// global or class - stored as explicit BSON null (D-07), not the SQL
+/// `''` sentinel: the gem's Mongoid adapter writes `nil` for scopeless
+/// roles (role_adapter.rb:50-54). A `None` scope
 /// serializes as explicit BSON null, never as an omitted field, so the
 /// derive agrees with the locked `rolify-mongodb` `document.rs` contract
 /// (D-07 convergence).
@@ -47,7 +47,7 @@ pub struct RoleDoc {
     pub resource_id: Option<String>,
 
     #[serde(default)]
-    pub user_ids: Vec<ObjectId>,
+    pub user_ids: Vec<String>,
 }
 
 /// Consumer-side role IDs for two-sided HABTM.

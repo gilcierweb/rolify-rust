@@ -8,7 +8,7 @@ use crate::emitters::{
     default_join_table, mongo::render_mongo, seaorm::render_seaorm, sql::render_sql,
 };
 use crate::error::CliError;
-use crate::templates::scaffolding::{config_example, holder_stub, readme, role_stub};
+use crate::templates::scaffolding::{config_example, holder_stub, readme};
 use rolify_core::HolderIdKind;
 use std::collections::BTreeMap;
 
@@ -68,6 +68,13 @@ pub struct FileEntry {
 ///
 /// Returns `CliError::Core` when the backend is unknown or an emitter fails.
 pub fn render_all(plan: &RenderPlan) -> Result<BTreeMap<String, Vec<FileEntry>>, CliError> {
+    // Validate identifiers at the render boundary (defense-in-depth: the
+    // binary already checks, but library consumers may call render_all
+    // directly). Returns CliError::Core on any violation.
+    for value in [&plan.roles_table, &plan.join_table, &plan.role_name, &plan.holder_name] {
+        rolify_core::config::RolifyConfigBuilder::validate_identifier(value)
+            .map_err(|error| CliError::Core(error))?;
+    }
     let mut result = BTreeMap::new();
 
     // Render main migration files
@@ -205,7 +212,11 @@ fn generate_scaffolding(plan: &RenderPlan, engine: &str) -> Result<Vec<FileEntry
     let mut files = vec![
         FileEntry {
             path: format!("{engine}/role_stub.rs"),
-            content: role_stub(&plan.role_name, plan.backend.as_str(), &plan.holder_name),
+            content: if plan.backend == Backend::Mongodb {
+                crate::templates::scaffolding::role_stub_mongo(&plan.role_name, &plan.holder_name)
+            } else {
+                crate::templates::scaffolding::role_stub(&plan.role_name, plan.backend.as_str(), &plan.holder_name)
+            },
         },
         FileEntry {
             path: format!("{engine}/holder_stub.rs"),

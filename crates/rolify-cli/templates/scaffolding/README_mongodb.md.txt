@@ -27,7 +27,7 @@ pub struct RoleDoc {
     pub name: String,           // Role name (byte-exact)
     pub resource_type: Option<String>,  // Explicit null for global/class
     pub resource_id: Option<String>,    // Explicit null for global/class
-    pub user_ids: Vec<ObjectId>,        // User references (two-sided HABTM)
+    pub user_ids: Vec<String>,        // User references (two-sided HABTM)
 }
 ```
 
@@ -49,8 +49,8 @@ Unique compound index: (name: 1, resource_type: 1, resource_id: 1)
   - Deduplicates identically to the SQL sentinel '' strategy
 ```
 
-The `rolify-mongodb` adapter (Phase 5) will create this index idempotently
-at store initialization.
+The `rolify-mongodb` adapter creates this index idempotently at store
+initialization (index.rs).
 
 ## Two-Sided HABTM Semantics
 
@@ -123,7 +123,9 @@ collection name is determined by the adapter configuration.
 The CLI documents the MongoDB equivalent of the SQL sentinel `''` strategy:
 - Global/class scope roles have `resource_type: None` and `resource_id: None`
   (explicit null, not absent fields)
-- This matches the gem's Mongoid behavior where empty strings are used
+- This matches the gem's Mongoid adapter, which writes `nil` for
+  scopeless roles (role_adapter.rb:50-54); the SQL `''` sentinel is a
+  Rust-port divergence documented in parity-matrix.md.
 
 ## Provisional Convergence
 

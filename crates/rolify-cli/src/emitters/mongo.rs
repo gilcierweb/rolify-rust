@@ -2,13 +2,13 @@
 //!
 //! Shape strictly from the 05-CONTEXT spec (D-07, D-08):
 //! - Fields: name (String), `resource_type` (Option<String>), `resource_id`
-//!   (Option<String>), `user_ids` (Vec<ObjectId>)
+//!   (Option<String>), `user_ids` (Vec<String>)
 //! - Unique compound index on (name, `resource_type`, `resource_id`)
 //! - Consumer-side `role_ids` with two-sided HABTM removal semantics
 //! - Emptiness checked after removal
 //!
-//! PROVISIONAL: Converges with `rolify-mongodb` `document.rs` when Phase 5
-//! executes (D-17). No BSON-type invention beyond the spec.
+//! Converged with `rolify-mongodb` `document.rs` (D-07, D-08, D-17): the
+//! generated document matches the adapter's persisted shape byte-for-byte.
 
 use crate::emitters::substitute_table_names;
 use crate::error::CliError;
@@ -94,7 +94,7 @@ mod tests {
             "resource_id field missing"
         );
         assert!(
-            role_doc.contains("user_ids: Vec<ObjectId>"),
+            role_doc.contains("user_ids: Vec<String>"),
             "user_ids field missing"
         );
 
@@ -157,11 +157,10 @@ mod tests {
 
         let (role_doc, _) = render_mongo(&plan).unwrap();
 
-        // PROVISIONAL marker per D-17
+        // Converged with rolify-mongodb (D-17)
         assert!(
-            role_doc.contains("PROVISIONAL"),
-            "PROVISIONAL marker missing"
+            role_doc.contains("Converged with `rolify-mongodb`"),
+            "convergence marker missing"
         );
-        assert!(role_doc.contains("D-17"), "D-17 reference missing");
     }
 }
