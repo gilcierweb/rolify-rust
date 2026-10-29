@@ -27,6 +27,7 @@ pub fn to_storage(value: Option<&str>) -> &str {
 
 /// Convert an optional `ResourceId` to its physical storage form.
 #[inline]
+#[must_use]
 pub fn resource_id_to_storage(value: Option<&ResourceId>) -> &str {
     value.map_or(SCOPE_SENTINEL, ResourceId::as_str)
 }
