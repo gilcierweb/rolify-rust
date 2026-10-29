@@ -598,14 +598,17 @@ where
             let rows = Self::fetch_rows(conn, sql_text, &binds, &counter).await?;
             let records = Self::decode_role_rows(&rows)?;
             // Set semantics: one row can satisfy several OR-joined
-            // ladders; the result carries it once.
-            let mut seen: Vec<RoleRecord> = Vec::with_capacity(records.len());
+            // ladders; the result carries it once. Use HashSet of tuples for O(n) dedup.
+            let mut seen: std::collections::HashSet<(RoleName, Option<String>, Option<ResourceId>)> =
+                std::collections::HashSet::with_capacity(records.len());
+            let mut result: Vec<RoleRecord> = Vec::with_capacity(records.len());
             for record in records {
-                if !seen.contains(&record) {
-                    seen.push(record);
+                let key = (record.name.clone(), record.resource_type.clone(), record.resource_id.clone());
+                if seen.insert(key) {
+                    result.push(record);
                 }
             }
-            Ok(seen)
+            Ok(result)
         }
     }
 
