@@ -141,7 +141,7 @@ compile_error!(
 // Re-export the migrations constant for the enabled backend.
 // Path is relative to the crate root (where Cargo.toml lives).
 // The integer kind tree is the default embedded migration (D-08-02);
-// the other kind trees exist for the CLI drift guard (Plan 05).
+// the other kind trees exist for non-default HolderIdKind values.
 #[cfg(feature = "postgres")]
 pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
     diesel_migrations::embed_migrations!("migrations/postgres/integer");
@@ -151,6 +151,27 @@ pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
 #[cfg(feature = "sqlite")]
 pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations =
     diesel_migrations::embed_migrations!("migrations/sqlite/integer");
+
+// Kind-selected migration trees. Use the one matching your `HolderIdKind`
+// (D-08): `MIGRATIONS` above is the integer (default) tree only.
+#[cfg(feature = "postgres")]
+pub const MIGRATIONS_UUID: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations/postgres/uuid");
+#[cfg(feature = "postgres")]
+pub const MIGRATIONS_STRING: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations/postgres/string");
+#[cfg(feature = "mysql")]
+pub const MIGRATIONS_UUID: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations/mysql/uuid");
+#[cfg(feature = "mysql")]
+pub const MIGRATIONS_STRING: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations/mysql/string");
+#[cfg(feature = "sqlite")]
+pub const MIGRATIONS_UUID: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations/sqlite/uuid");
+#[cfg(feature = "sqlite")]
+pub const MIGRATIONS_STRING: diesel_migrations::EmbeddedMigrations =
+    diesel_migrations::embed_migrations!("migrations/sqlite/string");
 
 pub mod dialect;
 pub mod error;
