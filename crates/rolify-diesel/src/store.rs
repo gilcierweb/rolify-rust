@@ -1703,8 +1703,10 @@ mod pg_impl {
             .bind::<Text, _>(name.as_str())
             .bind::<Text, _>(resource_type)
             .bind::<Text, _>(resource_id);
-        if let Ok(row) = q.get_result::<RoleRow>(conn) {
-            return Ok(row.to_record());
+        match q.get_result::<RoleRow>(conn) {
+            Ok(row) => return Ok(row.to_record()),
+            Err(diesel::result::Error::NotFound) => {}
+            Err(e) => return Err(Error::Diesel(e)),
         }
 
         let insert_sql = crate::sql::insert_role(role_table);
@@ -2143,9 +2145,11 @@ mod pg_impl {
             );
             // Same swallow-as-false contract as the old get_result
             // probe: any execution error reports "no role exists".
-            let found = load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[])
-                .map(|rows| !rows.is_empty())
-                .unwrap_or(false);
+            let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]) {
+                Ok(rows) => rows,
+                Err(e) => return async move { Err(e) },
+            };
+            let found = !rows.is_empty();
             async move { Ok(found) }
         }
 
@@ -2602,15 +2606,14 @@ mod pg_impl {
             // 2. Class-scoped roles: expand via resource registry
             for (type_name, resource_table, pk_column) in &self.resource_tables {
                 if types.contains(&type_name.as_str()) {
-                    let name_ph = placeholder(1);
                     let expansion_sql = crate::sql::select_resources_find_class_expansion(
                         &self.role_table,
                         resource_table,
                         pk_column,
-                        type_name,
-                        &name_ph,
                     );
-                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
+                    let q = diesel::sql_query(expansion_sql)
+                        .bind::<Text, _>(type_name.as_str())
+                        .bind::<Text, _>(name.as_str());
                     let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
                     for row in class_rows {
                         all_keys.push(row.to_key());
@@ -2618,6 +2621,9 @@ mod pg_impl {
                 }
             }
 
+            let mut seen: std::collections::HashSet<ResourceKey> =
+                std::collections::HashSet::new();
+            all_keys.retain(|k| seen.insert(k.clone()));
             async move { Ok(all_keys) }
         }
 
@@ -2729,8 +2735,10 @@ mod mysql_impl {
             .bind::<Text, _>(name.as_str())
             .bind::<Text, _>(resource_type)
             .bind::<Text, _>(resource_id);
-        if let Ok(row) = q.get_result::<RoleRow>(conn) {
-            return Ok(row.to_record());
+        match q.get_result::<RoleRow>(conn) {
+            Ok(row) => return Ok(row.to_record()),
+            Err(diesel::result::Error::NotFound) => {}
+            Err(e) => return Err(Error::Diesel(e)),
         }
 
         let insert_sql = crate::sql::insert_role(role_table);
@@ -3167,9 +3175,11 @@ mod mysql_impl {
             );
             // Same swallow-as-false contract as the old get_result
             // probe: any execution error reports "no role exists".
-            let found = load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[])
-                .map(|rows| !rows.is_empty())
-                .unwrap_or(false);
+            let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]) {
+                Ok(rows) => rows,
+                Err(e) => return async move { Err(e) },
+            };
+            let found = !rows.is_empty();
             async move { Ok(found) }
         }
 
@@ -3631,15 +3641,14 @@ mod mysql_impl {
             // 2. Class-scoped roles: expand via resource registry
             for (type_name, resource_table, pk_column) in &self.resource_tables {
                 if types.contains(&type_name.as_str()) {
-                    let name_ph = placeholder(1);
                     let expansion_sql = crate::sql::select_resources_find_class_expansion(
                         &self.role_table,
                         resource_table,
                         pk_column,
-                        type_name,
-                        &name_ph,
                     );
-                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
+                    let q = diesel::sql_query(expansion_sql)
+                        .bind::<Text, _>(type_name.as_str())
+                        .bind::<Text, _>(name.as_str());
                     let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
                     for row in class_rows {
                         all_keys.push(row.to_key());
@@ -3647,6 +3656,9 @@ mod mysql_impl {
                 }
             }
 
+            let mut seen: std::collections::HashSet<ResourceKey> =
+                std::collections::HashSet::new();
+            all_keys.retain(|k| seen.insert(k.clone()));
             async move { Ok(all_keys) }
         }
 
@@ -3755,8 +3767,10 @@ mod sqlite_impl {
             .bind::<Text, _>(name.as_str())
             .bind::<Text, _>(resource_type)
             .bind::<Text, _>(resource_id);
-        if let Ok(row) = q.get_result::<RoleRow>(conn) {
-            return Ok(row.to_record());
+        match q.get_result::<RoleRow>(conn) {
+            Ok(row) => return Ok(row.to_record()),
+            Err(diesel::result::Error::NotFound) => {}
+            Err(e) => return Err(Error::Diesel(e)),
         }
 
         let insert_sql = crate::sql::insert_role(role_table);
@@ -4193,9 +4207,11 @@ mod sqlite_impl {
             );
             // Same swallow-as-false contract as the old get_result
             // probe: any execution error reports "no role exists".
-            let found = load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[])
-                .map(|rows| !rows.is_empty())
-                .unwrap_or(false);
+            let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]) {
+                Ok(rows) => rows,
+                Err(e) => return async move { Err(e) },
+            };
+            let found = !rows.is_empty();
             async move { Ok(found) }
         }
 
@@ -4651,15 +4667,14 @@ mod sqlite_impl {
             // 2. Class-scoped roles: expand via resource registry
             for (type_name, resource_table, pk_column) in &self.resource_tables {
                 if types.contains(&type_name.as_str()) {
-                    let name_ph = placeholder(1);
                     let expansion_sql = crate::sql::select_resources_find_class_expansion(
                         &self.role_table,
                         resource_table,
                         pk_column,
-                        type_name,
-                        &name_ph,
                     );
-                    let q = diesel::sql_query(expansion_sql).bind::<Text, _>(name.as_str());
+                    let q = diesel::sql_query(expansion_sql)
+                        .bind::<Text, _>(type_name.as_str())
+                        .bind::<Text, _>(name.as_str());
                     let class_rows: Vec<ResourceKeyRow> = q.load(conn).map_err(Error::Diesel)?;
                     for row in class_rows {
                         all_keys.push(row.to_key());
@@ -4667,6 +4682,9 @@ mod sqlite_impl {
                 }
             }
 
+            let mut seen: std::collections::HashSet<ResourceKey> =
+                std::collections::HashSet::new();
+            all_keys.retain(|k| seen.insert(k.clone()));
             async move { Ok(all_keys) }
         }
 
@@ -5301,10 +5319,11 @@ mod pg_async_impl {
                 }
                 // Same swallow-as-false contract as the old get_result
                 // probe: any execution error reports "no role exists".
-                let found = load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[])
-                    .await
-                    .map(|rows| !rows.is_empty())
-                    .unwrap_or(false);
+                let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]).await {
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e),
+                };
+                let found = !rows.is_empty();
                 Ok(found)
             }
         }
@@ -5755,17 +5774,17 @@ mod pg_async_impl {
 
                 // Class expansion mirrors the sync path: one expansion query
                 // per registered resource table of the requested types.
-                let expansions: Vec<String> = resource_tables
+                let expansions: Vec<(String, String)> = resource_tables
                     .iter()
                     .filter(|(type_name, _, _)| types.contains(&type_name.as_str()))
                     .map(|(type_name, resource_table, pk_column)| {
-                        let name_ph = placeholder(1);
-                        crate::sql::select_resources_find_class_expansion(
-                            &role_table,
-                            resource_table,
-                            pk_column,
-                            type_name,
-                            &name_ph,
+                        (
+                            crate::sql::select_resources_find_class_expansion(
+                                &role_table,
+                                resource_table,
+                                pk_column,
+                            ),
+                            type_name.clone(),
                         )
                     })
                     .collect();
@@ -5808,8 +5827,9 @@ mod pg_async_impl {
                 }
 
                 // 2. Class-scoped roles: expand via resource registry
-                for expansion_sql in expansions {
+                for (expansion_sql, type_name) in expansions {
                     let class_rows: Vec<ResourceKeyRow> = diesel::sql_query(expansion_sql)
+                        .bind::<Text, _>(type_name.as_str())
                         .bind::<Text, _>(&name_owned)
                         .load(conn)
                         .await
@@ -5818,6 +5838,9 @@ mod pg_async_impl {
                         all_keys.push(row.to_key());
                     }
                 }
+                let mut seen: std::collections::HashSet<ResourceKey> =
+                    std::collections::HashSet::new();
+                all_keys.retain(|k| seen.insert(k.clone()));
                 Ok(all_keys)
             }
         }
@@ -6451,10 +6474,11 @@ mod mysql_async_impl {
                 }
                 // Same swallow-as-false contract as the old get_result
                 // probe: any execution error reports "no role exists".
-                let found = load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[])
-                    .await
-                    .map(|rows| !rows.is_empty())
-                    .unwrap_or(false);
+                let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]).await {
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e),
+                };
+                let found = !rows.is_empty();
                 Ok(found)
             }
         }
@@ -6907,17 +6931,17 @@ mod mysql_async_impl {
 
                 // Class expansion mirrors the sync path: one expansion query
                 // per registered resource table of the requested types.
-                let expansions: Vec<String> = resource_tables
+                let expansions: Vec<(String, String)> = resource_tables
                     .iter()
                     .filter(|(type_name, _, _)| types.contains(&type_name.as_str()))
                     .map(|(type_name, resource_table, pk_column)| {
-                        let name_ph = placeholder(1);
-                        crate::sql::select_resources_find_class_expansion(
-                            &role_table,
-                            resource_table,
-                            pk_column,
-                            type_name,
-                            &name_ph,
+                        (
+                            crate::sql::select_resources_find_class_expansion(
+                                &role_table,
+                                resource_table,
+                                pk_column,
+                            ),
+                            type_name.clone(),
                         )
                     })
                     .collect();
@@ -6960,8 +6984,9 @@ mod mysql_async_impl {
                 }
 
                 // 2. Class-scoped roles: expand via resource registry
-                for expansion_sql in expansions {
+                for (expansion_sql, type_name) in expansions {
                     let class_rows: Vec<ResourceKeyRow> = diesel::sql_query(expansion_sql)
+                        .bind::<Text, _>(type_name.as_str())
                         .bind::<Text, _>(&name_owned)
                         .load(conn)
                         .await
@@ -6970,6 +6995,9 @@ mod mysql_async_impl {
                         all_keys.push(row.to_key());
                     }
                 }
+                let mut seen: std::collections::HashSet<ResourceKey> =
+                    std::collections::HashSet::new();
+                all_keys.retain(|k| seen.insert(k.clone()));
                 Ok(all_keys)
             }
         }
@@ -7608,10 +7636,11 @@ mod sqlite_async_impl {
                 }
                 // Same swallow-as-false contract as the old get_result
                 // probe: any execution error reports "no role exists".
-                let found = load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[])
-                    .await
-                    .map(|rows| !rows.is_empty())
-                    .unwrap_or(false);
+                let rows = match load_typed_rows::<ExistsRow>(conn, &sql, &holder_bind, &[]).await {
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e),
+                };
+                let found = !rows.is_empty();
                 Ok(found)
             }
         }
@@ -8062,17 +8091,17 @@ mod sqlite_async_impl {
 
                 // Class expansion mirrors the sync path: one expansion query
                 // per registered resource table of the requested types.
-                let expansions: Vec<String> = resource_tables
+                let expansions: Vec<(String, String)> = resource_tables
                     .iter()
                     .filter(|(type_name, _, _)| types.contains(&type_name.as_str()))
                     .map(|(type_name, resource_table, pk_column)| {
-                        let name_ph = placeholder(1);
-                        crate::sql::select_resources_find_class_expansion(
-                            &role_table,
-                            resource_table,
-                            pk_column,
-                            type_name,
-                            &name_ph,
+                        (
+                            crate::sql::select_resources_find_class_expansion(
+                                &role_table,
+                                resource_table,
+                                pk_column,
+                            ),
+                            type_name.clone(),
                         )
                     })
                     .collect();
@@ -8115,8 +8144,9 @@ mod sqlite_async_impl {
                 }
 
                 // 2. Class-scoped roles: expand via resource registry
-                for expansion_sql in expansions {
+                for (expansion_sql, type_name) in expansions {
                     let class_rows: Vec<ResourceKeyRow> = diesel::sql_query(expansion_sql)
+                        .bind::<Text, _>(type_name.as_str())
                         .bind::<Text, _>(&name_owned)
                         .load(conn)
                         .await
@@ -8125,6 +8155,9 @@ mod sqlite_async_impl {
                         all_keys.push(row.to_key());
                     }
                 }
+                let mut seen: std::collections::HashSet<ResourceKey> =
+                    std::collections::HashSet::new();
+                all_keys.retain(|k| seen.insert(k.clone()));
                 Ok(all_keys)
             }
         }

@@ -451,30 +451,30 @@ mod backend_sql {
     ///                               (roles.resource_id IS NULL OR roles.resource_id = relation.id)")
     /// ```
     ///
-    /// Bind order: 1=name.
-    /// The `resource_type` is interpolated as a literal (validated via registry).
+    /// Bind order: 1=resource_type, 2=name.
+    /// The `resource_type` is bound as a parameter (not interpolated) so
+    /// the builder is injection-safe regardless of the caller.
     /// The `resource_table` and `pk_column` are interpolated (validated identifiers).
     #[must_use]
     pub fn select_resources_find_class_expansion(
         role_table: &str,
         resource_table: &str,
         pk_column: &str,
-        resource_type: &str,
-        name_placeholder: &str,
     ) -> String {
+        let rt_ph = placeholder(1);
+        let name_ph = placeholder(2);
         format!(
-            "SELECT DISTINCT role_row.name AS name, '{}' AS resource_type, {} AS resource_id \
-         FROM {} AS role_row \
-         INNER JOIN {} AS res \
-           ON role_row.resource_type = '{}' \
+            "SELECT DISTINCT role_row.name AS name, {rt_ph} AS resource_type, {pk} AS resource_id \
+         FROM {role_table} AS role_row \
+         INNER JOIN {resource_table} AS res \
+           ON role_row.resource_type = {rt_ph} \
           AND role_row.resource_id = '' \
-          AND role_row.name = {}",
-            resource_type,
-            cast_to_text(&format!("res.{pk_column}")),
-            role_table,
-            resource_table,
-            resource_type,
-            name_placeholder,
+          AND role_row.name = {name_ph}",
+            rt_ph = rt_ph,
+            pk = cast_to_text(&format!("res.{pk_column}")),
+            role_table = role_table,
+            resource_table = resource_table,
+            name_ph = name_ph,
         )
     }
 
