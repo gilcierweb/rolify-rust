@@ -46,6 +46,10 @@ use crate::entity::role;
 use crate::error::Error;
 use crate::ladder::{build_any_where, build_ladder_where, build_strict_where, placeholder};
 
+/// The standard role projection used across multiple queries.
+/// Mirrors the diesel/sqlx reference adapter's projection shape.
+const ROLE_PROJECTION: &str = "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id";
+
 /// `SeaORM` store: config-derived table names plus holder/resource
 /// registries, generic over the executor type (D-05/D-09).
 ///
@@ -260,10 +264,11 @@ fn select_roles_for_holder(
 ) -> String {
     let holder_ph = placeholder(backend, 1);
     format!(
-        "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
+        "{} \
          FROM {} AS role_row \
          INNER JOIN {} AS link ON link.role_id = role_row.id \
          WHERE link.user_id = {holder_ph} AND {where_clause}",
+        ROLE_PROJECTION,
         quote_identifier(backend, role_table),
         quote_identifier(backend, join_table),
     )
@@ -755,10 +760,11 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
     ) -> Result<Vec<RoleRecord>, Self::Error> {
         let backend = backend_of(conn);
         let sql = format!(
-            "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
+            "{} \
              FROM {} AS role_row \
              INNER JOIN {} AS link ON link.role_id = role_row.id \
              WHERE link.user_id = {}",
+            ROLE_PROJECTION,
             quote_identifier(backend, &self.role_table),
             quote_identifier(backend, &self.join_table),
             placeholder(backend, 1),
@@ -931,9 +937,10 @@ impl<C: ConnectionTrait + Send + 'static> RoleStore for SeaormStore<C> {
             values.push(Value::from((*type_name).to_owned()));
         }
         let mut sql = format!(
-            "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
+            "{} \
              FROM {role_table} AS role_row {holder_join} \
-             WHERE role_row.resource_type != '' AND role_row.resource_type IN ({type_placeholders})"
+             WHERE role_row.resource_type != '' AND role_row.resource_type IN ({type_placeholders})",
+            ROLE_PROJECTION,
         );
         if let Some(name) = query.name {
             let _ = write!(sql, " AND role_row.name = {}", placeholder(backend, index));
@@ -1054,9 +1061,10 @@ impl<C: ConnectionTrait + Send + 'static> ResourceStore for SeaormStore<C> {
             .join(", ");
         let name_ph = placeholder(backend, types.len() + 1);
         let instance_sql = format!(
-            "SELECT role_row.name AS name, role_row.resource_type AS resource_type, role_row.resource_id AS resource_id \
+            "{} \
              FROM {role_table} AS role_row \
-             WHERE role_row.resource_type IN ({type_placeholders}) AND role_row.resource_id != '' AND role_row.name = {name_ph}"
+             WHERE role_row.resource_type IN ({type_placeholders}) AND role_row.resource_id != '' AND role_row.name = {name_ph}",
+            ROLE_PROJECTION,
         );
         let mut values: Vec<Value> = types
             .iter()
