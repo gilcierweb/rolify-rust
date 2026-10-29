@@ -752,22 +752,25 @@ where
                         Err(error) => return Err(error),
                     };
 
-                    // Orphan decision BEFORE deleting: rows_affected is
-                    // unreachable on generic DB (Pitfall 5).
-                    let link_exists_sql = sql::select_link_exists_for_role::<DB>(&join_table);
-                    let link_binds = [BindValue::Integer(role_id)];
-                    let remaining =
-                        Self::fetch_rows(&mut *transaction, link_exists_sql, &link_binds, &counter)
-                            .await?;
-                    if !remaining.is_empty() {
-                        continue;
-                    }
-
+                    // Rely solely on the guarded orphan DELETE (NOT EXISTS guard).
+                    // The pre-check select_link_exists_for_role was redundant and
+                    // added a race window; the NOT EXISTS guard is atomic.
                     let orphan_sql = sql::delete_orphan_role::<DB>(&role_table, &join_table);
                     let orphan_binds = [BindValue::Integer(role_id), BindValue::Integer(role_id)];
                     Self::execute_statement(&mut *transaction, orphan_sql, &orphan_binds, &counter)
                         .await?;
-                    removed_roles.push(record.clone());
+
+                    // Check if the role was actually deleted (no links existed).
+                    let check_sql = sql::select_role_by_triple::<DB>(&role_table);
+                    let check_binds = [
+                        BindValue::Text(record.name.as_str().to_owned()),
+                        BindValue::Text(resource_type.clone()),
+                        BindValue::Text(resource_id.clone()),
+                    ];
+                    let check_rows = Self::fetch_rows(&mut *transaction, check_sql, &check_binds, &counter).await?;
+                    if check_rows.is_empty() {
+                        removed_roles.push(record.clone());
+                    }
                 }
             }
 
