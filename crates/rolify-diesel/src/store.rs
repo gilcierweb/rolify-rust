@@ -629,7 +629,13 @@ macro_rules! sync_bind_ladders {
                     .bind::<Text, _>(&rest[21])
                     .load::<Row>(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed bind ladder exceeded the 23-bind where_any cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed bind ladder exceeded the 23-bind where_any cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(rows)
         }
@@ -672,7 +678,13 @@ macro_rules! sync_bind_ladders {
                     .bind::<Text, _>(&rest[2])
                     .execute(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed delete ladder exceeded the 3-bind removal cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed delete ladder exceeded the 3-bind removal cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(affected)
         }
@@ -761,7 +773,13 @@ macro_rules! sync_bind_ladders {
                     .bind::<HolderSqlType, _>(holder)
                     .load::<Row>(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed bind ladder exceeded the 8-bind catalog cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed bind ladder exceeded the 8-bind catalog cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(rows)
         }
@@ -843,7 +861,13 @@ macro_rules! sync_bind_ladders {
                     .bind::<Text, _>(&binds[7])
                     .load::<Row>(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed bind ladder exceeded the 8-bind catalog cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed bind ladder exceeded the 8-bind catalog cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(rows)
         }
@@ -1252,7 +1276,13 @@ macro_rules! async_bind_ladders {
                     .load::<Row>(conn)
                     .await
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed bind ladder exceeded the 23-bind where_any cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed bind ladder exceeded the 23-bind where_any cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(rows)
         }
@@ -1302,7 +1332,13 @@ macro_rules! async_bind_ladders {
                     .execute(conn)
                     .await
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed delete ladder exceeded the 3-bind removal cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed delete ladder exceeded the 3-bind removal cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(affected)
         }
@@ -1402,7 +1438,13 @@ macro_rules! async_bind_ladders {
                     .load::<Row>(conn)
                     .await
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed bind ladder exceeded the 8-bind catalog cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed bind ladder exceeded the 8-bind catalog cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(rows)
         }
@@ -1492,7 +1534,13 @@ macro_rules! async_bind_ladders {
                     .load::<Row>(conn)
                     .await
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "typed bind ladder exceeded the 8-bind catalog cap".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "typed bind ladder exceeded the 8-bind catalog cap".into(),
+                        },
+                    ))
+                }
             };
             Ok(rows)
         }
@@ -2391,7 +2439,13 @@ mod pg_impl {
                     .bind::<Text, _>(&all_values[10])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "holders_where: too many holder types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "holders_where: too many holder types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             async move {
                 Ok(rows
@@ -2447,7 +2501,13 @@ mod pg_impl {
                     .bind::<Text, _>(holder_types[3])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "all_holders: too many holder types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "all_holders: too many holder types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             async move {
                 Ok(rows
@@ -2597,7 +2657,13 @@ mod pg_impl {
                     .bind::<Text, _>(name.as_str())
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "resources_find: too many types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "resources_find: too many types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             for row in instance_rows {
                 all_keys.push(row.to_key());
@@ -2620,8 +2686,7 @@ mod pg_impl {
                 }
             }
 
-            let mut seen: std::collections::HashSet<ResourceKey> =
-                std::collections::HashSet::new();
+            let mut seen: std::collections::HashSet<ResourceKey> = std::collections::HashSet::new();
             all_keys.retain(|k| seen.insert(k.clone()));
             async move { Ok(all_keys) }
         }
@@ -3420,7 +3485,13 @@ mod mysql_impl {
                     .bind::<Text, _>(&all_values[10])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "holders_where: too many holder types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "holders_where: too many holder types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             async move {
                 Ok(rows
@@ -3480,7 +3551,13 @@ mod mysql_impl {
                     .bind::<Text, _>(holder_types[3])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "all_holders: too many holder types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "all_holders: too many holder types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             async move {
                 Ok(rows
@@ -3631,7 +3708,13 @@ mod mysql_impl {
                     .bind::<Text, _>(name.as_str())
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "resources_find: too many types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "resources_find: too many types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             for row in instance_rows {
                 all_keys.push(row.to_key());
@@ -3654,8 +3737,7 @@ mod mysql_impl {
                 }
             }
 
-            let mut seen: std::collections::HashSet<ResourceKey> =
-                std::collections::HashSet::new();
+            let mut seen: std::collections::HashSet<ResourceKey> = std::collections::HashSet::new();
             all_keys.retain(|k| seen.insert(k.clone()));
             async move { Ok(all_keys) }
         }
@@ -4450,7 +4532,13 @@ mod sqlite_impl {
                     .bind::<Text, _>(&all_values[10])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "holders_where: too many holder types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "holders_where: too many holder types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             async move {
                 Ok(rows
@@ -4506,7 +4594,13 @@ mod sqlite_impl {
                     .bind::<Text, _>(holder_types[3])
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "all_holders: too many holder types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "all_holders: too many holder types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             async move {
                 Ok(rows
@@ -4656,7 +4750,13 @@ mod sqlite_impl {
                     .bind::<Text, _>(name.as_str())
                     .load(conn)
                     .map_err(Error::Diesel)?,
-                _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "resources_find: too many types (max 4)".into() })),
+                _ => {
+                    return Err(Error::Core(
+                        rolify_core::error::RolifyError::InvalidConfig {
+                            reason: "resources_find: too many types (max 4)".into(),
+                        },
+                    ));
+                }
             };
             for row in instance_rows {
                 all_keys.push(row.to_key());
@@ -4679,8 +4779,7 @@ mod sqlite_impl {
                 }
             }
 
-            let mut seen: std::collections::HashSet<ResourceKey> =
-                std::collections::HashSet::new();
+            let mut seen: std::collections::HashSet<ResourceKey> = std::collections::HashSet::new();
             all_keys.retain(|k| seen.insert(k.clone()));
             async move { Ok(all_keys) }
         }
@@ -5579,7 +5678,13 @@ mod pg_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "holders_where: too many holder types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "holders_where: too many holder types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 Ok(rows
                     .into_iter()
@@ -5640,7 +5745,13 @@ mod pg_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "all_holders: too many holder types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "all_holders: too many holder types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 Ok(rows
                     .into_iter()
@@ -5818,7 +5929,13 @@ mod pg_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "resources_find: too many types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "resources_find: too many types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 for row in instance_rows {
                     all_keys.push(row.to_key());
@@ -6732,7 +6849,13 @@ mod mysql_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "holders_where: too many holder types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "holders_where: too many holder types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 Ok(rows
                     .into_iter()
@@ -6794,7 +6917,13 @@ mod mysql_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "all_holders: too many holder types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "all_holders: too many holder types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 Ok(rows
                     .into_iter()
@@ -6975,7 +7104,13 @@ mod mysql_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "resources_find: too many types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "resources_find: too many types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 for row in instance_rows {
                     all_keys.push(row.to_key());
@@ -7893,7 +8028,13 @@ mod sqlite_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "holders_where: too many holder types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "holders_where: too many holder types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 Ok(rows
                     .into_iter()
@@ -7954,7 +8095,13 @@ mod sqlite_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "all_holders: too many holder types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "all_holders: too many holder types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 Ok(rows
                     .into_iter()
@@ -8135,7 +8282,13 @@ mod sqlite_async_impl {
                         .load(conn)
                         .await
                         .map_err(Error::Diesel)?,
-                    _ => return Err(Error::Core(rolify_core::error::RolifyError::InvalidConfig { reason: "resources_find: too many types (max 4)".into() })),
+                    _ => {
+                        return Err(Error::Core(
+                            rolify_core::error::RolifyError::InvalidConfig {
+                                reason: "resources_find: too many types (max 4)".into(),
+                            },
+                        ));
+                    }
                 };
                 for row in instance_rows {
                     all_keys.push(row.to_key());
